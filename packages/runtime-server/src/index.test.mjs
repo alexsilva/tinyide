@@ -42,10 +42,30 @@ describe("runtime server hardening", () => {
     expect(html.headers.get("x-content-type-options")).toBe("nosniff");
     expect(html.headers.get("x-frame-options")).toBe("DENY");
     expect(html.headers.get("content-security-policy")).toContain("object-src 'none'");
+    expect(html.headers.get("content-security-policy")).not.toContain("cdn.jsdelivr.net");
+    expect(html.headers.get("content-security-policy")).not.toContain("wasm-unsafe-eval");
     expect(html.headers.get("cache-control")).toBe("no-cache");
 
     const asset = await fetch(`${runtime.url}/app-AbCdEf12.js`);
     expect(asset.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+  });
+
+  it("extends the browser policy only for plugin-declared CDN and WebAssembly permissions", async () => {
+    const { runtime, pluginsRoot } = await fixture();
+    const pluginRoot = join(pluginsRoot, "python");
+    await mkdir(pluginRoot);
+    await writeFile(join(pluginRoot, "plugin.json"), JSON.stringify({
+      id: "tinyide.python",
+      name: "Python",
+      version: "1.0.0",
+      permissions: ["runtime.wasm", "network.cdn"],
+    }));
+    runtime.clearManifestCache();
+
+    const response = await fetch(runtime.url);
+    const policy = response.headers.get("content-security-policy");
+    expect(policy).toContain("script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net");
+    expect(policy).toContain("connect-src 'self' ws: https://cdn.jsdelivr.net");
   });
 
   it("limits JSON request bodies before parsing them", async () => {

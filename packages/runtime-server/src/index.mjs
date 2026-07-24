@@ -18,13 +18,40 @@ const CONTENT_TYPES = {
 };
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MANIFEST_CACHE_TTL_MS = 1000;
+const CDN_ORIGIN = "https://cdn.jsdelivr.net";
 
-function applySecurityHeaders(response) {
+function contentSecurityPolicy(pluginDescriptors) {
+  const permissions = new Set(
+    pluginDescriptors.flatMap(({ manifest }) => Array.isArray(manifest.permissions) ? manifest.permissions : []),
+  );
+  const scriptSources = ["'self'"];
+  const connectSources = ["'self'", "ws:"];
+
+  if (permissions.has("runtime.wasm")) scriptSources.push("'wasm-unsafe-eval'");
+  if (permissions.has("network.cdn")) {
+    scriptSources.push(CDN_ORIGIN);
+    connectSources.push(CDN_ORIGIN);
+  }
+
+  return [
+    "default-src 'self'",
+    `script-src ${scriptSources.join(" ")}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    `connect-src ${connectSources.join(" ")}`,
+    "object-src 'none'",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+}
+
+function applySecurityHeaders(response, pluginDescriptors) {
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader("X-Frame-Options", "DENY");
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-  response.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+  response.setHeader("Content-Security-Policy", contentSecurityPolicy(pluginDescriptors));
 }
 
 function writeJson(response, status, payload) {
@@ -205,7 +232,7 @@ export function createTinyIdeRuntime(options) {
     response.statusCode = 404;
     response.end("Not found.");
   }) => {
-    applySecurityHeaders(response);
+    applySecurityHeaders(response, cachedPluginDescriptors());
     const requestUrl = new URL(request.url ?? "/", "http://localhost");
 
     if ((requestUrl.pathname.startsWith("/core-api/") || requestUrl.pathname.startsWith("/plugin-api/"))

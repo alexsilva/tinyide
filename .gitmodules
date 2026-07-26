@@ -10,3 +10,9 @@
 [submodule "plugins/git"]
 	path = plugins/git
 	url = ./.repos/tinyide-git
+[submodule "plugins/javascript"]
+	path = plugins/javascript
+	url = ./.repos/tinyide-javascript
+[submodule "plugins/node-runtime"]
+	path = plugins/node-runtime
+	url = ./.repos/tinyide-node-runtime

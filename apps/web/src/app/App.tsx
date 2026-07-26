@@ -37,6 +37,7 @@ import {
   Plug,
   Plus,
   RefreshCw,
+  Redo2,
   Save,
   Search,
   Settings2,
@@ -155,6 +156,15 @@ import {
   nextUntitledFileName,
   TEXT_FILE_CREATION_OPTION,
 } from "./file-creation";
+import {
+  beginExplorerRedo,
+  beginExplorerUndo,
+  createExplorerHistoryState,
+  explorerRedoLabel,
+  explorerUndoLabel,
+  recordExplorerHistory,
+  type ExplorerHistoryState,
+} from "./explorer-history";
 import { reconcileOpenDocumentsAfterWorkspaceChange } from "./workspace-resource-reconciliation";
 import { platform } from "./platform";
 import {
@@ -2113,10 +2123,12 @@ export function App() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState>();
   const [draggingExplorerPath, setDraggingExplorerPath] = useState<string>();
   const [dropTargetExplorerPath, setDropTargetExplorerPath] = useState<string>();
+  const [explorerHistory, setExplorerHistory] = useState<ExplorerHistoryState>(createExplorerHistoryState);
   const restoredRef = useRef(false);
   const snapshotTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const explorerHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const explorerHistoryRef = useRef<ExplorerHistoryState>(createExplorerHistoryState());
   const browserResolverRef = useRef<((path: string | undefined) => void) | undefined>(undefined);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const highlightedEditorScrollRef = useRef<HTMLDivElement | null>(null);
@@ -3365,6 +3377,61 @@ export function App() {
     setEntries(await hydrateExpandedEntries(nextEntries, expandedPaths));
   };
 
+  const updateExplorerHistory = (next: ExplorerHistoryState) => {
+    explorerHistoryRef.current = next;
+    setExplorerHistory(next);
+  };
+
+  const remapExplorerResourceState = async (sourcePath: string, nextPath: string) => {
+    const sourceDocuments = documentsRef.current;
+    const nextDocuments = await Promise.all(sourceDocuments.map(async (document) => {
+      if (!workspacePathBelongsToResource(document.path, sourcePath)) return document;
+      const path = replaceWorkspacePathPrefix(document.path!, sourcePath, nextPath);
+      const handle = await resolveFileHandle(workspaceHandle!, path);
+      return remapOpenDocumentResource(document, sourcePath, nextPath, handle);
+    }));
+    documentsRef.current = nextDocuments;
+    setDocuments(nextDocuments);
+    setActiveDocumentId((current) => current ? replaceWorkspacePathPrefix(current, sourcePath, nextPath) : current);
+    const nextExpanded = new Set([...expanded].map((path) => replaceWorkspacePathPrefix(path, sourcePath, nextPath)));
+    const movedHistories = [...editorHistoriesRef.current.entries()]
+      .filter(([id]) => id === sourcePath || id.startsWith(`${sourcePath}/`));
+    movedHistories.forEach(([id, history]) => {
+      editorHistoriesRef.current.delete(id);
+      editorHistoriesRef.current.set(replaceWorkspacePathPrefix(id, sourcePath, nextPath), history);
+    });
+    setSelectedExplorerPath(nextPath);
+    setExpanded(nextExpanded);
+    await refreshExplorer(nextExpanded);
+  };
+
+  const relocateExplorerEntry = async (sourcePath: string, targetPath: string) => {
+    if (!workspaceHandle) throw new Error("Restaure o acesso ao workspace antes de alterar recursos.");
+    const sourceParent = workspacePathParent(sourcePath);
+    const targetParent = workspacePathParent(targetPath);
+    const targetName = targetPath.split("/").at(-1);
+    if (!targetName) throw new Error("Destino inválido.");
+    let nextPath = sourcePath;
+    if (sourceParent !== targetParent) nextPath = await moveWorkspaceEntry(workspaceHandle, sourcePath, targetParent);
+    if (nextPath.split("/").at(-1) !== targetName) nextPath = await renameWorkspaceEntry(workspaceHandle, nextPath, targetName);
+    await remapExplorerResourceState(sourcePath, nextPath);
+    return nextPath;
+  };
+
+  const undoExplorerOperation = async () => {
+    const transition = beginExplorerUndo(explorerHistoryRef.current);
+    if (!transition) return;
+    await relocateExplorerEntry(transition.sourcePath, transition.targetPath);
+    updateExplorerHistory(transition.state);
+  };
+
+  const redoExplorerOperation = async () => {
+    const transition = beginExplorerRedo(explorerHistoryRef.current);
+    if (!transition) return;
+    await relocateExplorerEntry(transition.sourcePath, transition.targetPath);
+    updateExplorerHistory(transition.state);
+  };
+
   useEffect(() => platform.events.on<WorkspaceResourcesChangedEvent>(
     WORKSPACE_RESOURCES_CHANGED_EVENT,
     async (event) => {
@@ -3586,6 +3653,13 @@ export function App() {
       setExplorerRenamePath(undefined);
       setExplorerRenameName("");
       await refreshExplorer(nextExpanded);
+      updateExplorerHistory(recordExplorerHistory(explorerHistoryRef.current, {
+        id: crypto.randomUUID(),
+        kind: "relocate",
+        label: `Renomear ${entry.path} para ${nextPath}`,
+        fromPath: entry.path,
+        toPath: nextPath,
+      }));
     } catch (cause) {
       setExplorerRenameError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -3655,6 +3729,13 @@ export function App() {
     setDraggingExplorerPath(undefined);
     setDropTargetExplorerPath(undefined);
     await refreshExplorer(nextExpanded);
+    updateExplorerHistory(recordExplorerHistory(explorerHistoryRef.current, {
+      id: crypto.randomUUID(),
+      kind: "relocate",
+      label: `Mover ${sourcePath} para ${nextPath}`,
+      fromPath: sourcePath,
+      toPath: nextPath,
+    }));
   };
 
   const runSelectedProfile = async () => {
@@ -4078,7 +4159,13 @@ export function App() {
       }
       if (!(event.ctrlKey || event.metaKey)) return;
       const key = event.key.toLocaleLowerCase();
-      if (key === "n") {
+      if (key === "z" && !editing && sidebarView === "explorer") {
+        event.preventDefault();
+        invoke(event.shiftKey ? redoExplorerOperation : undoExplorerOperation);
+      } else if (key === "y" && !editing && sidebarView === "explorer") {
+        event.preventDefault();
+        invoke(redoExplorerOperation);
+      } else if (key === "n") {
         event.preventDefault();
         newDocument();
       } else if (key === "o") {
@@ -4091,7 +4178,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [newDocument, openSingleFile, saveDocument, invoke, sidebarView, selectedExplorerPath, entries, expanded, explorerShowHidden, workspaceHandle, documents, activeDocumentId]);
+  }, [newDocument, openSingleFile, saveDocument, invoke, sidebarView, selectedExplorerPath, entries, expanded, explorerShowHidden, workspaceHandle, documents, activeDocumentId, explorerHistory]);
 
   const beginSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -4444,6 +4531,13 @@ export function App() {
                             )}
                             <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(() => startExplorerCreation("directory"))}>
                               <FolderOpen size={15} /> Nova pasta
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Separator className="menu-separator" />
+                            <DropdownMenu.Item className="menu-item" disabled={!explorerHistory.undo.length} onSelect={() => invoke(undoExplorerOperation)}>
+                              <Undo2 size={15} /> {explorerUndoLabel(explorerHistory) ?? "Desfazer"}
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Item className="menu-item" disabled={!explorerHistory.redo.length} onSelect={() => invoke(redoExplorerOperation)}>
+                              <Redo2 size={15} /> {explorerRedoLabel(explorerHistory) ?? "Refazer"}
                             </DropdownMenu.Item>
                             <DropdownMenu.Separator className="menu-separator" />
                             <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(refreshExplorer)}>

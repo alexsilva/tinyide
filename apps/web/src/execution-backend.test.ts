@@ -13,6 +13,16 @@ interface BackendResponse<Value = unknown> {
   readonly body: Value;
 }
 
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
 async function callBackend<Value>(
   handler: (request: Readable & { method: string; headers: Record<string, string> }, response: unknown, path: string) => Promise<void>,
   method: string,
@@ -128,6 +138,65 @@ describe("execution backend sessions", () => {
         rm(root, { recursive: true, force: true }),
         rm(otherRoot, { recursive: true, force: true }),
       ]);
+    }
+  }, 10_000);
+
+  it.skipIf(process.platform === "win32")("stops the complete process tree created by a profile", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tinyide-execution-tree-"));
+    const backend = createExecutionBackend({ workspaceRoot: root });
+    let processId: string | undefined;
+    let descendantPid: number | undefined;
+
+    try {
+      const childProgram = [
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      const parentProgram = [
+        "const { spawn } = require('node:child_process');",
+        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childProgram)}], { stdio: 'ignore' });`,
+        "console.log(child.pid);",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      const started = await callBackend<{ readonly id: string }>(
+        backend,
+        "POST",
+        "/execution/processes",
+        {
+          executable: process.execPath,
+          arguments: ["-e", parentProgram],
+          workingDirectory: root,
+        },
+      );
+      processId = started.body.id;
+
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const snapshot = (await callBackend<{ readonly stdout: string }>(
+          backend,
+          "GET",
+          `/execution/processes/${processId}`,
+        )).body;
+        descendantPid = Number.parseInt(snapshot.stdout.trim(), 10) || undefined;
+        if (descendantPid) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(descendantPid).toBeTypeOf("number");
+      expect(processIsAlive(descendantPid!)).toBe(true);
+
+      const stopped = await callBackend(backend, "DELETE", `/execution/processes/${processId}`);
+      expect(stopped.status).toBe(202);
+      for (let attempt = 0; attempt < 120 && processIsAlive(descendantPid!); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(processIsAlive(descendantPid!)).toBe(false);
+    } finally {
+      if (processId) {
+        await callBackend(backend, "DELETE", `/execution/processes/${processId}`).catch(() => undefined);
+      }
+      if (descendantPid && processIsAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
+      await rm(root, { recursive: true, force: true });
     }
   }, 10_000);
 });

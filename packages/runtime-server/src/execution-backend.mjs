@@ -89,6 +89,37 @@ function processSnapshot(record) {
   };
 }
 
+function signalProcessTree(record, signal) {
+  const pid = record.child.pid;
+  if (!Number.isInteger(pid)) return false;
+  if (process.platform !== "win32") {
+    try {
+      process.kill(-pid, signal);
+      return true;
+    } catch (error) {
+      if (error?.code === "ESRCH") return false;
+      if (error?.code !== "EPERM") throw error;
+    }
+  }
+  return record.child.kill(signal);
+}
+
+function forceStopProcessTree(record) {
+  if (process.platform !== "win32") {
+    signalProcessTree(record, "SIGKILL");
+    return;
+  }
+  const pid = record.child.pid;
+  if (!Number.isInteger(pid)) return;
+  const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+    windowsHide: true,
+    stdio: "ignore",
+  });
+  killer.on("error", () => {
+    record.child.kill("SIGKILL");
+  });
+}
+
 function workspaceSettingsPath(workspaceRoot) {
   return join(workspaceRoot, ".tinyide", "settings.json");
 }
@@ -152,6 +183,7 @@ export function createExecutionBackend({ workspaceRoot }) {
     const child = spawn(executable, args, {
       cwd: workingDirectory,
       env: { ...process.env, ...environmentVariables },
+      detached: process.platform !== "win32",
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -220,9 +252,23 @@ export function createExecutionBackend({ workspaceRoot }) {
           return;
         }
         if (request.method === "DELETE") {
-          if (record.status === "running") {
-            record.child.kill("SIGTERM");
-            setTimeout(() => { if (record.status === "running") record.child.kill("SIGKILL"); }, 1500).unref();
+          if (record.status === "running" && !record.stopRequested) {
+            record.stopRequested = true;
+            if (process.platform === "win32") {
+              forceStopProcessTree(record);
+            } else {
+              signalProcessTree(record, "SIGTERM");
+              setTimeout(() => {
+                try {
+                  forceStopProcessTree(record);
+                } catch (error) {
+                  record.stderr = appendOutput(
+                    record.stderr,
+                    `Falha ao encerrar a árvore de processos: ${error instanceof Error ? error.message : String(error)}\n`,
+                  );
+                }
+              }, 1500).unref();
+            }
           }
           writeJson(response, 202, processSnapshot(record));
           return;

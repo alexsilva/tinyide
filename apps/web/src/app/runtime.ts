@@ -5,6 +5,7 @@ import type {
   ExecutionProfile,
   ExecutionProfileContributionProvider,
   ExecutionProfileExecutableOption,
+  ExecutionProfilePresetContribution,
   ExecutionProfileVariableContribution,
   LanguageProvider,
   LanguageLintSettings,
@@ -57,6 +58,7 @@ interface HostProcessStartRequest extends ProcessExecutionRequest {
 export interface ProfileContributions {
   readonly executableOptions: readonly ExecutionProfileExecutableOption[];
   readonly variables: readonly ExecutionProfileVariableContribution[];
+  readonly presets: readonly ExecutionProfilePresetContribution[];
 }
 
 export interface RunProfileCallbacks {
@@ -169,9 +171,13 @@ export async function loadProfileContributions(input: {
   const variables = await Promise.all(
     providers.map((provider) => provider.variables?.(context) ?? []),
   );
+  const presets = await Promise.all(
+    providers.map((provider) => provider.presets?.(context) ?? []),
+  );
   return {
     executableOptions: executableOptions.flat(),
     variables: variables.flat(),
+    presets: presets.flat(),
   };
 }
 

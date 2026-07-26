@@ -68,6 +68,7 @@ import type {
   ExecutionEnvironmentProvider,
   ExecutionProfile,
   ExecutionProfileExecutableOption,
+  ExecutionProfilePresetContribution,
   LanguageLintSettings,
   LanguageProvider,
   PluginSettingValues,
@@ -1165,6 +1166,7 @@ function ProfileDialog({
   selectedId,
   environments,
   executableOptions,
+  presets,
   onBrowseCommand,
   onChange,
 }: {
@@ -1174,6 +1176,7 @@ function ProfileDialog({
   readonly selectedId: string | undefined;
   readonly environments: readonly ExecutionEnvironment[];
   readonly executableOptions: readonly ExecutionProfileExecutableOption[];
+  readonly presets: readonly ExecutionProfilePresetContribution[];
   readonly onBrowseCommand: () => Promise<string | undefined>;
   readonly onChange: (profiles: readonly ExecutionProfile[], selectedId?: string) => void;
 }) {
@@ -1210,6 +1213,20 @@ function ProfileDialog({
     const profile = makeProfile();
     setDrafts((current) => [...current, profile]);
     setParameterDrafts((current) => ({ ...current, [profile.id]: "" }));
+    setEditingId(profile.id);
+  };
+
+  const addPreset = (preset: ExecutionProfilePresetContribution) => {
+    const template = preset.create({});
+    const duplicates = drafts.filter((candidate) => candidate.id === template.id || candidate.id.startsWith(`${template.id}-`)).length;
+    const id = duplicates ? `${template.id}-${duplicates + 1}` : template.id;
+    const profile = {
+      ...template,
+      id,
+      steps: template.steps.map((profileStep, index) => ({ ...profileStep, id: `${id}:step-${index + 1}` })),
+    };
+    setDrafts((current) => [...current, profile]);
+    setParameterDrafts((current) => ({ ...current, [profile.id]: formatCommandLineArguments(profile.steps[0]?.parameters ?? []) }));
     setEditingId(profile.id);
   };
 
@@ -1299,6 +1316,16 @@ function ProfileDialog({
               <button className="button secondary full" type="button" onClick={addProfile}>
                 <Plus size={15} /> Novo perfil
               </button>
+              {presets.length ? (
+                <select className="profile-preset-select" aria-label="Adicionar perfil a partir de um preset" defaultValue="" onChange={(event) => {
+                  const preset = presets.find((candidate) => candidate.id === event.target.value);
+                  if (preset) addPreset(preset);
+                  event.currentTarget.value = "";
+                }}>
+                  <option value="" disabled>Adicionar preset...</option>
+                  {presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+                </select>
+              ) : null}
             </aside>
 
             <div className="profile-editor">
@@ -2086,6 +2113,7 @@ export function App() {
   const [environmentBrowserSelection, setEnvironmentBrowserSelection] = useState<string>();
   const [environmentBrowserExecutableOnly, setEnvironmentBrowserExecutableOnly] = useState(false);
   const [executableOptions, setExecutableOptions] = useState<readonly ExecutionProfileExecutableOption[]>([]);
+  const [profilePresets, setProfilePresets] = useState<readonly ExecutionProfilePresetContribution[]>([]);
   const [busy, setBusy] = useState(false);
   const [activeProcessId, setActiveProcessId] = useState<string>();
   const [resumedProcessId, setResumedProcessId] = useState<string>();
@@ -2729,8 +2757,9 @@ export function App() {
               workspaceRoot: restoredWorkspaceRoot,
               ...(restoredActive ? { activeDocument: restoredActive } : {}),
             })
-          : { executableOptions: [], variables: [] };
+          : { executableOptions: [], variables: [], presets: [] };
         setExecutableOptions(contributions.executableOptions);
+        setProfilePresets(contributions.presets);
         restoredRef.current = true;
       })
       .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
@@ -2866,6 +2895,7 @@ export function App() {
       ...(activeDocument ? { activeDocument } : {}),
     }).then((contributions) => {
       setExecutableOptions(contributions.executableOptions);
+      setProfilePresets(contributions.presets);
     });
   }, [platformSnapshot.plugins, platformSnapshot.initialized, restorationComplete, workspaceName, workspaceRoot, activeDocument?.id, replaceWorkspaceSettings]);
 
@@ -5162,6 +5192,7 @@ export function App() {
           selectedId={profilesState.selectedId}
           environments={environments}
           executableOptions={executableOptions}
+          presets={profilePresets}
           onBrowseCommand={() => pickHostPath("file")}
           onChange={updateProfiles}
         />

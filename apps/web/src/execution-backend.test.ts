@@ -117,8 +117,13 @@ describe("execution backend sessions", () => {
       }
       expect(snapshot?.stdout).toContain("ready");
 
-      const stopped = await callBackend(backend, "DELETE", `/execution/processes/${processId}`);
+      const stopped = await callBackend<{ readonly stopRequested: boolean }>(
+        backend,
+        "DELETE",
+        `/execution/processes/${processId}`,
+      );
       expect(stopped.status).toBe(202);
+      expect(stopped.body.stopRequested).toBe(true);
       for (let attempt = 0; attempt < 50; attempt += 1) {
         snapshot = (await callBackend<{ readonly status: string; readonly stdout: string }>(
           backend,

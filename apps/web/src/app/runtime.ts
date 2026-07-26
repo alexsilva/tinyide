@@ -35,6 +35,7 @@ export interface HostProcessSnapshot {
   readonly presentation?: HostProcessPresentation;
   readonly stdout: string;
   readonly stderr: string;
+  readonly stopRequested: boolean;
   readonly exitCode?: number;
   readonly signal?: string;
   readonly startedAt: number;
@@ -46,6 +47,7 @@ export interface HostProcessPresentation {
   readonly kind: "profile" | "script";
   readonly sourceId: string;
   readonly sourceName: string;
+  readonly runId?: string;
   readonly stepId?: string;
   readonly stepName?: string;
   readonly outputPrefix: readonly string[];
@@ -280,7 +282,11 @@ export function hostProcessOutputLines(process: HostProcessSnapshot): readonly s
     ...(process.presentation?.outputPrefix ?? fallbackPrefix),
     process.stdout,
     process.stderr,
-    process.status === "running" ? "[executando...]" : `[exit] ${process.exitCode ?? -1}`,
+    process.stopRequested
+      ? "[interrompido pelo usuário]"
+      : process.status === "running"
+        ? "[executando...]"
+        : `[exit] ${process.exitCode ?? -1}`,
   ].filter(Boolean);
 }
 
@@ -297,7 +303,7 @@ export async function runExecutionProfile(input: {
   readonly workspaceName: string;
   readonly environments: readonly ExecutionEnvironment[];
   readonly callbacks: RunProfileCallbacks;
-}): Promise<void> {
+}): Promise<"completed" | "stopped"> {
   const { profile, activeDocument, environments, callbacks } = input;
   const environmentId = profile.environment.mode === "fixed"
     ? profile.environment.environmentId
@@ -310,6 +316,7 @@ export async function runExecutionProfile(input: {
   }
 
   const { workspaceRoot } = await readHostContext();
+  const runId = crypto.randomUUID();
 
   const activePath = activeDocument?.path
     ? `${workspaceRoot}/${activeDocument.path.replace(/^\/+/, "")}`
@@ -343,6 +350,7 @@ export async function runExecutionProfile(input: {
         kind: "profile",
         sourceId: profile.id,
         sourceName: profile.name,
+        runId,
         stepId: step.id,
         stepName: step.name,
         outputPrefix: [`[perfil] ${profile.name}`, ...heading],
@@ -358,12 +366,18 @@ export async function runExecutionProfile(input: {
       ]);
     }
     callbacks.onProcessFinished();
+    if (process.stopRequested) {
+      completedOutput.push(...heading, process.stdout, process.stderr, "[interrompido pelo usuário]");
+      callbacks.onOutput(completedOutput.filter(Boolean));
+      return "stopped";
+    }
     completedOutput.push(...heading, process.stdout, process.stderr, `[exit] ${process.exitCode ?? -1}`);
     if (process.exitCode !== 0 && !step.continueOnError) {
       throw new Error(`A etapa '${step.name}' terminou com código ${process.exitCode}.`);
     }
   }
   callbacks.onOutput(completedOutput.filter(Boolean));
+  return "completed";
 }
 
 export async function runScript(input: {
@@ -401,5 +415,6 @@ export async function runScript(input: {
     callbacks.onOutput(hostProcessOutputLines(process));
   }
   callbacks.onProcessFinished();
+  if (process.stopRequested) return;
   if (process.exitCode !== 0) throw new Error(`O script terminou com código ${process.exitCode}.`);
 }

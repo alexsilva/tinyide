@@ -216,6 +216,14 @@ import {
 import { editorLineNumbers, resolveEditorSettings } from "./editor-settings";
 import { reconcileToolWindowLayout } from "./workbench-layout";
 import {
+  profileExecutionOutput,
+  profileExecutionStatusLabel,
+  restoreProfileExecutions,
+  resumedProfileProcessOutput,
+  type ProfileExecutionState,
+  type ResumedProfileProcess,
+} from "./profile-execution-state";
+import {
   EMPTY_WORKSPACE_SETTINGS,
   readWorkspaceSettings,
   writeWorkspaceSettings,
@@ -2117,6 +2125,8 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [activeProcessId, setActiveProcessId] = useState<string>();
   const [resumedProcessId, setResumedProcessId] = useState<string>();
+  const [profileExecutions, setProfileExecutions] = useState<Readonly<Record<string, ProfileExecutionState>>>({});
+  const [resumedProfileProcesses, setResumedProfileProcesses] = useState<readonly ResumedProfileProcess[]>([]);
   const [profilesState, setProfilesState] = useState<StoredProfiles>({ profiles: [] });
   const [workspaceSettings, setWorkspaceSettings] = useState<WorkspaceSettings>(EMPTY_WORKSPACE_SETTINGS);
   const [profilesOpen, setProfilesOpen] = useState(false);
@@ -2229,6 +2239,11 @@ export function App() {
   }, [activeDocument, platformSnapshot]);
   const activeToolWindow = workbenchToolWindows.find((toolWindow) => toolWindow.id === activeToolWindowId);
   const selectedProfile = profilesState.profiles.find((profile) => profile.id === profilesState.selectedId);
+  const selectedProfileExecution = selectedProfile ? profileExecutions[selectedProfile.id] : undefined;
+  const selectedProfileRunning = selectedProfileExecution?.status === "running";
+  const visibleOutput = selectedProfile
+    ? profileExecutionOutput(selectedProfile, selectedProfileExecution)
+    : output;
   const settingsProviders = pluginSettingsProviders();
   const activePluginSettingsProvider = settingsSectionId === "editor"
     ? undefined
@@ -2777,11 +2792,16 @@ export function App() {
     setResumedProcessId(undefined);
     setActiveProcessId(undefined);
     setBusy(false);
+    setResumedProfileProcesses([]);
+    setProfileExecutions({});
     void listHostProcesses()
       .then((processes) => {
         if (cancelled) return;
+        const restoredProfiles = restoreProfileExecutions(processes);
+        setProfileExecutions(restoredProfiles.states);
+        setResumedProfileProcesses(restoredProfiles.running);
         const running = processes
-          .filter((process) => process.status === "running")
+          .filter((process) => process.status === "running" && process.presentation?.kind !== "profile")
           .sort((left, right) => right.startedAt - left.startedAt)[0];
         if (!running) return;
         setOutput([...hostProcessOutputLines(running)]);
@@ -2796,6 +2816,53 @@ export function App() {
       cancelled = true;
     };
   }, [restorationComplete, workspaceRoot]);
+
+  useEffect(() => {
+    if (!resumedProfileProcesses.length) return;
+    let cancelled = false;
+    const monitor = async (resumed: ResumedProfileProcess) => {
+      try {
+        let process = await readHostProcess(resumed.processId);
+        while (!cancelled) {
+          const processOutput = resumedProfileProcessOutput(resumed, process);
+          setProfileExecutions((current) => ({
+            ...current,
+            [resumed.profileId]: {
+              profileId: resumed.profileId,
+              profileName: process.presentation?.sourceName ?? current[resumed.profileId]?.profileName ?? resumed.profileId,
+              status: process.status === "running"
+                ? "running"
+                : process.stopRequested
+                  ? "stopped"
+                  : process.exitCode === 0
+                    ? "completed"
+                    : "failed",
+              output: processOutput,
+              ...(process.status === "running" ? { processId: process.id } : {}),
+              startedAt: current[resumed.profileId]?.startedAt ?? process.startedAt,
+              ...(process.finishedAt ? { finishedAt: process.finishedAt } : {}),
+              ...(process.status !== "running" && process.exitCode !== 0 && !process.stopRequested
+                ? { error: `Processo encerrado com código ${process.exitCode ?? -1}.` }
+                : {}),
+            },
+          }));
+          if (process.status !== "running") break;
+          await new Promise((resolve) => window.setTimeout(resolve, 250));
+          process = await readHostProcess(resumed.processId);
+        }
+      } catch (cause) {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        if (!cancelled) {
+          setResumedProfileProcesses((current) => current.filter((item) => item.processId !== resumed.processId));
+        }
+      }
+    };
+    for (const resumed of resumedProfileProcesses) void monitor(resumed);
+    return () => {
+      cancelled = true;
+    };
+  }, [resumedProfileProcesses]);
 
   useEffect(() => {
     if (!resumedProcessId) return;
@@ -3771,29 +3838,108 @@ export function App() {
   const runSelectedProfile = async () => {
     if (!selectedProfile) throw new Error("Selecione um perfil de execução.");
     if (!selectedProfile.steps.length) throw new Error("O perfil não possui etapas.");
+    if (profileExecutions[selectedProfile.id]?.status === "running") {
+      throw new Error(`O perfil '${selectedProfile.name}' já está em execução.`);
+    }
     if (selectedProfile.saveBeforeRun && activeDocument && activeDocument.content !== activeDocument.savedContent) {
       await saveDocument();
     }
 
-    setBusy(true);
+    const profile = selectedProfile;
+    const startedAt = Date.now();
+    setProfileExecutions((current) => ({
+      ...current,
+      [profile.id]: {
+        profileId: profile.id,
+        profileName: profile.name,
+        status: "running",
+        output: [`[perfil] ${profile.name}`],
+        startedAt,
+      },
+    }));
     setToolWindowVisible(false);
     setPanelVisible(true);
     setPanelTab("output");
     try {
-      await runExecutionProfile({
-        profile: selectedProfile,
+      const result = await runExecutionProfile({
+        profile,
         ...(activeDocument ? { activeDocument } : {}),
         workspaceName,
         environments,
         callbacks: {
-          onProcessStarted: setActiveProcessId,
-          onProcessFinished: () => setActiveProcessId(undefined),
-          onOutput: (lines) => setOutput([...lines]),
+          onProcessStarted: (processId) => setProfileExecutions((current) => ({
+            ...current,
+            [profile.id]: {
+              ...(current[profile.id] ?? {
+                profileId: profile.id,
+                profileName: profile.name,
+                status: "running" as const,
+                output: [`[perfil] ${profile.name}`],
+                startedAt,
+              }),
+              status: "running",
+              processId,
+            },
+          })),
+          onProcessFinished: () => setProfileExecutions((current) => {
+            const state = current[profile.id];
+            if (!state) return current;
+            const { processId: _processId, ...rest } = state;
+            return { ...current, [profile.id]: rest };
+          }),
+          onOutput: (lines) => setProfileExecutions((current) => ({
+            ...current,
+            [profile.id]: {
+              ...(current[profile.id] ?? {
+                profileId: profile.id,
+                profileName: profile.name,
+                status: "running" as const,
+                output: [`[perfil] ${profile.name}`],
+                startedAt,
+              }),
+              status: "running",
+              output: [...lines],
+            },
+          })),
         },
       });
+      setProfileExecutions((current) => ({
+        ...current,
+        [profile.id]: {
+          ...(current[profile.id] ?? {
+            profileId: profile.id,
+            profileName: profile.name,
+            output: [`[perfil] ${profile.name}`],
+            startedAt,
+          }),
+          status: result === "stopped" ? "stopped" : "completed",
+          finishedAt: Date.now(),
+        },
+      }));
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setProfileExecutions((current) => ({
+        ...current,
+        [profile.id]: {
+          ...(current[profile.id] ?? {
+            profileId: profile.id,
+            profileName: profile.name,
+            output: [`[perfil] ${profile.name}`],
+            startedAt,
+          }),
+          status: "failed",
+          error: message,
+          finishedAt: Date.now(),
+        },
+      }));
+      throw cause;
     } finally {
-      setBusy(false);
-      setActiveProcessId(undefined);
+      setProfileExecutions((current) => {
+        const state = current[profile.id];
+        if (!state) return current;
+        const { processId: _processId, ...rest } = state;
+        return { ...current, [profile.id]: rest };
+      });
     }
   };
 
@@ -3955,8 +4101,9 @@ export function App() {
   };
 
   const stopExecution = async () => {
-    if (!activeProcessId) return;
-    await stopHostProcess(activeProcessId);
+    const processId = selectedProfileExecution?.processId ?? activeProcessId;
+    if (!processId) return;
+    await stopHostProcess(processId);
   };
 
   const selectEnvironment = (environmentId: string | undefined) => {
@@ -4459,7 +4606,7 @@ export function App() {
               {profilesState.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
             </select>
             <button className="icon-button small" type="button" aria-label="Gerenciar perfis" onClick={() => setProfilesOpen(true)}><Settings2 size={14} /></button>
-            {busy
+            {selectedProfileRunning || busy
               ? <button className="button danger compact" type="button" onClick={() => invoke(stopExecution)}><Square size={13} /> Parar</button>
               : <button className="button primary compact" type="button" disabled={!selectedProfile} onClick={() => invoke(runSelectedProfile)}><Play size={13} /> Executar</button>}
           </div>
@@ -5139,7 +5286,9 @@ export function App() {
                 <div className="resize-handle resize-handle--panel" role="separator" aria-label="Redimensionar painel inferior" onPointerDown={beginPanelResize} onDoubleClick={() => setPanelHeight(DEFAULT_LAYOUT.panelHeight)} />
                 <div className="panel-heading">
                   <div className="panel-tabs">
-                    <button className={`panel-tab${panelTab === "output" ? " active" : ""}`} type="button" onClick={() => setPanelTab("output")}>SAÍDA</button>
+                    <button className={`panel-tab${panelTab === "output" ? " active" : ""}`} type="button" onClick={() => setPanelTab("output")}>
+                      SAÍDA{selectedProfile ? ` · ${profileExecutionStatusLabel(selectedProfileExecution)}` : ""}
+                    </button>
                     <button className={`panel-tab${panelTab === "problems" ? " active" : ""}`} type="button" onClick={() => setPanelTab("problems")}>PROBLEMAS <span>{diagnostics.length}</span></button>
                     {workbenchPanels.map((panel) => (
                       <button
@@ -5152,7 +5301,7 @@ export function App() {
                   </div>
                   <button className="icon-button small" type="button" aria-label="Fechar painel" onClick={() => setPanelVisible(false)}><X size={14} /></button>
                 </div>
-                <pre hidden={panelTab !== "output"}>{output.join("\n")}</pre>
+                <pre hidden={panelTab !== "output"}>{visibleOutput.join("\n")}</pre>
                 <div className="problems-list" hidden={panelTab !== "problems"}>{diagnostics.length ? diagnostics.map((diagnostic, index) => <button type="button" key={`${diagnostic.line}:${index}`}><strong>{diagnostic.severity}</strong><span>{diagnostic.line}:{diagnostic.column}</span><span>{diagnostic.message}</span></button>) : <p>Nenhum problema detectado.</p>}</div>
                 {restorationComplete ? workbenchPanels.map((panel) => (
                   <div className="plugin-panel-container" hidden={panelTab !== panel.id} key={panel.id}>

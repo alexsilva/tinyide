@@ -433,8 +433,12 @@ export interface WorkbenchPanelMountContext {
 
 export type WorkbenchActivityIcon =
   | "box"
+  | "docker"
   | "files"
+  | "git"
   | "history"
+  | "nodejs"
+  | "python"
   | "source-control"
   | "terminal";
 
@@ -949,6 +953,7 @@ export interface ExecutionEnvironmentRunRequest {
 export interface ExecutionEnvironmentProvider {
   readonly id: string;
   readonly name: string;
+  readonly icon?: WorkbenchActivityIcon;
   readonly extensions: readonly string[];
   list(): Promise<readonly ExecutionEnvironment[]>;
   create(request: ExecutionEnvironmentCreateRequest): Promise<ExecutionEnvironment>;

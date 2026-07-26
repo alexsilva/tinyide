@@ -16,3 +16,6 @@
 [submodule "plugins/node-runtime"]
 	path = plugins/node-runtime
 	url = ./.repos/tinyide-node-runtime
+[submodule "plugins/docker"]
+	path = plugins/docker
+	url = ./.repos/tinyide-docker

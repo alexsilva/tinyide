@@ -97,6 +97,8 @@ import type {
   WorkbenchToolWindowContribution,
   WorkbenchToolWindowHookContribution,
   WorkbenchToolWindowHook,
+  WorkspaceFileCreationOption,
+  WorkspaceFileCreationProvider,
   WorkspaceResourcesChangedEvent,
 } from "@tinyide/plugin-api";
 import {
@@ -147,6 +149,12 @@ import {
   workspacePathParent,
   workspacePathContainsHiddenSegment,
 } from "./explorer";
+import {
+  ensureFileCreationExtension,
+  fileCreationOptions,
+  nextUntitledFileName,
+  TEXT_FILE_CREATION_OPTION,
+} from "./file-creation";
 import { reconcileOpenDocumentsAfterWorkspaceChange } from "./workspace-resource-reconciliation";
 import { platform } from "./platform";
 import {
@@ -229,6 +237,47 @@ interface ContextMenuState {
   readonly x: number;
   readonly y: number;
   readonly items: readonly ResourceContextMenuItem[];
+}
+
+function encodedNewFileCommand(option?: Pick<WorkspaceFileCreationOption, "extension" | "suggestedName">): string {
+  if (!option) return "core.resource.newFile";
+  return `core.resource.newFile:${encodeURIComponent(JSON.stringify(option))}`;
+}
+
+function decodedNewFileOption(command: string | undefined): Pick<WorkspaceFileCreationOption, "extension" | "suggestedName"> | undefined {
+  const prefix = "core.resource.newFile:";
+  if (!command?.startsWith(prefix)) return undefined;
+  try {
+    const value = JSON.parse(decodeURIComponent(command.slice(prefix.length))) as Partial<WorkspaceFileCreationOption>;
+    if (typeof value.extension !== "string" || !value.extension.startsWith(".")) return undefined;
+    return {
+      extension: value.extension as `.${string}`,
+      ...(typeof value.suggestedName === "string" ? { suggestedName: value.suggestedName } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function newFileContextMenuItems(options: readonly WorkspaceFileCreationOption[]): ResourceContextMenuItem[] {
+  if (!options.length) {
+    return [{
+      id: "core.newFile",
+      label: "Novo arquivo",
+      command: encodedNewFileCommand(TEXT_FILE_CREATION_OPTION),
+      group: "creation",
+      order: 0,
+      icon: "file",
+    }];
+  }
+  return fileCreationOptions(options).map((option, index) => ({
+    id: `core.newFile.${option.id}`,
+    label: `${option.label} (${option.extension})`,
+    command: encodedNewFileCommand(option),
+    group: "creation",
+    order: index,
+    icon: "file",
+  }));
 }
 
 function expandWorkbenchPanelContribution(
@@ -2052,7 +2101,9 @@ export function App() {
   const [explorerCreation, setExplorerCreation] = useState<"file" | "directory">();
   const [explorerCreationParentPath, setExplorerCreationParentPath] = useState("");
   const [explorerCreationName, setExplorerCreationName] = useState("");
+  const [explorerCreationExtension, setExplorerCreationExtension] = useState<`.${string}`>();
   const [explorerCreationError, setExplorerCreationError] = useState<string>();
+  const [workspaceFileCreationOptions, setWorkspaceFileCreationOptions] = useState<readonly WorkspaceFileCreationOption[]>([]);
   const [explorerRenamePath, setExplorerRenamePath] = useState<string>();
   const [explorerRenameName, setExplorerRenameName] = useState("");
   const [explorerRenameError, setExplorerRenameError] = useState<string>();
@@ -2142,6 +2193,39 @@ export function App() {
   const activePluginSettingsProvider = settingsSectionId === "editor"
     ? undefined
     : settingsProviders.find((provider) => provider.pluginId === settingsSectionId);
+  const fileCreationTargetPath = explorerTargetDirectoryPath(entries, selectedExplorerPath);
+
+  const resolveWorkspaceFileCreationOptions = useCallback(async (directoryPath: string) => {
+    const providers = platform.capabilities.getAll<WorkspaceFileCreationProvider>("workspace.fileCreation");
+    if (!providers.length) return [];
+    const directoryEntry = directoryPath ? findWorkspaceEntry(entries, directoryPath) : undefined;
+    const directory: ResourceContext = {
+      kind: "directory",
+      name: directoryEntry?.name ?? workspaceName,
+      path: directoryPath,
+      ...(workspaceName !== "Sem workspace" ? { workspaceName } : {}),
+      ...(workspaceRoot ? { workspaceRoot } : {}),
+    };
+    const options = (await Promise.all(providers.map((provider) => provider.provideOptions(directory)))).flat();
+    const seen = new Set<string>();
+    return options
+      .filter((option) => option.extension.startsWith(".") && option.extension.length > 1)
+      .filter((option) => {
+        const key = `${option.extension.toLocaleLowerCase()}\u0000${option.id}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((left, right) => (left.order ?? 100) - (right.order ?? 100) || left.label.localeCompare(right.label));
+  }, [entries, platformSnapshot.plugins, workspaceName, workspaceRoot]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void resolveWorkspaceFileCreationOptions(fileCreationTargetPath).then((options) => {
+      if (!cancelled) setWorkspaceFileCreationOptions(options);
+    });
+    return () => { cancelled = true; };
+  }, [fileCreationTargetPath, resolveWorkspaceFileCreationOptions]);
   const editorSettings = resolveEditorSettings(workspaceSettings);
   const editorRulerLines = activeDocument?.kind === "text" ? editorLineNumbers(activeDocument.content) : ["01"];
   const editorDecorationsByLine = useMemo(() => {
@@ -2858,15 +2942,9 @@ export function App() {
 
   const openRootMenu = async (x: number, y: number) => {
     if (!workspaceHandle) return;
+    const fileCreationOptions = await resolveWorkspaceFileCreationOptions("");
     const baseItems: ResourceContextMenuItem[] = [
-      {
-        id: "core.newFile",
-        label: "Novo arquivo",
-        command: "core.resource.newFile",
-        group: "creation",
-        order: 0,
-        icon: "file",
-      },
+      ...newFileContextMenuItems(fileCreationOptions),
       {
         id: "core.newDirectory",
         label: "Nova pasta",
@@ -2888,6 +2966,9 @@ export function App() {
   };
 
   const openResourceMenu = async (entry: WorkspaceEntry, x: number, y: number) => {
+    const fileCreationOptions = entry.kind === "directory"
+      ? await resolveWorkspaceFileCreationOptions(entry.path)
+      : [];
     const baseItems: ResourceContextMenuItem[] = [
       {
         id: "core.open",
@@ -2898,14 +2979,7 @@ export function App() {
         icon: entry.kind === "file" ? "file" : "folder",
       },
       ...(entry.kind === "directory" ? [
-        {
-          id: "core.newFile",
-          label: "Novo arquivo",
-          command: "core.resource.newFile",
-          group: "creation",
-          order: 0,
-          icon: "file" as const,
-        },
+        ...newFileContextMenuItems(fileCreationOptions),
         {
           id: "core.newDirectory",
           label: "Nova pasta",
@@ -3266,9 +3340,8 @@ export function App() {
     await saveOpenDocument(activeDocument, forceSaveAs);
   };
 
-  const newDocument = () => {
-    const sequence = documents.filter((document) => document.name.startsWith("sem-titulo")).length + 1;
-    const name = sequence === 1 ? "sem-titulo.py" : `sem-titulo-${sequence}.py`;
+  const newDocument = (option: Pick<WorkspaceFileCreationOption, "extension"> = TEXT_FILE_CREATION_OPTION) => {
+    const name = nextUntitledFileName(documents.map((document) => document.name), option.extension);
     const document: OpenDocument = {
       id: `untitled:${crypto.randomUUID()}`,
       name,
@@ -3379,14 +3452,20 @@ export function App() {
     setExplorerCreation(undefined);
     setExplorerCreationParentPath("");
     setExplorerCreationName("");
+    setExplorerCreationExtension(undefined);
     setExplorerCreationError(undefined);
   };
 
-  const startExplorerCreation = async (kind: "file" | "directory", parentPath?: string) => {
+  const startExplorerCreation = async (
+    kind: "file" | "directory",
+    parentPath?: string,
+    option?: Pick<WorkspaceFileCreationOption, "extension" | "suggestedName">,
+  ) => {
     const targetPath = parentPath ?? explorerTargetDirectoryPath(entries, selectedExplorerPath);
     setExplorerCreation(kind);
     setExplorerCreationParentPath(targetPath);
-    setExplorerCreationName("");
+    setExplorerCreationName(kind === "file" ? option?.suggestedName ?? "" : "");
+    setExplorerCreationExtension(kind === "file" ? option?.extension : undefined);
     setExplorerCreationError(undefined);
     setExplorerRenamePath(undefined);
     setExplorerRenameError(undefined);
@@ -3412,10 +3491,13 @@ export function App() {
       setExplorerCreationError("Abra ou reconecte um workspace antes de criar arquivos ou pastas.");
       return;
     }
-    const name = explorerCreationName.trim();
+    let name = explorerCreationName.trim();
     if (!name) {
       setExplorerCreationError("Informe um nome.");
       return;
+    }
+    if (explorerCreation === "file" && explorerCreationExtension) {
+      name = ensureFileCreationExtension(name, explorerCreationExtension);
     }
     if (name.includes("/") || name.includes("\\")) {
       setExplorerCreationError("Use apenas o nome, sem barras ou caminho.");
@@ -3656,8 +3738,8 @@ export function App() {
   const executeContextMenuItem = async (item: ResourceContextMenuItem, target: ContextMenuTarget) => {
     setContextMenu(undefined);
     if (target.kind === "root") {
-      if (item.command === "core.resource.newFile") {
-        await startExplorerCreation("file", "");
+      if (item.command?.startsWith("core.resource.newFile")) {
+        await startExplorerCreation("file", "", decodedNewFileOption(item.command));
         return;
       }
       if (item.command === "core.resource.newDirectory") {
@@ -3701,8 +3783,8 @@ export function App() {
         await navigator.clipboard?.writeText(entry.path);
         return;
       }
-      if (item.command === "core.resource.newFile") {
-        await startExplorerCreation("file", entry.path);
+      if (item.command?.startsWith("core.resource.newFile")) {
+        await startExplorerCreation("file", entry.path, decodedNewFileOption(item.command));
         return;
       }
       if (item.command === "core.resource.newDirectory") {
@@ -4167,9 +4249,41 @@ export function App() {
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
               <DropdownMenu.Content className="menu-content" align="start" sideOffset={6}>
-                <DropdownMenu.Item className="menu-item" onSelect={newDocument}>
-                  <FilePlus2 size={15} /> Novo arquivo
-                </DropdownMenu.Item>
+                {workspaceFileCreationOptions.length ? (
+                  <DropdownMenu.Sub>
+                    <DropdownMenu.SubTrigger className="menu-item">
+                      <FilePlus2 size={15} /> Novo arquivo <ChevronRight className="menu-item__submenu-arrow" size={14} />
+                    </DropdownMenu.SubTrigger>
+                    <DropdownMenu.Portal>
+                      <DropdownMenu.SubContent className="menu-content" sideOffset={6} alignOffset={-5}>
+                        {fileCreationOptions(workspaceFileCreationOptions).map((option) => (
+                          <DropdownMenu.Item
+                            className="menu-item"
+                            key={`${option.id}:${option.extension}`}
+                            onSelect={() => newDocument(option)}
+                          >
+                            {option.icon ? (
+                              <span
+                                className="resource-icon resource-icon--menu"
+                                title={option.icon.title}
+                                style={{
+                                  color: option.icon.foreground ?? "currentColor",
+                                  background: option.icon.background ?? "transparent",
+                                }}
+                              >{option.icon.label}</span>
+                            ) : <File size={15} />}
+                            <span>{option.label}</span>
+                            <span className="menu-item__hint">{option.extension}</span>
+                          </DropdownMenu.Item>
+                        ))}
+                      </DropdownMenu.SubContent>
+                    </DropdownMenu.Portal>
+                  </DropdownMenu.Sub>
+                ) : (
+                  <DropdownMenu.Item className="menu-item" onSelect={() => newDocument()}>
+                    <FilePlus2 size={15} /> Novo arquivo
+                  </DropdownMenu.Item>
+                )}
                 <DropdownMenu.Item className="menu-item" onSelect={() => invoke(openSingleFile)}>
                   <File size={15} /> Abrir arquivo
                 </DropdownMenu.Item>
@@ -4293,9 +4407,41 @@ export function App() {
                         </DropdownMenu.Trigger>
                         <DropdownMenu.Portal>
                           <DropdownMenu.Content className="menu-content" align="end" sideOffset={6}>
-                            <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(() => startExplorerCreation("file"))}>
-                              <FilePlus2 size={15} /> Novo arquivo
-                            </DropdownMenu.Item>
+                            {workspaceFileCreationOptions.length ? (
+                              <DropdownMenu.Sub>
+                                <DropdownMenu.SubTrigger className="menu-item" disabled={!workspaceHandle}>
+                                  <FilePlus2 size={15} /> Novo arquivo <ChevronRight className="menu-item__submenu-arrow" size={14} />
+                                </DropdownMenu.SubTrigger>
+                                <DropdownMenu.Portal>
+                                  <DropdownMenu.SubContent className="menu-content" sideOffset={6} alignOffset={-5}>
+                                    {fileCreationOptions(workspaceFileCreationOptions).map((option) => (
+                                      <DropdownMenu.Item
+                                        className="menu-item"
+                                        key={`${option.id}:${option.extension}`}
+                                        onSelect={() => invoke(() => startExplorerCreation("file", undefined, option))}
+                                      >
+                                        {option.icon ? (
+                                          <span
+                                            className="resource-icon resource-icon--menu"
+                                            title={option.icon.title}
+                                            style={{
+                                              color: option.icon.foreground ?? "currentColor",
+                                              background: option.icon.background ?? "transparent",
+                                            }}
+                                          >{option.icon.label}</span>
+                                        ) : <File size={15} />}
+                                        <span>{option.label}</span>
+                                        <span className="menu-item__hint">{option.extension}</span>
+                                      </DropdownMenu.Item>
+                                    ))}
+                                  </DropdownMenu.SubContent>
+                                </DropdownMenu.Portal>
+                              </DropdownMenu.Sub>
+                            ) : (
+                              <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(() => startExplorerCreation("file"))}>
+                                <FilePlus2 size={15} /> Novo arquivo
+                              </DropdownMenu.Item>
+                            )}
                             <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(() => startExplorerCreation("directory"))}>
                               <FolderOpen size={15} /> Nova pasta
                             </DropdownMenu.Item>
@@ -4819,7 +4965,41 @@ export function App() {
                 <h1>tinyIde</h1>
                 <p>Crie ou abra um arquivo para começar.</p>
                 <div className="welcome-actions">
-                  <button className="button primary" type="button" onClick={newDocument}><FilePlus2 size={16} /> Novo arquivo</button>
+                  {workspaceFileCreationOptions.length ? (
+                    <DropdownMenu.Root>
+                      <DropdownMenu.Trigger asChild>
+                        <button className="button primary" type="button">
+                          <FilePlus2 size={16} /> Novo arquivo <ChevronDown size={14} />
+                        </button>
+                      </DropdownMenu.Trigger>
+                      <DropdownMenu.Portal>
+                        <DropdownMenu.Content className="menu-content" align="center" sideOffset={6}>
+                          {fileCreationOptions(workspaceFileCreationOptions).map((option) => (
+                            <DropdownMenu.Item
+                              className="menu-item"
+                              key={`${option.id}:${option.extension}`}
+                              onSelect={() => newDocument(option)}
+                            >
+                              {option.icon ? (
+                                <span
+                                  className="resource-icon resource-icon--menu"
+                                  title={option.icon.title}
+                                  style={{
+                                    color: option.icon.foreground ?? "currentColor",
+                                    background: option.icon.background ?? "transparent",
+                                  }}
+                                >{option.icon.label}</span>
+                              ) : <File size={15} />}
+                              <span>{option.label}</span>
+                              <span className="menu-item__hint">{option.extension}</span>
+                            </DropdownMenu.Item>
+                          ))}
+                        </DropdownMenu.Content>
+                      </DropdownMenu.Portal>
+                    </DropdownMenu.Root>
+                  ) : (
+                    <button className="button primary" type="button" onClick={() => newDocument()}><FilePlus2 size={16} /> Novo arquivo</button>
+                  )}
                   <button className="button secondary" type="button" onClick={() => invoke(openSingleFile)}><File size={16} /> Abrir arquivo</button>
                   <button className="button secondary" type="button" onClick={() => invoke(openFolder)}><FolderOpen size={16} /> Abrir pasta</button>
                 </div>

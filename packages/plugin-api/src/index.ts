@@ -103,6 +103,7 @@ export interface PluginExtensionApi {
   registerLanguageProvider(provider: LanguageProvider): Disposable;
   registerResourceIconProvider(provider: ResourceIconProvider): Disposable;
   registerResourceDecorationProvider(provider: ResourceDecorationProvider): Disposable;
+  registerWorkspaceFileCreationProvider(provider: WorkspaceFileCreationProvider): Disposable;
   registerExecutionEnvironmentProvider(provider: ExecutionEnvironmentProvider): Disposable;
   registerExecutionProfileContributionProvider(provider: ExecutionProfileContributionProvider): Disposable;
   registerScriptExecution(contribution: ScriptExecutionContribution): Disposable;
@@ -313,6 +314,30 @@ export interface ResourceIconProvider {
 }
 
 export const RESOURCE_ICON_CAPABILITY = "resource.icon";
+
+export interface WorkspaceFileCreationOption {
+  /** Stable identifier scoped to the provider. */
+  readonly id: string;
+  /** Human-readable menu label, for example "Arquivo Python". */
+  readonly label: string;
+  /** File suffix including the leading dot, for example ".py". */
+  readonly extension: `.${string}`;
+  /** Optional filename prefilled in the Explorer inline editor. */
+  readonly suggestedName?: string;
+  readonly description?: string;
+  readonly order?: number;
+  readonly icon?: ResourceIcon;
+}
+
+export interface WorkspaceFileCreationProvider {
+  readonly id: string;
+  readonly pluginId: string;
+  provideOptions(
+    directory: ResourceContext,
+  ): Promise<readonly WorkspaceFileCreationOption[]> | readonly WorkspaceFileCreationOption[];
+}
+
+export const WORKSPACE_FILE_CREATION_CAPABILITY = "workspace.fileCreation";
 
 export interface ResourceDecoration {
   /** CSS color applied to the resource label. */

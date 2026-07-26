@@ -294,6 +294,9 @@ button { color: inherit; }
 .menu-content { min-width: 190px; padding: 5px; border: 1px solid var(--border-strong); border-radius: 7px; background: #1b2029; box-shadow: 0 16px 45px rgb(0 0 0 / 45%); }
 .menu-item { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-radius: 4px; color: var(--text); font-size: 12px; outline: none; cursor: pointer; }
 .menu-item[data-highlighted] { background: #2a3342; }
+.menu-item__submenu-arrow, .menu-item__hint { margin-left: auto; color: var(--text-muted); }
+.menu-item__hint { padding-left: 12px; font-family: "JetBrains Mono", Consolas, monospace; font-size: 10px; }
+.resource-icon--menu { width: 16px; height: 16px; flex: 0 0 16px; font-size: 8px; }
 .menu-separator { height: 1px; margin: 4px 2px; background: var(--border); }
 .tooltip { padding: 5px 7px; border: 1px solid var(--border-strong); border-radius: 5px; background: #202631; color: white; font-size: 11px; box-shadow: 0 8px 24px rgb(0 0 0 / 35%); }
 .tooltip-arrow { fill: #202631; }

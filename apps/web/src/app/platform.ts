@@ -33,6 +33,7 @@ import type {
   WorkbenchEditorToolbarProvider,
   WorkbenchTitlebarContribution,
   WorkbenchToolWindowHook,
+  WorkspaceFileCreationProvider,
   Disposable,
 } from "@tinyide/plugin-api";
 import { AppPluginHost } from "./plugin-host";
@@ -173,6 +174,7 @@ function pluginContext(platform: TinyIdePlatform, pluginId: string): PluginConte
       registerLanguageProvider: (provider: LanguageProvider) => platform.capabilities.register("language.provider", provider),
       registerResourceIconProvider: (provider: ResourceIconProvider) => platform.capabilities.register("resource.icon", provider),
       registerResourceDecorationProvider: (provider: ResourceDecorationProvider) => platform.capabilities.register("resource.decoration", provider),
+      registerWorkspaceFileCreationProvider: (provider: WorkspaceFileCreationProvider) => platform.capabilities.register("workspace.fileCreation", provider),
       registerExecutionEnvironmentProvider: (provider: ExecutionEnvironmentProvider) => platform.capabilities.register("execution.environment", provider),
       registerExecutionProfileContributionProvider: (provider: ExecutionProfileContributionProvider) => platform.capabilities.register("execution.profile.contribution", provider),
       registerScriptExecution: (contribution: ScriptExecutionContribution) => platform.capabilities.register("execution.script", contribution),

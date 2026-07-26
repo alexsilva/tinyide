@@ -4,6 +4,7 @@ import type {
   BrowserFileHandle,
 } from "../browser-filesystem";
 import {
+  restoreLastDesktopWorkspaceHandle,
   workspaceRootFromFilePath,
   workspaceRootHintForHandle,
 } from "./workspace-host";
@@ -64,5 +65,24 @@ describe("workspaceRootHintForHandle", () => {
   it("mantém o fallback por nome no navegador comum", async () => {
     const handle = directoryHandle("preco", [fileHandle("package.json")]);
     await expect(workspaceRootHintForHandle(handle, undefined)).resolves.toBeUndefined();
+  });
+});
+
+describe("restoreLastDesktopWorkspaceHandle", () => {
+  it("restaura o último workspace registrado pelo processo desktop", async () => {
+    const desktop = {
+      getPathForFile: () => "",
+      pickDirectory: async () => undefined,
+      restoreDirectory: async () => undefined,
+      restoreLastDirectory: async () => ({ token: "token", name: "preco", path: "/mnt/projects/preco" }),
+      listDirectory: async () => [],
+      ensureFile: async () => true,
+      ensureDirectory: async () => true,
+      readFile: async () => ({ bytes: new Uint8Array(), lastModified: 0 }),
+      writeFile: async () => true,
+      removeEntry: async () => true,
+    };
+    const handle = await restoreLastDesktopWorkspaceHandle(desktop);
+    expect(handle).toMatchObject({ name: "preco", desktopWorkspaceRoot: "/mnt/projects/preco" });
   });
 });

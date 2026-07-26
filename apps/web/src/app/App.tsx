@@ -187,6 +187,7 @@ import {
   isDesktopWorkspaceHandle,
   pickWorkspaceDirectory,
   restoreDesktopWorkspaceHandle,
+  restoreLastDesktopWorkspaceHandle,
   workspaceRootHintForHandle,
 } from "./workspace-host";
 import {
@@ -2541,11 +2542,18 @@ export function App() {
         let restoredWorkspaceName = snapshot?.workspaceName ?? initialSession.workspaceName;
         let restoredWorkspaceRoot = snapshot?.workspaceRoot ?? initialSession.workspaceRoot;
         let restoredWorkspaceHandle = isDesktopHost() ? undefined : snapshot?.workspaceHandle;
-        if (isDesktopHost() && !restoredWorkspaceRoot) {
-          restoredWorkspaceName = "Sem workspace";
-          restoredWorkspaceHandle = undefined;
-        } else if (isDesktopHost() && restoredWorkspaceRoot && !restoredWorkspaceHandle) {
-          restoredWorkspaceHandle = await restoreDesktopWorkspaceHandle(restoredWorkspaceRoot).catch(() => undefined);
+        if (isDesktopHost()) {
+          if (restoredWorkspaceRoot) {
+            restoredWorkspaceHandle = await restoreDesktopWorkspaceHandle(restoredWorkspaceRoot).catch(() => undefined);
+          } else {
+            restoredWorkspaceHandle = await restoreLastDesktopWorkspaceHandle().catch(() => undefined);
+            if (restoredWorkspaceHandle) {
+              restoredWorkspaceName = restoredWorkspaceHandle.name;
+              restoredWorkspaceRoot = await workspaceRootHintForHandle(restoredWorkspaceHandle);
+            } else {
+              restoredWorkspaceName = "Sem workspace";
+            }
+          }
         }
         if (restoredWorkspaceName !== "Sem workspace" && (!isDesktopHost() || Boolean(restoredWorkspaceRoot))) {
           try {
@@ -2568,40 +2576,42 @@ export function App() {
           await clearHostWorkspace();
           setWorkspaceRoot(undefined);
         }
-        if (snapshot) {
-          setWorkspaceName(restoredWorkspaceName);
-          setWorkspaceHandle(restoredWorkspaceHandle);
-          if (restoredWorkspaceHandle) {
-            const permission = await restoredWorkspaceHandle.queryPermission?.({ mode: "readwrite" });
-            if (permission === "granted" || permission === undefined) {
-              const rootEntries = await listDirectory(restoredWorkspaceHandle);
-              setEntries(await hydrateExpandedEntries(rootEntries, new Set(initialSession.expandedDirectories)));
-              setWorkspaceAccess("ready");
-              restoredDocuments = await restoreWorkspaceDocuments(
-                snapshot.documents,
-                restoredWorkspaceRoot,
-                restoredWorkspaceHandle,
-              );
-            } else {
-              setEntries(deserializeEntries(snapshot.workspaceEntries));
-              setWorkspaceAccess("permission-required");
-              restoredDocuments = await restoreWorkspaceDocuments(snapshot.documents, restoredWorkspaceRoot);
-            }
+        setWorkspaceName(restoredWorkspaceName);
+        setWorkspaceHandle(restoredWorkspaceHandle);
+        if (restoredWorkspaceHandle && restoredWorkspaceRoot) {
+          const permission = await restoredWorkspaceHandle.queryPermission?.({ mode: "readwrite" });
+          if (permission === "granted" || permission === undefined) {
+            const rootEntries = await listDirectory(restoredWorkspaceHandle);
+            setEntries(await hydrateExpandedEntries(rootEntries, new Set(initialSession.expandedDirectories)));
+            setWorkspaceAccess("ready");
+            restoredDocuments = await restoreWorkspaceDocuments(
+              snapshot?.documents ?? [],
+              restoredWorkspaceRoot,
+              restoredWorkspaceHandle,
+            );
           } else {
-            setEntries(deserializeEntries(snapshot.workspaceEntries));
-            if (restoredWorkspaceName !== "Sem workspace") setWorkspaceAccess("missing");
-            restoredDocuments = await restoreWorkspaceDocuments(snapshot.documents, restoredWorkspaceRoot);
+            setEntries(snapshot ? deserializeEntries(snapshot.workspaceEntries) : []);
+            setWorkspaceAccess("permission-required");
+            restoredDocuments = await restoreWorkspaceDocuments(snapshot?.documents ?? [], restoredWorkspaceRoot);
           }
-          setDocuments(restoredDocuments);
+        } else if (snapshot) {
+          setEntries(deserializeEntries(snapshot.workspaceEntries));
+          if (restoredWorkspaceName !== "Sem workspace") setWorkspaceAccess("missing");
+          restoredDocuments = await restoreWorkspaceDocuments(snapshot.documents, restoredWorkspaceRoot);
+        } else {
+          setEntries([]);
+        }
+        setDocuments(restoredDocuments);
+        if (snapshot) {
           setDiagnostics(snapshot.diagnostics);
           setOutput([...snapshot.output]);
-          setActiveDocumentId(
-            initialSession.activeDocumentId
-              && restoredDocuments.some((document) => document.id === initialSession.activeDocumentId)
-              ? initialSession.activeDocumentId
-              : restoredDocuments[0]?.id,
-          );
         }
+        setActiveDocumentId(
+          initialSession.activeDocumentId
+            && restoredDocuments.some((document) => document.id === initialSession.activeDocumentId)
+            ? initialSession.activeDocumentId
+            : restoredDocuments[0]?.id,
+        );
         const loadedEnvironments = restoredWorkspaceRoot ? await loadEnvironments() : [];
         setEnvironments(loadedEnvironments);
         const configuredEnvironmentId = workspaceSettingsRef.current.environment?.selectedId;
@@ -2628,7 +2638,12 @@ export function App() {
         restoredRef.current = true;
       })
       .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
-      .finally(() => setRestorationComplete(true));
+      .finally(() => {
+        setRestorationComplete(true);
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(() => window.tinyideDesktop?.notifyReady?.());
+        });
+      });
   }, []);
 
   useEffect(() => {
@@ -4135,6 +4150,10 @@ export function App() {
     }));
   };
 
+  if (!restorationComplete) {
+    return <div className="boot-screen">Inicializando tinyIde...</div>;
+  }
+
   return (
     <Tooltip.Provider delayDuration={350}>
       <div className="ide-shell">
@@ -4170,24 +4189,14 @@ export function App() {
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button className="menu-button" type="button">
-                Configurações <ChevronDown size={13} />
+                Edit <ChevronDown size={13} />
               </button>
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
               <DropdownMenu.Content className="menu-content" align="start" sideOffset={6}>
                 <DropdownMenu.Item className="menu-item" onSelect={() => openSettings("editor")}>
-                  <Code2 size={15} /> Editor
+                  <Settings2 size={15} /> Configurações
                 </DropdownMenu.Item>
-                {settingsProviders.length ? <DropdownMenu.Separator className="menu-separator" /> : null}
-                {settingsProviders.map((provider) => (
-                  <DropdownMenu.Item
-                    className="menu-item"
-                    key={provider.pluginId}
-                    onSelect={() => openSettings(provider.pluginId)}
-                  >
-                    <Plug size={15} /> {provider.title}
-                  </DropdownMenu.Item>
-                ))}
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu.Root>

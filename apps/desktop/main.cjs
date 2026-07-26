@@ -6,10 +6,16 @@ const { basename, dirname, join, resolve } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { allowedExternalUrl, safeWorkspacePath: resolveSafeWorkspacePath, sameOriginUrl } = require("./security.cjs");
 const { installWindowVisibilityFallback } = require("./startup.cjs");
+const { readDesktopState, removeDesktopState, writeDesktopState } = require("./state-store.cjs");
 
 let runtime;
 let mainWindow;
 const desktopWorkspaces = new Map();
+const LAST_WORKSPACE_STATE_KEY = "last-workspace";
+
+function desktopStateRoot() {
+  return join(app.getPath("userData"), "state");
+}
 
 function registeredWorkspace(token) {
   const root = desktopWorkspaces.get(token);
@@ -22,7 +28,7 @@ async function safeWorkspacePath(token, workspacePath = "") {
   return resolveSafeWorkspacePath(root, workspacePath);
 }
 
-function registerDesktopWorkspace(rootPath) {
+async function registerDesktopWorkspace(rootPath, { persist = true } = {}) {
   const root = resolve(rootPath);
   if (!existsSync(root) || !statSync(root).isDirectory()) {
     throw new Error("O diretório selecionado não está disponível.");
@@ -30,24 +36,51 @@ function registerDesktopWorkspace(rootPath) {
   const token = randomUUID();
   desktopWorkspaces.clear();
   desktopWorkspaces.set(token, root);
+  if (persist) {
+    await writeDesktopState(desktopStateRoot(), LAST_WORKSPACE_STATE_KEY, { path: root });
+  }
   return { token, name: basename(root), path: root };
 }
 
 function installDesktopFileSystemHandlers() {
+  const stateRoot = desktopStateRoot();
+
+  ipcMain.handle("tinyide:state:read", async (_event, key) => readDesktopState(stateRoot, key));
+  ipcMain.handle("tinyide:state:write", async (_event, key, value) => {
+    await writeDesktopState(stateRoot, key, value);
+    return true;
+  });
+  ipcMain.handle("tinyide:state:remove", async (_event, key) => {
+    await removeDesktopState(stateRoot, key);
+    return true;
+  });
+
   ipcMain.handle("tinyide:workspace:pick", async () => {
     const testWorkspace = process.env.TINYIDE_TEST_WORKSPACE_PICKER_PATH?.trim();
-    if (testWorkspace) return registerDesktopWorkspace(testWorkspace);
+    if (testWorkspace) return await registerDesktopWorkspace(testWorkspace);
     const result = await dialog.showOpenDialog(mainWindow, {
       title: "Abrir workspace",
       properties: ["openDirectory"],
     });
     if (result.canceled || !result.filePaths[0]) return undefined;
-    return registerDesktopWorkspace(result.filePaths[0]);
+    return await registerDesktopWorkspace(result.filePaths[0]);
   });
 
   ipcMain.handle("tinyide:workspace:restore", async (_event, rootPath) => {
     if (typeof rootPath !== "string" || !rootPath.trim()) return undefined;
-    return registerDesktopWorkspace(rootPath.trim());
+    return await registerDesktopWorkspace(rootPath.trim());
+  });
+
+  ipcMain.handle("tinyide:workspace:restore-last", async () => {
+    const stored = await readDesktopState(stateRoot, LAST_WORKSPACE_STATE_KEY);
+    const rootPath = typeof stored?.path === "string" ? stored.path.trim() : "";
+    if (!rootPath) return undefined;
+    try {
+      return await registerDesktopWorkspace(rootPath, { persist: false });
+    } catch {
+      await removeDesktopState(stateRoot, LAST_WORKSPACE_STATE_KEY);
+      return undefined;
+    }
   });
 
   ipcMain.handle("tinyide:workspace:list", async (_event, token, workspacePath) => {
@@ -169,8 +202,15 @@ function createWindow(url) {
     event.preventDefault();
     if (allowedExternalUrl(target)) void shell.openExternal(target);
   });
-  installWindowVisibilityFallback(window);
+  const showWindow = installWindowVisibilityFallback(window, { waitForRendererReady: true });
+  const rendererReady = (event) => {
+    if (event.sender !== window.webContents) return;
+    ipcMain.removeListener("tinyide:renderer:ready", rendererReady);
+    showWindow();
+  };
+  ipcMain.on("tinyide:renderer:ready", rendererReady);
   window.on("closed", () => {
+    ipcMain.removeListener("tinyide:renderer:ready", rendererReady);
     if (mainWindow === window) mainWindow = undefined;
   });
   void window.loadURL(url);

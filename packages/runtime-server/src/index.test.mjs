@@ -13,7 +13,7 @@ afterEach(async () => {
   }));
 });
 
-async function fixture() {
+async function fixture(options = {}) {
   const root = await mkdtemp(join(tmpdir(), "tinyide-runtime-"));
   const webRoot = join(root, "web");
   const pluginsRoot = join(root, "plugins");
@@ -29,6 +29,7 @@ async function fixture() {
     initialWorkspaceRoot: workspaceRoot,
     host: "127.0.0.1",
     port: 0,
+    ...options,
   });
   resources.push({ runtime, root });
   return { root, webRoot, pluginsRoot, workspaceRoot, runtime };
@@ -66,6 +67,17 @@ describe("runtime server hardening", () => {
     const policy = response.headers.get("content-security-policy");
     expect(policy).toContain("script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net");
     expect(policy).toContain("connect-src 'self' ws: https://cdn.jsdelivr.net");
+  });
+
+  it("allows explicitly hashed development preambles without enabling arbitrary inline scripts", async () => {
+    const hash = "'sha256-Z2/iFzh9VMlVkEOar1f/oSHWwQk3ve1qk/C2WdsC4Xk='";
+    const { runtime } = await fixture({ inlineScriptHashes: [hash, "'unsafe-inline'", "invalid"] });
+    const response = await fetch(runtime.url);
+    const policy = response.headers.get("content-security-policy");
+    const scriptDirective = policy?.split(";").find((directive) => directive.trim().startsWith("script-src")) ?? "";
+    expect(policy).toContain(`script-src 'self' ${hash}`);
+    expect(scriptDirective).not.toContain("'unsafe-inline'");
+    expect(scriptDirective).not.toContain("invalid");
   });
 
   it("limits JSON request bodies before parsing them", async () => {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import { dirname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,12 +9,15 @@ import { createTinyIdeRuntime } from "../../packages/runtime-server/src/index.mj
 const configDirectory = dirname(fileURLToPath(import.meta.url));
 const hostRoot = resolve(configDirectory, "../..");
 const pluginsRoot = resolve(hostRoot, "plugins");
+const reactRefreshPreamble = react.preambleCode.replace("__BASE__", "/");
+const reactRefreshHash = `'sha256-${createHash("sha256").update(reactRefreshPreamble).digest("base64")}'`;
 
 function runtimePlugin() {
   const runtime = createTinyIdeRuntime({
     hostRoot,
     pluginsRoot,
     workspaceSearchRoot: process.env.TINYIDE_WORKSPACES_ROOT ?? dirname(hostRoot),
+    inlineScriptHashes: [reactRefreshHash],
   });
 
   function install(server) {

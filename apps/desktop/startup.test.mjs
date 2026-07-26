@@ -98,6 +98,27 @@ describe("desktop startup", () => {
     expect(window.show).toHaveBeenCalledOnce();
   });
 
+  it("keeps a compiled window hidden until the renderer reports restored state", () => {
+    const window = createWindow();
+    let timeoutCallback;
+    const show = installWindowVisibilityFallback(window, {
+      waitForRendererReady: true,
+      setTimeoutFunction: vi.fn((callback) => {
+        timeoutCallback = callback;
+        return { unref: vi.fn() };
+      }),
+    });
+
+    window.emit("ready-to-show");
+    window.webContents.emit("did-finish-load");
+    expect(window.show).not.toHaveBeenCalled();
+
+    show();
+    expect(window.show).toHaveBeenCalledOnce();
+    timeoutCallback();
+    expect(window.show).toHaveBeenCalledOnce();
+  });
+
   it("logs main-frame load and renderer failures without reopening destroyed windows", () => {
     const window = createWindow();
     const logger = { error: vi.fn() };

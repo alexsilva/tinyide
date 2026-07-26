@@ -20,11 +20,16 @@ const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MANIFEST_CACHE_TTL_MS = 1000;
 const CDN_ORIGIN = "https://cdn.jsdelivr.net";
 
-function contentSecurityPolicy(pluginDescriptors) {
+function validInlineScriptHashes(hashes) {
+  if (!Array.isArray(hashes)) return [];
+  return hashes.filter((hash) => /^'sha(?:256|384|512)-[A-Za-z0-9+/]+={0,2}'$/.test(hash));
+}
+
+function contentSecurityPolicy(pluginDescriptors, inlineScriptHashes = []) {
   const permissions = new Set(
     pluginDescriptors.flatMap(({ manifest }) => Array.isArray(manifest.permissions) ? manifest.permissions : []),
   );
-  const scriptSources = ["'self'"];
+  const scriptSources = ["'self'", ...validInlineScriptHashes(inlineScriptHashes)];
   const connectSources = ["'self'", "ws:"];
 
   if (permissions.has("runtime.wasm")) scriptSources.push("'wasm-unsafe-eval'");
@@ -46,12 +51,12 @@ function contentSecurityPolicy(pluginDescriptors) {
   ].join("; ");
 }
 
-function applySecurityHeaders(response, pluginDescriptors) {
+function applySecurityHeaders(response, pluginDescriptors, inlineScriptHashes) {
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader("X-Frame-Options", "DENY");
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-  response.setHeader("Content-Security-Policy", contentSecurityPolicy(pluginDescriptors));
+  response.setHeader("Content-Security-Policy", contentSecurityPolicy(pluginDescriptors, inlineScriptHashes));
 }
 
 function writeJson(response, status, payload) {
@@ -232,7 +237,7 @@ export function createTinyIdeRuntime(options) {
     response.statusCode = 404;
     response.end("Not found.");
   }) => {
-    applySecurityHeaders(response, cachedPluginDescriptors());
+    applySecurityHeaders(response, cachedPluginDescriptors(), options.inlineScriptHashes);
     const requestUrl = new URL(request.url ?? "/", "http://localhost");
 
     if ((requestUrl.pathname.startsWith("/core-api/") || requestUrl.pathname.startsWith("/plugin-api/"))

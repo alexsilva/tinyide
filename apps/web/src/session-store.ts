@@ -60,6 +60,8 @@ function openDatabase(): Promise<IDBDatabase> {
 }
 
 export async function readApplicationSnapshot<T>(): Promise<T | undefined> {
+  const desktop = window.tinyideDesktop;
+  if (desktop?.readState) return await desktop.readState(SNAPSHOT_KEY) as T | undefined;
   const database = await openDatabase();
   const transaction = database.transaction(STORE_NAME, "readonly");
   const completed = transactionCompleted(transaction);
@@ -69,6 +71,11 @@ export async function readApplicationSnapshot<T>(): Promise<T | undefined> {
 }
 
 export async function writeApplicationSnapshot<T>(snapshot: T): Promise<void> {
+  const desktop = window.tinyideDesktop;
+  if (desktop?.writeState) {
+    await desktop.writeState(SNAPSHOT_KEY, snapshot);
+    return;
+  }
   const database = await openDatabase();
   const transaction = database.transaction(STORE_NAME, "readwrite");
   const completed = transactionCompleted(transaction);
@@ -77,6 +84,11 @@ export async function writeApplicationSnapshot<T>(snapshot: T): Promise<void> {
 }
 
 export async function clearApplicationSnapshot(): Promise<void> {
+  const desktop = window.tinyideDesktop;
+  if (desktop?.removeState) {
+    await desktop.removeState(SNAPSHOT_KEY);
+    return;
+  }
   const database = await openDatabase();
   const transaction = database.transaction(STORE_NAME, "readwrite");
   const completed = transactionCompleted(transaction);

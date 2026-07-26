@@ -1,11 +1,26 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("tinyideDesktop", {
+  readState(key) {
+    return ipcRenderer.invoke("tinyide:state:read", key);
+  },
+  writeState(key, value) {
+    return ipcRenderer.invoke("tinyide:state:write", key, value);
+  },
+  removeState(key) {
+    return ipcRenderer.invoke("tinyide:state:remove", key);
+  },
+  notifyReady() {
+    ipcRenderer.send("tinyide:renderer:ready");
+  },
   pickDirectory() {
     return ipcRenderer.invoke("tinyide:workspace:pick");
   },
   restoreDirectory(path) {
     return ipcRenderer.invoke("tinyide:workspace:restore", path);
+  },
+  restoreLastDirectory() {
+    return ipcRenderer.invoke("tinyide:workspace:restore-last");
   },
   listDirectory(token, path) {
     return ipcRenderer.invoke("tinyide:workspace:list", token, path);

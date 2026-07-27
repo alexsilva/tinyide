@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { HostProcessSnapshot } from "./runtime";
 import {
+  nextPanelTabAfterClosingProfile,
+  openProfileExecutionTab,
+  profileExecutionPanelTabId,
   profileExecutionOutput,
   profileExecutionStatusLabel,
+  profileIdFromExecutionPanelTab,
   restoreProfileExecutions,
+  restoredProfileExecutionTabIds,
   resumedProfileProcessOutput,
 } from "./profile-execution-state";
 
@@ -42,6 +47,22 @@ function processSnapshot(input: Partial<HostProcessSnapshot> & {
 }
 
 describe("profile execution state", () => {
+  it("uses stable reusable panel tab ids for profiles", () => {
+    const tabId = profileExecutionPanelTabId("python/dev server");
+    expect(tabId).toBe("execution-profile:python%2Fdev%20server");
+    expect(profileIdFromExecutionPanelTab(tabId)).toBe("python/dev server");
+    expect(profileIdFromExecutionPanelTab("output")).toBeUndefined();
+    expect(profileIdFromExecutionPanelTab("execution-profile:%E0%A4%A")).toBeUndefined();
+  });
+
+  it("reuses an existing profile tab and selects a neighboring tab after close", () => {
+    expect(openProfileExecutionTab(["python"], "python")).toEqual(["python"]);
+    expect(openProfileExecutionTab(["python"], "node")).toEqual(["python", "node"]);
+    expect(nextPanelTabAfterClosingProfile(["python", "node", "django"], "node"))
+      .toBe(profileExecutionPanelTabId("django"));
+    expect(nextPanelTabAfterClosingProfile(["python"], "python")).toBe("output");
+  });
+
   it("restores independent state and output for any number of profiles", () => {
     const restored = restoreProfileExecutions([
       processSnapshot({
@@ -73,6 +94,7 @@ describe("profile execution state", () => {
     expect(restored.running).toEqual([
       expect.objectContaining({ profileId: "python", processId: "python-step" }),
     ]);
+    expect(restoredProfileExecutionTabIds(restored.states)).toEqual(["python"]);
   });
 
   it("keeps earlier steps while a resumed profile updates its running step", () => {

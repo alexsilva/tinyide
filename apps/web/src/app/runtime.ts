@@ -67,6 +67,7 @@ export interface RunProfileCallbacks {
   readonly onProcessStarted: (processId: string) => void;
   readonly onProcessFinished: () => void;
   readonly onOutput: (lines: readonly string[]) => void;
+  readonly shouldStop?: () => boolean;
 }
 
 export function languageProviderFor(document: OpenDocument | undefined): LanguageProvider | undefined {
@@ -334,6 +335,11 @@ export async function runExecutionProfile(input: {
   const completedOutput: string[] = [`[perfil] ${profile.name}`];
   callbacks.onOutput(completedOutput);
   for (const step of resolvedSteps) {
+    if (callbacks.shouldStop?.()) {
+      completedOutput.push("[interrompido pelo usuário]");
+      callbacks.onOutput(completedOutput.filter(Boolean));
+      return "stopped";
+    }
     const workingDirectory = step.workingDirectory ?? workspaceRoot;
     const heading = [
       `\n[etapa] ${step.name}`,
@@ -357,6 +363,9 @@ export async function runExecutionProfile(input: {
       },
     });
     callbacks.onProcessStarted(process.id);
+    if (callbacks.shouldStop?.() && process.status === "running") {
+      await stopHostProcess(process.id);
+    }
     while (process.status === "running") {
       await new Promise((resolve) => setTimeout(resolve, 250));
       process = await readHostProcess(process.id);
@@ -364,6 +373,9 @@ export async function runExecutionProfile(input: {
         ...completedOutput,
         ...hostProcessOutputLines(process).slice(1),
       ]);
+      if (callbacks.shouldStop?.() && process.status === "running") {
+        await stopHostProcess(process.id);
+      }
     }
     callbacks.onProcessFinished();
     if (process.stopRequested) {
@@ -385,7 +397,7 @@ export async function runScript(input: {
   readonly document: OpenDocument;
   readonly environment?: ExecutionEnvironment;
   readonly callbacks: RunProfileCallbacks;
-}): Promise<void> {
+}): Promise<"completed" | "stopped"> {
   const { contribution, document, environment, callbacks } = input;
   if (!document.path) throw new Error("Salve o arquivo no workspace antes de executar o script.");
   const host = await readHostContext();
@@ -397,6 +409,10 @@ export async function runScript(input: {
     `$ ${executable} ${[...(contribution.arguments ?? []), scriptPath].join(" ")}`,
   ];
   callbacks.onOutput(heading);
+  if (callbacks.shouldStop?.()) {
+    callbacks.onOutput([...heading, "[interrompido pelo usuário]"]);
+    return "stopped";
+  }
   let process = await startHostProcess({
     executable,
     arguments: [...(contribution.arguments ?? []), scriptPath],
@@ -409,12 +425,19 @@ export async function runScript(input: {
     },
   });
   callbacks.onProcessStarted(process.id);
+  if (callbacks.shouldStop?.() && process.status === "running") {
+    await stopHostProcess(process.id);
+  }
   while (process.status === "running") {
     await new Promise((resolve) => setTimeout(resolve, 250));
     process = await readHostProcess(process.id);
     callbacks.onOutput(hostProcessOutputLines(process));
+    if (callbacks.shouldStop?.() && process.status === "running") {
+      await stopHostProcess(process.id);
+    }
   }
   callbacks.onProcessFinished();
-  if (process.stopRequested) return;
+  if (process.stopRequested) return "stopped";
   if (process.exitCode !== 0) throw new Error(`O script terminou com código ${process.exitCode}.`);
+  return "completed";
 }

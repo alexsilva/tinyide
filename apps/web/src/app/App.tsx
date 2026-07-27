@@ -30,7 +30,6 @@ import {
   MoreVertical,
   Package,
   PackageCheck,
-  PanelBottom,
   Play,
   Plug,
   Plus,
@@ -215,9 +214,14 @@ import {
 import { editorLineNumbers, resolveEditorSettings } from "./editor-settings";
 import { reconcileToolWindowLayout } from "./workbench-layout";
 import {
+  nextPanelTabAfterClosingProfile,
+  openProfileExecutionTab,
+  profileExecutionPanelTabId,
   profileExecutionOutput,
   profileExecutionStatusLabel,
+  profileIdFromExecutionPanelTab,
   restoreProfileExecutions,
+  restoredProfileExecutionTabIds,
   resumedProfileProcessOutput,
   type ProfileExecutionState,
   type ResumedProfileProcess,
@@ -2170,6 +2174,8 @@ export function App() {
   const [panelVisible, setPanelVisible] = useState(initialSession.panelVisible);
   const [panelHeight, setPanelHeight] = useState(initialSession.panelHeight);
   const [panelTab, setPanelTab] = useState(initialSession.panelTab);
+  const [problemsVisible, setProblemsVisible] = useState(initialSession.problemsVisible);
+  const [problemsWidth, setProblemsWidth] = useState(initialSession.problemsWidth);
   const [toolWindowVisible, setToolWindowVisible] = useState(initialSession.toolWindowVisible);
   const [toolWindowHeight, setToolWindowHeight] = useState(initialSession.toolWindowHeight);
   const [activeToolWindowId, setActiveToolWindowId] = useState<string | undefined>(initialSession.activeToolWindowId);
@@ -2207,6 +2213,8 @@ export function App() {
   const [activeProcessId, setActiveProcessId] = useState<string>();
   const [resumedProcessId, setResumedProcessId] = useState<string>();
   const [profileExecutions, setProfileExecutions] = useState<Readonly<Record<string, ProfileExecutionState>>>({});
+  const [openProfileTabIds, setOpenProfileTabIds] = useState<readonly string[]>([]);
+  const [closingProfileTabIds, setClosingProfileTabIds] = useState<ReadonlySet<string>>(new Set());
   const [resumedProfileProcesses, setResumedProfileProcesses] = useState<readonly ResumedProfileProcess[]>([]);
   const [profilesState, setProfilesState] = useState<StoredProfiles>({ profiles: [] });
   const [workspaceSettings, setWorkspaceSettings] = useState<WorkspaceSettings>(EMPTY_WORKSPACE_SETTINGS);
@@ -2255,6 +2263,11 @@ export function App() {
   const editorHistoriesRef = useRef<Map<string, EditorHistory>>(new Map());
   const documentsRef = useRef<readonly OpenDocument[]>(documents);
   documentsRef.current = documents;
+  const profileExecutionsRef = useRef(profileExecutions);
+  profileExecutionsRef.current = profileExecutions;
+  const openProfileTabIdsRef = useRef(openProfileTabIds);
+  openProfileTabIdsRef.current = openProfileTabIds;
+  const profileRunCancellationRef = useRef(new Map<string, { cancelled: boolean }>());
   const workspaceSettingsRef = useRef<WorkspaceSettings>(EMPTY_WORKSPACE_SETTINGS);
   const workspaceSettingsWriteQueueRef = useRef<Promise<WorkspaceSettings>>(Promise.resolve(EMPTY_WORKSPACE_SETTINGS));
   const workbenchStateRef = useRef<WorkbenchStateSnapshot>({
@@ -2322,12 +2335,23 @@ export function App() {
   const selectedProfile = profilesState.profiles.find((profile) => profile.id === profilesState.selectedId);
   const selectedProfileExecution = selectedProfile ? profileExecutions[selectedProfile.id] : undefined;
   const selectedProfileRunning = selectedProfileExecution?.status === "running";
-  const outputPanelStatusLabel = selectedProfile
-    ? profileExecutionStatusLabel(selectedProfileExecution)
-    : "Não executado";
-  const visibleOutput = selectedProfile
-    ? profileExecutionOutput(selectedProfile, selectedProfileExecution)
-    : output;
+  const profileOutputTabs = openProfileTabIds.flatMap((profileId) => {
+    const profile = profilesState.profiles.find((candidate) => candidate.id === profileId);
+    const execution = profileExecutions[profileId];
+    if (!profile && !execution) return [];
+    return [{
+      profileId,
+      tabId: profileExecutionPanelTabId(profileId),
+      name: profile?.name ?? execution?.profileName ?? profileId,
+      execution,
+    }];
+  });
+  const runningProfileOutputCount = profileOutputTabs.filter((tab) => tab.execution?.status === "running").length;
+  const activeExecutionProfileId = profileIdFromExecutionPanelTab(panelTab);
+  const executionPanelActive = panelVisible
+    && Boolean(activeExecutionProfileId && openProfileTabIds.includes(activeExecutionProfileId));
+  const bottomPanelAvailable = profileOutputTabs.length > 0
+    || workbenchPanels.some((panel) => panel.id === panelTab);
   const settingsProviders = pluginSettingsProviders();
   const activePluginSettingsProvider = settingsSectionId === "editor"
     ? undefined
@@ -2883,12 +2907,26 @@ export function App() {
     setBusy(false);
     setResumedProfileProcesses([]);
     setProfileExecutions({});
+    setOpenProfileTabIds([]);
+    setClosingProfileTabIds(new Set());
+    profileRunCancellationRef.current.clear();
     void listHostProcesses()
       .then((processes) => {
         if (cancelled) return;
         const restoredProfiles = restoreProfileExecutions(processes);
+        const restoredTabIds = restoredProfileExecutionTabIds(restoredProfiles.states);
         setProfileExecutions(restoredProfiles.states);
+        setOpenProfileTabIds(restoredTabIds);
+        setPanelTab((current) => {
+          const profileId = profileIdFromExecutionPanelTab(current);
+          return profileId && !restoredTabIds.includes(profileId) ? "output" : current;
+        });
         setResumedProfileProcesses(restoredProfiles.running);
+        const latestRunningProfile = restoredProfiles.running.at(-1);
+        if (latestRunningProfile) {
+          setPanelVisible(true);
+          setPanelTab(profileExecutionPanelTabId(latestRunningProfile.profileId));
+        }
         const running = processes
           .filter((process) => process.status === "running" && process.presentation?.kind !== "profile")
           .sort((left, right) => right.startedAt - left.startedAt)[0];
@@ -2989,6 +3027,8 @@ export function App() {
       panelVisible,
       panelHeight,
       panelTab,
+      problemsVisible,
+      problemsWidth,
       toolWindowVisible,
       toolWindowHeight,
       ...(activeToolWindowId ? { activeToolWindowId } : {}),
@@ -2998,7 +3038,7 @@ export function App() {
       expandedDirectories: [...expanded],
       explorerShowHidden,
     });
-  }, [sidebarView, sidebarVisible, sidebarWidth, panelVisible, panelHeight, panelTab, toolWindowVisible, toolWindowHeight, activeToolWindowId, workspaceName, workspaceRoot, activeDocumentId, expanded, explorerShowHidden]);
+  }, [sidebarView, sidebarVisible, sidebarWidth, panelVisible, panelHeight, panelTab, problemsVisible, problemsWidth, toolWindowVisible, toolWindowHeight, activeToolWindowId, workspaceName, workspaceRoot, activeDocumentId, expanded, explorerShowHidden]);
 
   useEffect(() => {
     if (!restoredRef.current) return;
@@ -3936,6 +3976,8 @@ export function App() {
 
     const profile = selectedProfile;
     const startedAt = Date.now();
+    const cancellation = { cancelled: false };
+    profileRunCancellationRef.current.set(profile.id, cancellation);
     setProfileExecutions((current) => ({
       ...current,
       [profile.id]: {
@@ -3946,9 +3988,10 @@ export function App() {
         startedAt,
       },
     }));
+    setOpenProfileTabIds((current) => openProfileExecutionTab(current, profile.id));
     setToolWindowVisible(false);
     setPanelVisible(true);
-    setPanelTab("output");
+    setPanelTab(profileExecutionPanelTabId(profile.id));
     try {
       const result = await runExecutionProfile({
         profile,
@@ -3990,6 +4033,7 @@ export function App() {
               output: [...lines],
             },
           })),
+          shouldStop: () => cancellation.cancelled,
         },
       });
       setProfileExecutions((current) => ({
@@ -4023,6 +4067,9 @@ export function App() {
       }));
       throw cause;
     } finally {
+      if (profileRunCancellationRef.current.get(profile.id) === cancellation) {
+        profileRunCancellationRef.current.delete(profile.id);
+      }
       setProfileExecutions((current) => {
         const state = current[profile.id];
         if (!state) return current;
@@ -4049,22 +4096,120 @@ export function App() {
     if (!selectedEnvironment?.executable || selectedEnvironment.status !== "ready") {
       throw new Error("Configure um ambiente de execução pronto antes de executar o arquivo.");
     }
+    const executionId = `script:${document.path ?? document.id}`;
+    if (profileExecutions[executionId]?.status === "running") {
+      throw new Error(`'${document.name}' já está em execução.`);
+    }
+    const startedAt = Date.now();
+    const cancellation = { cancelled: false };
+    profileRunCancellationRef.current.set(executionId, cancellation);
+    setProfileExecutions((current) => ({
+      ...current,
+      [executionId]: {
+        profileId: executionId,
+        profileName: document.name,
+        status: "running",
+        output: [`[script] ${document.name}`],
+        startedAt,
+      },
+    }));
+    setOpenProfileTabIds((current) => openProfileExecutionTab(current, executionId));
     setBusy(true);
     setToolWindowVisible(false);
     setPanelVisible(true);
-    setPanelTab("output");
+    setPanelTab(profileExecutionPanelTabId(executionId));
     try {
-      await runScript({
+      const result = await runScript({
         contribution,
         document: executableDocument,
         environment: selectedEnvironment,
         callbacks: {
-          onProcessStarted: setActiveProcessId,
-          onProcessFinished: () => setActiveProcessId(undefined),
-          onOutput: (lines) => setOutput([...lines]),
+          onProcessStarted: (processId) => {
+            setActiveProcessId(processId);
+            setProfileExecutions((current) => ({
+              ...current,
+              [executionId]: {
+                ...(current[executionId] ?? {
+                  profileId: executionId,
+                  profileName: document.name,
+                  status: "running" as const,
+                  output: [`[script] ${document.name}`],
+                  startedAt,
+                }),
+                status: "running",
+                processId,
+              },
+            }));
+          },
+          onProcessFinished: () => {
+            setActiveProcessId(undefined);
+            setProfileExecutions((current) => {
+              const state = current[executionId];
+              if (!state) return current;
+              const { processId: _processId, ...rest } = state;
+              return { ...current, [executionId]: rest };
+            });
+          },
+          onOutput: (lines) => {
+            setOutput([...lines]);
+            setProfileExecutions((current) => ({
+              ...current,
+              [executionId]: {
+                ...(current[executionId] ?? {
+                  profileId: executionId,
+                  profileName: document.name,
+                  status: "running" as const,
+                  output: [`[script] ${document.name}`],
+                  startedAt,
+                }),
+                status: "running",
+                output: [...lines],
+              },
+            }));
+          },
+          shouldStop: () => cancellation.cancelled,
         },
       });
+      setProfileExecutions((current) => ({
+        ...current,
+        [executionId]: {
+          ...(current[executionId] ?? {
+            profileId: executionId,
+            profileName: document.name,
+            output: [`[script] ${document.name}`],
+            startedAt,
+          }),
+          status: result === "stopped" ? "stopped" : "completed",
+          finishedAt: Date.now(),
+        },
+      }));
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setProfileExecutions((current) => ({
+        ...current,
+        [executionId]: {
+          ...(current[executionId] ?? {
+            profileId: executionId,
+            profileName: document.name,
+            output: [`[script] ${document.name}`],
+            startedAt,
+          }),
+          status: "failed",
+          error: message,
+          finishedAt: Date.now(),
+        },
+      }));
+      throw cause;
     } finally {
+      if (profileRunCancellationRef.current.get(executionId) === cancellation) {
+        profileRunCancellationRef.current.delete(executionId);
+      }
+      setProfileExecutions((current) => {
+        const state = current[executionId];
+        if (!state) return current;
+        const { processId: _processId, ...rest } = state;
+        return { ...current, [executionId]: rest };
+      });
       setBusy(false);
       setActiveProcessId(undefined);
     }
@@ -4189,10 +4334,48 @@ export function App() {
     await platform.commands.execute(item.command, documentResourceContext(document));
   };
 
+  const stopProfileExecution = async (profileId: string) => {
+    const cancellation = profileRunCancellationRef.current.get(profileId);
+    if (cancellation) cancellation.cancelled = true;
+    const processId = profileExecutionsRef.current[profileId]?.processId;
+    if (processId) await stopHostProcess(processId);
+  };
+
   const stopExecution = async () => {
-    const processId = selectedProfileExecution?.processId ?? activeProcessId;
-    if (!processId) return;
-    await stopHostProcess(processId);
+    if (selectedProfileExecution?.status === "running" && selectedProfile) {
+      await stopProfileExecution(selectedProfile.id);
+      return;
+    }
+    if (activeProcessId) await stopHostProcess(activeProcessId);
+  };
+
+  const closeProfileOutputTab = async (profileId: string) => {
+    setClosingProfileTabIds((current) => new Set(current).add(profileId));
+    try {
+      if (profileExecutionsRef.current[profileId]?.status === "running") {
+        await stopProfileExecution(profileId);
+      }
+      const tabId = profileExecutionPanelTabId(profileId);
+      const currentProfileIds = openProfileTabIdsRef.current;
+      const remainingProfileIds = currentProfileIds.filter((candidate) => candidate !== profileId);
+      const fallbackTabId = nextPanelTabAfterClosingProfile(
+        currentProfileIds,
+        profileId,
+        "output",
+      );
+      setOpenProfileTabIds(remainingProfileIds);
+      setPanelTab((current) => {
+        if (current !== tabId) return current;
+        if (!remainingProfileIds.length) setPanelVisible(false);
+        return fallbackTabId;
+      });
+    } finally {
+      setClosingProfileTabIds((current) => {
+        const next = new Set(current);
+        next.delete(profileId);
+        return next;
+      });
+    }
   };
 
   const selectEnvironment = (environmentId: string | undefined) => {
@@ -4472,6 +4655,19 @@ export function App() {
     window.addEventListener("pointerup", finish);
   };
 
+  const beginProblemsResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const startX = event.clientX;
+    const startWidth = problemsWidth;
+    const move = (pointerEvent: PointerEvent) => setProblemsWidth(Math.min(640, Math.max(220, startWidth + startX - pointerEvent.clientX)));
+    const finish = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+  };
+
   const beginToolWindowResize = (event: React.PointerEvent<HTMLDivElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
     const startY = event.clientY;
@@ -4508,12 +4704,21 @@ export function App() {
     setSidebarVisible(true);
   };
 
-  const toggleOutputPanel = () => {
-    setPanelVisible((visible) => {
-      const next = !visible;
-      if (next) setToolWindowVisible(false);
-      return next;
-    });
+  const toggleProblemsPanel = () => setProblemsVisible((visible) => !visible);
+
+  const toggleExecutionPanel = () => {
+    const currentProfileId = profileIdFromExecutionPanelTab(panelTab);
+    const targetProfileId = currentProfileId && openProfileTabIds.includes(currentProfileId)
+      ? currentProfileId
+      : openProfileTabIds.at(-1);
+    if (!targetProfileId) return;
+    if (panelVisible && currentProfileId === targetProfileId) {
+      setPanelVisible(false);
+      return;
+    }
+    setToolWindowVisible(false);
+    setPanelTab(profileExecutionPanelTabId(targetProfileId));
+    setPanelVisible(true);
   };
 
   const closeToolWindow = useCallback(() => setToolWindowVisible(false), []);
@@ -4702,7 +4907,12 @@ export function App() {
           </div>
         </header>
 
-        <div className="workbench" style={{ gridTemplateColumns: `48px ${sidebarVisible ? `${sidebarWidth}px 5px` : "0 0"} minmax(0, 1fr)` }}>
+        <div
+          className="workbench"
+          style={{
+            gridTemplateColumns: `48px ${sidebarVisible ? `${sidebarWidth}px 5px` : "0 0"} minmax(0, 1fr) ${problemsVisible ? `5px ${problemsWidth}px` : "0 0"} 48px`,
+          }}
+        >
           <aside className="activity-bar">
             <IconButton label="Explorador" active={sidebarView === "explorer" && sidebarVisible} onClick={() => { setSidebarView("explorer"); setSidebarVisible(true); }}>
               <Files size={20} />
@@ -4726,9 +4936,19 @@ export function App() {
               </IconButton>
             ) : null}
             <div className="activity-spacer" />
-            <IconButton label="Saída e problemas" active={panelVisible} onClick={toggleOutputPanel}>
-              <PanelBottom size={20} />
-            </IconButton>
+            {profileOutputTabs.length ? (
+              <IconButton
+                label={`Execuções: ${profileOutputTabs.length}${runningProfileOutputCount ? `, ${runningProfileOutputCount} em execução` : ""}`}
+                active={executionPanelActive}
+                onClick={toggleExecutionPanel}
+              >
+                <Play size={20} />
+                <span
+                  aria-hidden="true"
+                  className={`execution-activity__badge${runningProfileOutputCount ? " is-running" : ""}`}
+                >{profileOutputTabs.length}</span>
+              </IconButton>
+            ) : null}
             {workbenchToolWindows.map((toolWindow) => (
               <IconButton
                 key={toolWindow.id}
@@ -5370,25 +5590,77 @@ export function App() {
 
           </main>
 
+          {problemsVisible ? (
+            <div
+              className="resize-handle resize-handle--problems"
+              role="separator"
+              aria-label="Redimensionar painel de problemas"
+              onPointerDown={beginProblemsResize}
+              onDoubleClick={() => setProblemsWidth(DEFAULT_LAYOUT.problemsWidth)}
+            />
+          ) : null}
+
+          {problemsVisible ? (
+            <aside className="problems-panel" aria-label="Problemas">
+              <div className="problems-panel__heading">
+                <span>PROBLEMAS <b>{diagnostics.length}</b></span>
+                <button className="icon-button small" type="button" aria-label="Fechar problemas" onClick={() => setProblemsVisible(false)}><X size={14} /></button>
+              </div>
+              <div className="problems-list problems-list--vertical">
+                {diagnostics.length ? diagnostics.map((diagnostic, index) => (
+                  <button type="button" key={`${diagnostic.line}:${index}`}>
+                    <strong>{diagnostic.severity}</strong>
+                    <span>{diagnostic.line}:{diagnostic.column}</span>
+                    <span>{diagnostic.message}</span>
+                  </button>
+                )) : <p>Nenhum problema detectado.</p>}
+              </div>
+            </aside>
+          ) : null}
+
+          <aside className="right-activity-bar" aria-label="Barra lateral direita">
+            <IconButton label={`Problemas: ${diagnostics.length}`} active={problemsVisible} onClick={toggleProblemsPanel}>
+              <CircleAlert size={20} />
+              <span className="right-activity-bar__badge" aria-hidden="true">{diagnostics.length}</span>
+            </IconButton>
+          </aside>
+
           <div className="workbench-bottom-region">
-            {panelVisible ? (
+            {panelVisible && bottomPanelAvailable ? (
               <section className={`output-panel${panelVisible ? "" : " output-panel--hidden"}`} style={{ height: panelHeight }}>
                 <div className="resize-handle resize-handle--panel" role="separator" aria-label="Redimensionar painel inferior" onPointerDown={beginPanelResize} onDoubleClick={() => setPanelHeight(DEFAULT_LAYOUT.panelHeight)} />
                 <div className="panel-heading">
                   <div className="panel-tabs">
-                    <button
-                      aria-label={`Saída: ${outputPanelStatusLabel}`}
-                      className={`panel-tab${panelTab === "output" ? " active" : ""}`}
-                      title={`Saída: ${outputPanelStatusLabel}`}
-                      type="button"
-                      onClick={() => setPanelTab("output")}
-                    >
-                      SAÍDA
-                      <span
-                        aria-hidden="true"
-                        className={`panel-tab__execution-dot${selectedProfileRunning ? " is-running" : ""}`}
-                      />
-                    </button>
+                    {profileOutputTabs.map((tab) => {
+                      const statusLabel = profileExecutionStatusLabel(tab.execution);
+                      const running = tab.execution?.status === "running";
+                      const closing = closingProfileTabIds.has(tab.profileId);
+                      return (
+                        <div className={`panel-tab-group${panelTab === tab.tabId ? " active" : ""}`} key={tab.profileId}>
+                          <button
+                            aria-label={`${tab.name}: ${statusLabel}`}
+                            className="panel-tab panel-tab--profile"
+                            title={`${tab.name}: ${statusLabel}`}
+                            type="button"
+                            onClick={() => setPanelTab(tab.tabId)}
+                          >
+                            <span className="panel-tab__label">{tab.name}</span>
+                            <span aria-hidden="true" className={`panel-tab__execution-dot${running ? " is-running" : ""}`} />
+                          </button>
+                          <button
+                            aria-label={running ? `Fechar e interromper ${tab.name}` : `Fechar saída de ${tab.name}`}
+                            className="panel-tab-close"
+                            disabled={closing}
+                            title={running ? "Fechar aba e interromper processo" : "Fechar aba"}
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              invoke(() => closeProfileOutputTab(tab.profileId));
+                            }}
+                          ><X size={12} /></button>
+                        </div>
+                      );
+                    })}
                     {workbenchPanels.map((panel) => (
                       <button
                         className={`panel-tab${panelTab === panel.id ? " active" : ""}`}
@@ -5397,12 +5669,14 @@ export function App() {
                         onClick={() => setPanelTab(panel.id)}
                       >{panel.label}</button>
                     ))}
-                    <button className={`panel-tab panel-tab--end${panelTab === "problems" ? " active" : ""}`} type="button" onClick={() => setPanelTab("problems")}>PROBLEMAS <span>{diagnostics.length}</span></button>
                   </div>
                   <button className="icon-button small" type="button" aria-label="Fechar painel" onClick={() => setPanelVisible(false)}><X size={14} /></button>
                 </div>
-                <pre hidden={panelTab !== "output"}>{visibleOutput.join("\n")}</pre>
-                <div className="problems-list" hidden={panelTab !== "problems"}>{diagnostics.length ? diagnostics.map((diagnostic, index) => <button type="button" key={`${diagnostic.line}:${index}`}><strong>{diagnostic.severity}</strong><span>{diagnostic.line}:{diagnostic.column}</span><span>{diagnostic.message}</span></button>) : <p>Nenhum problema detectado.</p>}</div>
+                {profileOutputTabs.map((tab) => (
+                  <pre hidden={panelTab !== tab.tabId} key={tab.profileId}>
+                    {profileExecutionOutput({ name: tab.name }, tab.execution).join("\n")}
+                  </pre>
+                ))}
                 {restorationComplete ? workbenchPanels.map((panel) => (
                   <div className="plugin-panel-container" hidden={panelTab !== panel.id} key={panel.id}>
                     <WorkbenchPanelHost provider={panel} state={workbenchState} />

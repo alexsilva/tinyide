@@ -25,6 +25,54 @@ export interface RestoredProfileExecutions {
   readonly running: readonly ResumedProfileProcess[];
 }
 
+const PROFILE_EXECUTION_PANEL_TAB_PREFIX = "execution-profile:";
+
+export function profileExecutionPanelTabId(profileId: string): string {
+  return `${PROFILE_EXECUTION_PANEL_TAB_PREFIX}${encodeURIComponent(profileId)}`;
+}
+
+export function profileIdFromExecutionPanelTab(tabId: string): string | undefined {
+  if (!tabId.startsWith(PROFILE_EXECUTION_PANEL_TAB_PREFIX)) return undefined;
+  const encodedProfileId = tabId.slice(PROFILE_EXECUTION_PANEL_TAB_PREFIX.length);
+  if (!encodedProfileId) return undefined;
+  try {
+    return decodeURIComponent(encodedProfileId);
+  } catch {
+    return undefined;
+  }
+}
+
+export function openProfileExecutionTab(
+  currentProfileIds: readonly string[],
+  profileId: string,
+): readonly string[] {
+  return currentProfileIds.includes(profileId)
+    ? currentProfileIds
+    : [...currentProfileIds, profileId];
+}
+
+export function restoredProfileExecutionTabIds(
+  states: Readonly<Record<string, ProfileExecutionState>>,
+): readonly string[] {
+  return Object.values(states)
+    .filter((state) => state.status === "running")
+    .slice()
+    .sort((left, right) => (left.startedAt ?? 0) - (right.startedAt ?? 0) || left.profileName.localeCompare(right.profileName))
+    .map((state) => state.profileId);
+}
+
+export function nextPanelTabAfterClosingProfile(
+  currentProfileIds: readonly string[],
+  profileId: string,
+  fallbackTabId = "output",
+): string {
+  const closedIndex = currentProfileIds.indexOf(profileId);
+  const remaining = currentProfileIds.filter((candidate) => candidate !== profileId);
+  if (!remaining.length) return fallbackTabId;
+  const nextProfileId = remaining[Math.min(Math.max(closedIndex, 0), remaining.length - 1)] ?? remaining.at(-1);
+  return nextProfileId ? profileExecutionPanelTabId(nextProfileId) : fallbackTabId;
+}
+
 function linesForProfileProcess(
   process: HostProcessSnapshot,
   includeProfileHeading: boolean,

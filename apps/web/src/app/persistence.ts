@@ -22,6 +22,8 @@ export interface LayoutState {
   readonly panelVisible: boolean;
   readonly panelHeight: number;
   readonly panelTab: string;
+  readonly problemsVisible: boolean;
+  readonly problemsWidth: number;
   readonly toolWindowVisible: boolean;
   readonly toolWindowHeight: number;
   readonly activeToolWindowId?: string;
@@ -75,9 +77,11 @@ export const DEFAULT_LAYOUT: LayoutState = {
   sidebarVisible: true,
   sidebarWidth: 280,
   sidebarView: "explorer",
-  panelVisible: true,
+  panelVisible: false,
   panelHeight: 190,
   panelTab: "output",
+  problemsVisible: false,
+  problemsWidth: 320,
   toolWindowVisible: false,
   toolWindowHeight: 240,
 };
@@ -99,15 +103,22 @@ export function readSession(): SessionState {
     const sidebarView = typeof parsed.sidebarView === "string" && parsed.sidebarView.trim()
       ? parsed.sidebarView
       : "explorer";
+    const storedPanelTab = typeof parsed.panelTab === "string" && parsed.panelTab.trim()
+      ? parsed.panelTab
+      : "output";
+    const panelTab = storedPanelTab === "problems" ? "output" : storedPanelTab;
     return {
       sidebarVisible: parsed.sidebarVisible !== false,
       sidebarWidth: clamp(Number(parsed.sidebarWidth) || DEFAULT_LAYOUT.sidebarWidth, 180, 720),
       sidebarView,
-      panelVisible: parsed.panelVisible !== false,
+      panelVisible: parsed.panelVisible === true
+        && panelTab !== "output"
+        && !panelTab.startsWith("execution-profile:"),
       panelHeight: clamp(Number(parsed.panelHeight) || DEFAULT_LAYOUT.panelHeight, 96, 640),
-      panelTab: typeof parsed.panelTab === "string" && parsed.panelTab.trim()
-        ? parsed.panelTab
-        : "output",
+      panelTab,
+      problemsVisible: parsed.problemsVisible === true
+        || (storedPanelTab === "problems" && parsed.panelVisible !== false),
+      problemsWidth: clamp(Number(parsed.problemsWidth) || DEFAULT_LAYOUT.problemsWidth, 220, 640),
       toolWindowVisible: parsed.toolWindowVisible === true,
       toolWindowHeight: clamp(Number(parsed.toolWindowHeight) || DEFAULT_LAYOUT.toolWindowHeight, 120, 640),
       ...(typeof parsed.activeToolWindowId === "string" && parsed.activeToolWindowId.trim()

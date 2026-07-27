@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  readSession,
   restoreWorkspaceDocuments,
   workspaceDocumentsForSnapshot,
 } from "./persistence";
@@ -67,6 +68,55 @@ function directoryHandle(
     },
   };
 }
+
+function localStorageWith(session?: unknown): Storage {
+  const values = new Map<string, string>();
+  if (session !== undefined) values.set("tinyide.react.session.v2", JSON.stringify(session));
+  return {
+    get length() { return values.size; },
+    clear() { values.clear(); },
+    getItem(key) { return values.get(key) ?? null; },
+    key(index) { return [...values.keys()][index] ?? null; },
+    removeItem(key) { values.delete(key); },
+    setItem(key, value) { values.set(key, value); },
+  };
+}
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("layout persistence", () => {
+  it("starts with the execution output panel closed", () => {
+    vi.stubGlobal("localStorage", localStorageWith());
+    expect(readSession()).toMatchObject({
+      panelVisible: false,
+      panelTab: "output",
+      problemsVisible: false,
+      problemsWidth: 320,
+    });
+  });
+
+  it("migrates the legacy Problems tab to the dedicated right panel", () => {
+    vi.stubGlobal("localStorage", localStorageWith({
+      panelVisible: true,
+      panelTab: "problems",
+      problemsWidth: 410,
+    }));
+    expect(readSession()).toMatchObject({
+      panelVisible: false,
+      panelTab: "output",
+      problemsVisible: true,
+      problemsWidth: 410,
+    });
+  });
+
+  it("does not reopen a persisted profile output until a new or resumed execution", () => {
+    vi.stubGlobal("localStorage", localStorageWith({
+      panelVisible: true,
+      panelTab: "execution-profile:python",
+    }));
+    expect(readSession().panelVisible).toBe(false);
+  });
+});
 
 describe("workspace document persistence", () => {
   it("persists only documents explicitly owned by the current workspace", () => {

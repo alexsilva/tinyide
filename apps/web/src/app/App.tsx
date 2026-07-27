@@ -34,6 +34,7 @@ import {
   Play,
   Plug,
   Plus,
+  RotateCw,
   RefreshCw,
   Redo2,
   Save,
@@ -4665,6 +4666,7 @@ export function App() {
             {selectedProfileRunning || busy
               ? <button className="button danger compact" type="button" onClick={() => invoke(stopExecution)}><Square size={13} /> Parar</button>
               : <button className="button primary compact" type="button" disabled={!selectedProfile} onClick={() => invoke(runSelectedProfile)}><Play size={13} /> Executar</button>}
+            <button className="icon-button small" type="button" aria-label="Recarregar página" title="Recarregar página" onClick={() => location.reload()}><RotateCw size={14} /></button>
           </div>
         </header>
 

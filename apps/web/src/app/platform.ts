@@ -66,7 +66,7 @@ type SnapshotListener = () => void;
 
 interface WorkbenchBinding {
   openSidebar(id: string): void;
-  openToolWindow(id: string): void;
+  openToolWindow(id: string, viewId?: string): void;
   openDialog(dialog: WorkbenchDialogContribution): Disposable;
   replaceEditorContent(request: WorkbenchTextEditorReplaceContentRequest): Promise<void>;
   saveEditorDocument(request: WorkbenchTextEditorSaveRequest): Promise<void>;
@@ -110,9 +110,9 @@ class AppWorkbenchApi implements WorkbenchApi {
     };
   }
 
-  openToolWindow(id: string): void {
+  openToolWindow(id: string, viewId?: string): void {
     if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
-    this.#binding.openToolWindow(id);
+    this.#binding.openToolWindow(id, viewId);
   }
 
   openSidebar(id: string): void {

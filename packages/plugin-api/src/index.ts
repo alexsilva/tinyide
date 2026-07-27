@@ -638,7 +638,7 @@ export interface WorkbenchApi {
   readonly editor: WorkbenchTextEditorApi;
   readonly text: WorkbenchTextApi;
   openSidebar(id: string): void;
-  openToolWindow(id: string): void;
+  openToolWindow(id: string, viewId?: string): void;
 }
 
 export type WorkbenchResourceKind = "text" | "image" | "binary";

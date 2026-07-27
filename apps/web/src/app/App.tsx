@@ -460,6 +460,12 @@ interface ActiveWorkbenchDialog {
   readonly contribution: WorkbenchDialogContribution;
 }
 
+interface WorkbenchToolWindowViewRequest {
+  readonly toolWindowId: string;
+  readonly viewId: string;
+  readonly sequence: number;
+}
+
 function lineDecorationClassName(decorations: readonly TextEditorLineDecoration[]): string {
   const kinds = [...new Set(decorations.map((decoration) => decoration.kind))];
   return kinds.map((kind) => ` has-${kind}`).join("");
@@ -1696,6 +1702,7 @@ function WorkbenchToolWindowHost({
   state,
   visible,
   height,
+  viewRequest,
   onClose,
   onResize,
   onResetHeight,
@@ -1704,12 +1711,14 @@ function WorkbenchToolWindowHost({
   readonly state: WorkbenchStateApi;
   readonly visible: boolean;
   readonly height: number;
+  readonly viewRequest?: WorkbenchToolWindowViewRequest;
   readonly onClose: () => void;
   readonly onResize: (event: React.PointerEvent<HTMLDivElement>) => void;
   readonly onResetHeight: () => void;
 }) {
   const headerContainerRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const tabsRef = useRef<(WorkbenchTabApi & { dispose(): void }) | null>(null);
 
   useEffect(() => {
     const headerContainer = headerContainerRef.current;
@@ -1718,6 +1727,7 @@ function WorkbenchToolWindowHost({
     let disposed = false;
     let mountedDisposable: { dispose(): void } | void;
     const tabs = createWorkbenchTabApi(headerContainer);
+    tabsRef.current = tabs;
     try {
       const mounted = provider.mount({ headerContainer, container, state, tabs, close: onClose });
       if (mounted && typeof (mounted as PromiseLike<unknown>).then === "function") {
@@ -1740,10 +1750,16 @@ function WorkbenchToolWindowHost({
       disposed = true;
       mountedDisposable?.dispose();
       tabs.dispose();
+      if (tabsRef.current === tabs) tabsRef.current = null;
       headerContainer.replaceChildren();
       container.replaceChildren();
     };
   }, [provider, state, onClose]);
+
+  useEffect(() => {
+    if (!viewRequest || viewRequest.toolWindowId !== provider.id) return;
+    tabsRef.current?.select(viewRequest.viewId);
+  }, [provider.id, viewRequest]);
 
   return (
     <section
@@ -2148,6 +2164,8 @@ export function App() {
   const [toolWindowVisible, setToolWindowVisible] = useState(initialSession.toolWindowVisible);
   const [toolWindowHeight, setToolWindowHeight] = useState(initialSession.toolWindowHeight);
   const [activeToolWindowId, setActiveToolWindowId] = useState<string | undefined>(initialSession.activeToolWindowId);
+  const [toolWindowViewRequest, setToolWindowViewRequest] = useState<WorkbenchToolWindowViewRequest>();
+  const toolWindowViewRequestSequenceRef = useRef(0);
   const [workspaceHandle, setWorkspaceHandle] = useState<BrowserDirectoryHandle>();
   const [workspaceName, setWorkspaceName] = useState(initialSession.workspaceName);
   const [workspaceRoot, setWorkspaceRoot] = useState<string | undefined>(initialSession.workspaceRoot);
@@ -2399,10 +2417,15 @@ export function App() {
       setSidebarView(id);
       setSidebarVisible(true);
     },
-    openToolWindow(id) {
+    openToolWindow(id, viewId) {
       if (!workbenchToolWindows.some((toolWindow) => toolWindow.id === id)) {
         throw new Error(`Tool window não registrada: ${id}`);
       }
+      setToolWindowViewRequest(viewId ? {
+        toolWindowId: id,
+        viewId,
+        sequence: ++toolWindowViewRequestSequenceRef.current,
+      } : undefined);
       setActiveToolWindowId(id);
       setPanelVisible(false);
       setToolWindowVisible(true);
@@ -5385,6 +5408,7 @@ export function App() {
                 state={workbenchState}
                 visible={toolWindowVisible}
                 height={toolWindowHeight}
+                viewRequest={toolWindowViewRequest}
                 onClose={closeToolWindow}
                 onResize={beginToolWindowResize}
                 onResetHeight={() => setToolWindowHeight(DEFAULT_LAYOUT.toolWindowHeight)}

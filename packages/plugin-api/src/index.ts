@@ -291,6 +291,7 @@ export interface DebugVariable {
   readonly name: string;
   readonly value: string;
   readonly type?: string;
+  readonly children?: readonly DebugVariable[];
 }
 
 export interface DebugScope {

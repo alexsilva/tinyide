@@ -68,6 +68,7 @@ import type {
   DebugAdapterProvider,
   DebugBreakpoint,
   DebugSessionSnapshot,
+  DebugVariable,
   ExecutionEnvironment,
   ExecutionEnvironmentDirectoryListing,
   ExecutionEnvironmentPackageInventory,
@@ -213,6 +214,17 @@ import {
   workbenchResourceDescriptor,
 } from "./runtime";
 import { restoreActiveDebugSession } from "./debug-session-state";
+import {
+  DEFAULT_DEBUG_PANEL_LAYOUT,
+  EMPTY_DEBUG_OUTPUT_OFFSETS,
+  clampDebugInspectorWidth,
+  debugOutputOffsetsFor,
+  debugOutputSegments,
+  filterDebugVariables,
+  normalizeDebugPanelLayout,
+  type DebugOutputFilter,
+  type DebugOutputOffsets,
+} from "./debug-panel";
 import {
   isDesktopHost,
   isDesktopWorkspaceHandle,
@@ -673,6 +685,41 @@ function formattedDebugValue(value: string, type?: string): { text: string; kind
   } catch {
     return { text: value, kind };
   }
+}
+
+function DebugVariableNode({ variable, depth = 0 }: { variable: DebugVariable; depth?: number }) {
+  const [expanded, setExpanded] = useState(depth < 1);
+  const formatted = formattedDebugValue(variable.value, variable.type);
+  const children = variable.children;
+  const hasChildren = Boolean(children && children.length);
+  return (
+    <div className="debug-variable">
+      <div className="debug-variable__row" style={{ paddingLeft: depth * 14 }}>
+        {hasChildren ? (
+          <button
+            type="button"
+            className="debug-variable__toggle"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? "▾" : "▸"}
+          </button>
+        ) : (
+          <span className="debug-variable__toggle debug-variable__toggle--spacer" aria-hidden="true" />
+        )}
+        <span className="debug-variable__name">{variable.name}</span>
+        {variable.type ? <small className="debug-variable__type">{variable.type}</small> : null}
+        <span className={`debug-variable__value is-${formatted.kind}`}>{formatted.text}</span>
+      </div>
+      {hasChildren && expanded ? (
+        <div className="debug-variable__children">
+          {children!.map((child, index) => (
+            <DebugVariableNode key={`${child.name}-${index}`} variable={child} depth={depth + 1} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function GitBrandIcon() {
@@ -2264,6 +2311,12 @@ export function App() {
   const [debugSession, setDebugSession] = useState<DebugSessionSnapshot>();
   const [debugAdapter, setDebugAdapter] = useState<DebugAdapterProvider>();
   const [debugRestartingProfileId, setDebugRestartingProfileId] = useState<string>();
+  const [debugInspectorWidth, setDebugInspectorWidth] = useState<number>(DEFAULT_DEBUG_PANEL_LAYOUT.inspectorWidth);
+  const [debugOutputWrap, setDebugOutputWrap] = useState<boolean>(DEFAULT_DEBUG_PANEL_LAYOUT.outputWrap);
+  const [debugOutputFollowTail, setDebugOutputFollowTail] = useState<boolean>(DEFAULT_DEBUG_PANEL_LAYOUT.outputFollowTail);
+  const [debugOutputFilter, setDebugOutputFilter] = useState<DebugOutputFilter>("all");
+  const [debugVariableQuery, setDebugVariableQuery] = useState("");
+  const [debugOutputOffsets, setDebugOutputOffsets] = useState<Readonly<Record<string, DebugOutputOffsets>>>({});
   const [workspaceSettings, setWorkspaceSettings] = useState<WorkspaceSettings>(EMPTY_WORKSPACE_SETTINGS);
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -2317,6 +2370,8 @@ export function App() {
   openProfileTabIdsRef.current = openProfileTabIds;
   const profileRunCancellationRef = useRef(new Map<string, { cancelled: boolean }>());
   const debugRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
+  const debugLayoutRef = useRef<HTMLDivElement | null>(null);
+  const debugOutputRef = useRef<HTMLDivElement | null>(null);
   const workspaceSettingsRef = useRef<WorkspaceSettings>(EMPTY_WORKSPACE_SETTINGS);
   const workspaceSettingsWriteQueueRef = useRef<Promise<WorkspaceSettings>>(Promise.resolve(EMPTY_WORKSPACE_SETTINGS));
   const workbenchStateRef = useRef<WorkbenchStateSnapshot>({
@@ -2414,6 +2469,14 @@ export function App() {
     }, 400);
     return () => window.clearInterval(timer);
   }, [debugSessionActive, debugSession?.id, debugAdapter]);
+
+  useEffect(() => {
+    if (!debugOutputFollowTail || !debugSession) return;
+    window.requestAnimationFrame(() => {
+      const outputElement = debugOutputRef.current;
+      if (outputElement) outputElement.scrollTop = outputElement.scrollHeight;
+    });
+  }, [debugSession?.stdout, debugSession?.stderr, debugSession?.error, debugOutputFollowTail, debugOutputFilter]);
   const profileOutputTabs = openProfileTabIds.flatMap((profileId) => {
     const profile = profilesState.profiles.find((candidate) => candidate.id === profileId);
     const execution = profileExecutions[profileId];
@@ -2869,6 +2932,10 @@ export function App() {
     replaceWorkspaceSettings(settings);
     setProfilesState(settings.executionProfiles ?? { profiles: [] });
     setDebugBreakpoints(settings.debugBreakpoints ?? []);
+    const debugLayout = normalizeDebugPanelLayout(settings.debugPanel);
+    setDebugInspectorWidth(debugLayout.inspectorWidth);
+    setDebugOutputWrap(debugLayout.outputWrap);
+    setDebugOutputFollowTail(debugLayout.outputFollowTail);
     return settings;
   }, [replaceWorkspaceSettings]);
 
@@ -3266,6 +3333,26 @@ export function App() {
       return index === -1 ? [...current, document] : current.map((item) => item.id === document.id ? document : item);
     });
     setActiveDocumentId(document.id);
+  };
+
+  const revealDebugLocation = async (path: string | undefined, line: number | undefined) => {
+    const relativePath = workspaceRelativeDebugPath(path, workspaceRoot);
+    if (!relativePath) return;
+    const opened = documents.find((document) => document.path === relativePath);
+    if (opened) {
+      setActiveDocumentId(opened.id);
+    } else {
+      const entry = findWorkspaceEntry(entries, relativePath);
+      if (!entry || entry.kind !== "file") return;
+      await openEntry(entry);
+    }
+    if (!line) return;
+    window.requestAnimationFrame(() => {
+      const scrollContainer = highlightedEditorScrollRef.current ?? editorRef.current;
+      if (!scrollContainer) return;
+      scrollContainer.scrollTop = Math.max(0, 18 + (line - 1) * 21.45 - 120);
+      syncEditorLineRuler(scrollContainer.scrollTop);
+    });
   };
 
   useEffect(() => {
@@ -4131,6 +4218,7 @@ export function App() {
     setDebugSession(started.session);
     setOpenProfileTabIds((current) => openProfileExecutionTab(current, selectedProfile.id));
     setPanelVisible(true);
+    setPanelHeight((current) => Math.max(current, 420));
     setPanelTab(profileExecutionPanelTabId(selectedProfile.id));
   };
 
@@ -4867,6 +4955,43 @@ export function App() {
     const finish = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", finish);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+  };
+
+  const persistDebugPanelLayout = (layout: {
+    inspectorWidth?: number;
+    outputWrap?: boolean;
+    outputFollowTail?: boolean;
+  }) => {
+    void updateWorkspaceSettings((current) => ({
+      ...current,
+      debugPanel: {
+        ...current.debugPanel,
+        inspectorWidth: layout.inspectorWidth ?? debugInspectorWidth,
+        outputWrap: layout.outputWrap ?? debugOutputWrap,
+        outputFollowTail: layout.outputFollowTail ?? debugOutputFollowTail,
+      },
+    })).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+  };
+
+  const beginDebugInspectorResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const layout = debugLayoutRef.current;
+    if (!layout) return;
+    const startX = event.clientX;
+    const startWidth = debugInspectorWidth;
+    let nextWidth = startWidth;
+    const move = (pointerEvent: PointerEvent) => {
+      nextWidth = clampDebugInspectorWidth(layout.clientWidth, startWidth + startX - pointerEvent.clientX);
+      setDebugInspectorWidth(nextWidth);
+    };
+    const finish = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      persistDebugPanelLayout({ inspectorWidth: nextWidth });
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", finish);
@@ -5940,6 +6065,12 @@ export function App() {
                   const debugEnded = Boolean(tabDebugSession && ["stopped", "completed", "failed"].includes(tabDebugSession.status));
                   const debugRestarting = debugRestartingProfileId === tab.profileId;
                   const executionRunning = tab.execution?.status === "running";
+                  const outputOffsets = tabDebugSession
+                    ? debugOutputOffsets[tabDebugSession.id] ?? EMPTY_DEBUG_OUTPUT_OFFSETS
+                    : EMPTY_DEBUG_OUTPUT_OFFSETS;
+                  const outputSegments = tabDebugSession
+                    ? debugOutputSegments(tabDebugSession, outputOffsets, debugOutputFilter)
+                    : [];
                   return (
                     <div className="execution-panel-view" hidden={panelTab !== tab.tabId} key={tab.profileId}>
                       <div className="execution-panel-toolbar">
@@ -5982,44 +6113,113 @@ export function App() {
                         </span>
                       </div>
                       {tabDebugSession ? (
-                        <div className="execution-debug-layout">
-                          <pre className="execution-panel-output">{[tabDebugSession.stdout, tabDebugSession.stderr, tabDebugSession.error].filter(Boolean).join("\n")}</pre>
+                        <div
+                          className="execution-debug-layout"
+                          ref={debugLayoutRef}
+                          style={{ gridTemplateColumns: `minmax(0, 1fr) 5px ${debugInspectorWidth}px` }}
+                        >
+                          <section className="execution-debug-output-pane" aria-label="Saída da depuração">
+                            <div className="execution-debug-output-toolbar">
+                              <label>
+                                <span>Exibir</span>
+                                <select value={debugOutputFilter} onChange={(event) => setDebugOutputFilter(event.target.value as DebugOutputFilter)}>
+                                  <option value="all">Tudo</option>
+                                  <option value="stdout">stdout</option>
+                                  <option value="stderr">stderr</option>
+                                  <option value="system">Debugger</option>
+                                </select>
+                              </label>
+                              <button
+                                type="button"
+                                className={debugOutputWrap ? "is-active" : undefined}
+                                onClick={() => {
+                                  const next = !debugOutputWrap;
+                                  setDebugOutputWrap(next);
+                                  persistDebugPanelLayout({ outputWrap: next });
+                                }}
+                              >Quebrar linhas</button>
+                              <button
+                                type="button"
+                                className={debugOutputFollowTail ? "is-active" : undefined}
+                                onClick={() => {
+                                  const next = !debugOutputFollowTail;
+                                  setDebugOutputFollowTail(next);
+                                  persistDebugPanelLayout({ outputFollowTail: next });
+                                }}
+                              >Seguir saída</button>
+                              <button
+                                type="button"
+                                onClick={() => setDebugOutputOffsets((current) => ({
+                                  ...current,
+                                  [tabDebugSession.id]: debugOutputOffsetsFor(tabDebugSession),
+                                }))}
+                              >Limpar</button>
+                            </div>
+                            <div ref={debugOutputRef} className={`execution-panel-output execution-panel-output--structured${debugOutputWrap ? " is-wrapped" : ""}`}>
+                              {outputSegments.length ? outputSegments.map((segment, index) => (
+                                <div className={`debug-output-segment is-${segment.kind}`} key={`${segment.kind}-${index}`}>
+                                  <span className="debug-output-segment__label">{segment.label}</span>
+                                  <pre>{segment.text}</pre>
+                                </div>
+                              )) : <p className="debug-output-empty">Nenhuma saída para o filtro selecionado.</p>}
+                            </div>
+                          </section>
+                          <div
+                            className="execution-debug-splitter execution-debug-splitter--vertical"
+                            role="separator"
+                            aria-label="Redimensionar inspetor da depuração"
+                            onPointerDown={beginDebugInspectorResize}
+                            onDoubleClick={() => {
+                              setDebugInspectorWidth(DEFAULT_DEBUG_PANEL_LAYOUT.inspectorWidth);
+                              persistDebugPanelLayout({ inspectorWidth: DEFAULT_DEBUG_PANEL_LAYOUT.inspectorWidth });
+                            }}
+                          />
                           <aside className="execution-debug-inspector" aria-label="Estado da depuração">
-                            <section>
-                              <h3>Breakpoints</h3>
+                            <section className="execution-debug-inspector-section">
+                              <h3>Breakpoints <span>{debugBreakpoints.length}</span></h3>
                               {debugBreakpoints.length ? debugBreakpoints.map((breakpoint) => (
                                 <button key={`${breakpoint.path}:${breakpoint.line}`} type="button" onClick={() => toggleBreakpoint(breakpoint.path, breakpoint.line)}>
-                                  {breakpoint.path}:{breakpoint.line}
+                                  <span>{breakpoint.path}</span><small>{breakpoint.line}</small>
                                 </button>
                               )) : <p>Nenhum breakpoint.</p>}
                             </section>
-                            <section>
-                              <h3>Pilha</h3>
+                            <section className="execution-debug-inspector-section">
+                              <h3>Pilha <span>{tabDebugSession.frames.length}</span></h3>
                               {tabDebugSession.frames.length ? tabDebugSession.frames.map((frame) => (
-                                <button key={frame.id} type="button">
-                                  {frame.name}{frame.path ? ` — ${frame.path}:${frame.line ?? 0}` : ""}
+                                <button
+                                  className={frame.id === tabDebugSession.selectedFrameId ? "is-selected" : undefined}
+                                  key={frame.id}
+                                  type="button"
+                                  onClick={() => invoke(() => revealDebugLocation(frame.path, frame.line))}
+                                >
+                                  <span>{frame.name}</span>
+                                  {frame.path ? <small>{frame.path}:{frame.line ?? 0}</small> : null}
                                 </button>
                               )) : <p>{tabDebugSession.status === "paused" ? "Pilha ainda não recebida do runtime." : "Aguardando pausa."}</p>}
                             </section>
-                            <section>
-                              <h3>Variáveis</h3>
-                              {tabDebugSession.scopes.length ? tabDebugSession.scopes.map((scope) => (
-                                <div key={scope.name}>
-                                  <strong>{scope.name}</strong>
-                                  <dl>{scope.variables.map((variable) => {
-                                    const formatted = formattedDebugValue(variable.value, variable.type);
-                                    return (
-                                      <div className="debug-variable" key={variable.name}>
-                                        <dt>
-                                          <span>{variable.name}</span>
-                                          {variable.type ? <small>{variable.type}</small> : null}
-                                        </dt>
-                                        <dd className={`is-${formatted.kind}`}>{formatted.text}</dd>
-                                      </div>
-                                    );
-                                  })}</dl>
-                                </div>
-                              )) : <p>Nenhuma variável disponível.</p>}
+                            <section className="execution-debug-variables">
+                              <div className="execution-debug-variables__heading">
+                                <h3>Variáveis</h3>
+                                <input
+                                  aria-label="Filtrar variáveis"
+                                  placeholder="Filtrar variáveis"
+                                  value={debugVariableQuery}
+                                  onChange={(event) => setDebugVariableQuery(event.target.value)}
+                                />
+                              </div>
+                              {tabDebugSession.scopes.length ? tabDebugSession.scopes.map((scope) => {
+                                const variables = filterDebugVariables(scope.variables, debugVariableQuery);
+                                return (
+                                  <div className="debug-scope" key={scope.name}>
+                                    <strong>{scope.name}</strong>
+                                    <div className="debug-variable-tree">
+                                      {variables.length ? variables.map((variable) => (
+                                        <DebugVariableNode key={variable.name} variable={variable} />
+                                      )) : <p>Nenhuma variável correspondente.</p>}
+                                    </div>
+                                  </div>
+                                );
+                              }) : <p>Nenhuma variável disponível.</p>}
                             </section>
                           </aside>
                         </div>

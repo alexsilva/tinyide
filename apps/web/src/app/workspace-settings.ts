@@ -4,6 +4,7 @@ import type {
   LanguageLintSettings,
   PluginSettingsMap,
 } from "@tinyide/plugin-api";
+import type { DebugPanelLayoutSettings } from "./debug-panel";
 
 export interface WorkspaceExecutionProfiles {
   readonly profiles: readonly ExecutionProfile[];
@@ -31,6 +32,8 @@ export interface WorkspaceSettings {
   readonly environment?: WorkspaceEnvironmentSettings;
   /** Native editor preferences owned by the tinyIde workbench. */
   readonly editor?: WorkspaceEditorSettings;
+  /** Project-local execution/debug panel layout and output preferences. */
+  readonly debugPanel?: DebugPanelLayoutSettings;
   /** Reserved namespace for project-local plugin settings. */
   readonly plugins?: PluginSettingsMap;
 }

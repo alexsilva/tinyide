@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HostProcessSnapshot } from "./runtime";
 import {
+  debugSessionForProfilePanel,
   nextPanelTabAfterClosingProfile,
   openProfileExecutionTab,
   profileExecutionPanelTabId,
@@ -47,6 +48,32 @@ function processSnapshot(input: Partial<HostProcessSnapshot> & {
 }
 
 describe("profile execution state", () => {
+  it("shows the newest mode when a profile switches from debug to normal execution", () => {
+    const debugSession = {
+      id: "debug-1",
+      adapterId: "python-pdb",
+      profileId: "django",
+      profileName: "Django",
+      status: "stopped" as const,
+      breakpoints: [],
+      frames: [],
+      scopes: [],
+      stdout: "debug-output",
+      stderr: "",
+      startedAt: 10,
+      finishedAt: 20,
+    };
+
+    expect(debugSessionForProfilePanel("django", undefined, debugSession)).toBe(debugSession);
+    expect(debugSessionForProfilePanel("django", {
+      profileId: "django",
+      profileName: "Django",
+      status: "running",
+      output: ["normal-output"],
+      startedAt: 30,
+    }, debugSession)).toBeUndefined();
+  });
+
   it("uses stable reusable panel tab ids for profiles", () => {
     const tabId = profileExecutionPanelTabId("python/dev server");
     expect(tabId).toBe("execution-profile:python%2Fdev%20server");

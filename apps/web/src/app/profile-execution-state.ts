@@ -1,4 +1,4 @@
-import type { ExecutionProfile } from "@tinyide/plugin-api";
+import type { DebugSessionSnapshot, ExecutionProfile } from "@tinyide/plugin-api";
 import { hostProcessOutputLines, type HostProcessSnapshot } from "./runtime";
 
 export type ProfileExecutionStatus = "running" | "completed" | "failed" | "stopped";
@@ -93,6 +93,16 @@ export function profileExecutionStatusLabel(state: ProfileExecutionState | undef
   if (state.status === "completed") return "Concluído";
   if (state.status === "stopped") return "Interrompido";
   return "Falhou";
+}
+
+export function debugSessionForProfilePanel(
+  profileId: string,
+  execution: ProfileExecutionState | undefined,
+  debugSession: DebugSessionSnapshot | undefined,
+): DebugSessionSnapshot | undefined {
+  if (debugSession?.profileId !== profileId) return undefined;
+  if (!execution?.startedAt) return debugSession;
+  return debugSession.startedAt >= execution.startedAt ? debugSession : undefined;
 }
 
 export function profileExecutionOutput(

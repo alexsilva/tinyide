@@ -228,6 +228,7 @@ import {
 import { editorLineNumbers, resolveEditorSettings } from "./editor-settings";
 import { reconcileToolWindowLayout } from "./workbench-layout";
 import {
+  debugSessionForProfilePanel,
   nextPanelTabAfterClosingProfile,
   openProfileExecutionTab,
   profileExecutionPanelTabId,
@@ -2416,7 +2417,7 @@ export function App() {
   const profileOutputTabs = openProfileTabIds.flatMap((profileId) => {
     const profile = profilesState.profiles.find((candidate) => candidate.id === profileId);
     const execution = profileExecutions[profileId];
-    const tabDebugSession = debugSession?.profileId === profileId ? debugSession : undefined;
+    const tabDebugSession = debugSessionForProfilePanel(profileId, execution, debugSession);
     if (!profile && !execution && !tabDebugSession) return [];
     return [{
       profileId,
@@ -4189,6 +4190,10 @@ export function App() {
 
     const profile = selectedProfile;
     const startedAt = Date.now();
+    if (debugSession?.profileId === profile.id && ["stopped", "completed", "failed"].includes(debugSession.status)) {
+      setDebugSession(undefined);
+      setDebugAdapter(undefined);
+    }
     const cancellation = { cancelled: false };
     profileRunCancellationRef.current.set(profile.id, cancellation);
     setProfileExecutions((current) => ({

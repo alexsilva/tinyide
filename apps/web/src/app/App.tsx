@@ -176,6 +176,7 @@ import {
   writeSession,
   type PersistedSidebarView,
 } from "./persistence";
+import { resolveSyntaxHighlighter, type SyntaxHighlighter } from "./generic-syntax";
 import {
   environmentProvider,
   hostProcessOutputLines,
@@ -1060,7 +1061,7 @@ function EntryTree({
   );
 }
 
-function HighlightedSource({ source, provider }: { readonly source: string; readonly provider: LanguageProvider }) {
+function HighlightedSource({ source, provider }: { readonly source: string; readonly provider: Pick<SyntaxHighlighter, "highlight"> }) {
   const tokens = [...provider.highlight(source)].sort((left, right) => left.start - right.start);
   const fragments: React.ReactNode[] = [];
   let cursor = 0;
@@ -1075,7 +1076,7 @@ function HighlightedSource({ source, provider }: { readonly source: string; read
   return <>{fragments}</>;
 }
 
-function HighlightedLine({ source, provider }: { readonly source: string; readonly provider: LanguageProvider | undefined }) {
+function HighlightedLine({ source, provider }: { readonly source: string; readonly provider: Pick<SyntaxHighlighter, "highlight"> | undefined }) {
   if (!provider) return <>{source}</>;
   const tokens = [...provider.highlight(source)].sort((left, right) => left.start - right.start);
   const fragments: React.ReactNode[] = [];
@@ -1098,7 +1099,7 @@ function EditorLineDiffPeek({
   onAction,
 }: {
   readonly decoration: TextEditorLineDecoration;
-  readonly provider: LanguageProvider | undefined;
+  readonly provider: Pick<SyntaxHighlighter, "highlight"> | undefined;
   readonly top: number;
   readonly onClose: () => void;
   readonly onAction: (action: NonNullable<TextEditorLineDecoration["actions"]>[number]) => void;
@@ -2295,6 +2296,14 @@ export function App() {
   const [editorToolbarItems, setEditorToolbarItems] = useState<readonly WorkbenchEditorToolbarItem[]>([]);
   const activeResourceEditorProvider = resourceEditorProviderFor(activeDocument);
   const activeLanguageProvider = activeResourceEditorProvider ? undefined : languageProviderFor(activeDocument);
+  const activeSyntaxHighlighter = useMemo(() => {
+    if (activeResourceEditorProvider || !activeDocument || activeDocument.kind !== "text") return undefined;
+    return resolveSyntaxHighlighter({
+      fileName: activeDocument.name,
+      mediaType: activeDocument.mediaType,
+      source: activeDocument.content,
+    }, platform.capabilities.getAll<LanguageProvider>("language.provider"));
+  }, [activeResourceEditorProvider, activeDocument?.id, activeDocument?.name, activeDocument?.mediaType, activeDocument?.content, platformSnapshot.plugins]);
   const workbenchSidebars = useMemo(() => platform.capabilities
     .getAll<WorkbenchSidebarHook>("workbench.sidebar.hook")
     .flatMap((hook) => hook.contribute())
@@ -2523,13 +2532,13 @@ export function App() {
       await saveOpenDocument(currentDocument);
     },
     highlightText(request) {
-      const lowerName = request.fileName.toLocaleLowerCase();
-      const provider = platform.capabilities
-        .getAll<LanguageProvider>("language.provider")
-        .find((candidate) => candidate.extensions.some((extension) => lowerName.endsWith(extension)));
+      const provider = resolveSyntaxHighlighter({
+        fileName: request.fileName,
+        source: request.source,
+      }, platform.capabilities.getAll<LanguageProvider>("language.provider"));
       return {
-        ...(provider ? { languageId: provider.id } : {}),
-        tokens: provider?.highlight(request.source) ?? [],
+        languageId: provider.id,
+        tokens: provider.highlight(request.source),
       };
     },
   }).dispose, [platformSnapshot.plugins]);
@@ -5457,7 +5466,7 @@ export function App() {
                         </pre>
                       </div>
                     ) : null}
-                    {activeLanguageProvider && activeDocument ? (
+                    {activeSyntaxHighlighter && activeDocument ? (
                       <div
                         ref={highlightedEditorScrollRef}
                         className="highlight-editor"
@@ -5477,7 +5486,7 @@ export function App() {
                         }}
                       >
                         <div className="highlight-editor__content">
-                          <pre className="syntax-layer"><HighlightedSource source={activeDocument.content} provider={activeLanguageProvider} /></pre>
+                          <pre className="syntax-layer" data-syntax-provider={activeSyntaxHighlighter.id} data-syntax-origin={activeSyntaxHighlighter.origin}><HighlightedSource source={activeDocument.content} provider={activeSyntaxHighlighter} /></pre>
                           <DiagnosticLayer
                             diagnostics={diagnostics}
                             source={activeDocument.content}
@@ -5513,7 +5522,7 @@ export function App() {
                     {selectedEditorLineDecoration?.change && activeDocument ? (
                       <EditorLineDiffPeek
                         decoration={selectedEditorLineDecoration}
-                        provider={activeLanguageProvider}
+                        provider={activeSyntaxHighlighter}
                         top={18 + (selectedEditorLineDecoration.line - 1) * 21.45 - activeDocument.scrollTop + 21.45}
                         onClose={() => setSelectedEditorLineDecoration(undefined)}
                         onAction={(action) => {
@@ -5706,7 +5715,7 @@ export function App() {
           <span className="status-spacer" />
           <span>{activeDocument?.kind === "text" && activeDocument.content !== activeDocument.savedContent ? "Modificado" : "Salvo"}</span>
           <span>{activeDocument?.kind === "text" ? "UTF-8" : activeDocument?.mediaType ?? ""}</span>
-          <span>{activeResourceEditorProvider?.id ?? activeLanguageProvider?.name ?? (activeDocument?.kind === "image" ? "Imagem" : activeDocument?.kind === "binary" ? "Binário" : "Texto")}</span>
+          <span>{activeResourceEditorProvider?.id ?? activeSyntaxHighlighter?.name ?? (activeDocument?.kind === "image" ? "Imagem" : activeDocument?.kind === "binary" ? "Binário" : "Texto")}</span>
         </footer>
 
         <ProfileDialog

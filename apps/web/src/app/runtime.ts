@@ -22,6 +22,7 @@ import type {
   WorkbenchResourceEditorProvider,
 } from "@tinyide/plugin-api";
 import type { OpenDocument } from "../browser-filesystem";
+import { pluginLanguageProviderFor } from "./generic-syntax";
 import { platform } from "./platform";
 import { setActiveHostWorkspaceRoot } from "./host-workspace-state";
 
@@ -72,10 +73,10 @@ export interface RunProfileCallbacks {
 
 export function languageProviderFor(document: OpenDocument | undefined): LanguageProvider | undefined {
   if (!document || document.kind !== "text") return undefined;
-  const lowerName = document.name.toLocaleLowerCase();
-  return platform.capabilities
-    .getAll<LanguageProvider>("language.provider")
-    .find((provider) => provider.extensions.some((extension) => lowerName.endsWith(extension)));
+  return pluginLanguageProviderFor(
+    { fileName: document.name },
+    platform.capabilities.getAll<LanguageProvider>("language.provider"),
+  );
 }
 
 export function scriptExecutionFor(document: OpenDocument | undefined): ScriptExecutionContribution | undefined {

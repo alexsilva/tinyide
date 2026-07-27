@@ -1895,6 +1895,9 @@ function WorkbenchSidebarHost({
   readonly onClose: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const close = useCallback(() => onCloseRef.current(), []);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1902,7 +1905,7 @@ function WorkbenchSidebarHost({
     let disposed = false;
     let mountedDisposable: { dispose(): void } | void;
     try {
-      const mounted = provider.mount({ container, state, close: onClose });
+      const mounted = provider.mount({ container, state, close });
       if (mounted && typeof (mounted as PromiseLike<unknown>).then === "function") {
         void Promise.resolve(mounted)
           .then((disposable) => {
@@ -1923,7 +1926,7 @@ function WorkbenchSidebarHost({
       mountedDisposable?.dispose();
       container.replaceChildren();
     };
-  }, [provider, state, onClose]);
+  }, [provider, state, close]);
 
   return <div className="plugin-sidebar-host" ref={containerRef} data-sidebar-id={provider.id} />;
 }

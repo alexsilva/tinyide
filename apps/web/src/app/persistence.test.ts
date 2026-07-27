@@ -92,6 +92,32 @@ describe("layout persistence", () => {
       panelTab: "output",
       problemsVisible: false,
       problemsWidth: 320,
+      leftVerticalPanelWidth: 280,
+      rightVerticalPanelWidth: 320,
+    });
+  });
+
+  it("restores independent widths for the two vertical columns", () => {
+    vi.stubGlobal("localStorage", localStorageWith({
+      sidebarWidth: 290,
+      problemsWidth: 410,
+      leftVerticalPanelWidth: 360,
+      rightVerticalPanelWidth: 470,
+    }));
+    expect(readSession()).toMatchObject({
+      leftVerticalPanelWidth: 360,
+      rightVerticalPanelWidth: 470,
+    });
+  });
+
+  it("migrates legacy sidebar and problems widths to each side", () => {
+    vi.stubGlobal("localStorage", localStorageWith({
+      sidebarWidth: 350,
+      problemsWidth: 430,
+    }));
+    expect(readSession()).toMatchObject({
+      leftVerticalPanelWidth: 350,
+      rightVerticalPanelWidth: 430,
     });
   });
 
@@ -115,6 +141,64 @@ describe("layout persistence", () => {
       panelTab: "execution-profile:python",
     }));
     expect(readSession().panelVisible).toBe(false);
+  });
+
+  it("restores only valid activity button placements", () => {
+    vi.stubGlobal("localStorage", localStorageWith({
+      activityButtonPlacements: {
+        "toolWindow:docker": { side: "right", order: 2 },
+        "toolWindow:git": { side: "center", order: 1 },
+        "sidebar:git.changes": { side: "left", order: "first" },
+      },
+    }));
+
+    expect(readSession().activityButtonPlacements).toEqual({
+      "toolWindow:docker": { side: "right", order: 2 },
+    });
+  });
+
+  it("restores every open vertical panel", () => {
+    vi.stubGlobal("localStorage", localStorageWith({
+      sidebarVisible: true,
+      sidebarView: "plugins",
+      sidebarViewsBySide: {
+        left: "plugins",
+        right: "git.changes",
+      },
+    }));
+
+    expect(readSession()).toMatchObject({
+      sidebarVisible: true,
+      sidebarViewsBySide: {
+        left: "plugins",
+        right: "git.changes",
+      },
+    });
+  });
+
+  it("preserves an explicitly closed set of vertical panels", () => {
+    vi.stubGlobal("localStorage", localStorageWith({
+      sidebarVisible: true,
+      sidebarView: "explorer",
+      sidebarViewsBySide: {},
+    }));
+
+    expect(readSession()).toMatchObject({
+      sidebarVisible: false,
+      sidebarViewsBySide: {},
+    });
+  });
+
+  it("migrates the legacy single sidebar to its configured side", () => {
+    vi.stubGlobal("localStorage", localStorageWith({
+      sidebarVisible: true,
+      sidebarView: "git.changes",
+      activityButtonPlacements: {
+        "sidebar:git.changes": { side: "right", order: 2 },
+      },
+    }));
+
+    expect(readSession().sidebarViewsBySide).toEqual({ right: "git.changes" });
   });
 });
 

@@ -176,6 +176,12 @@ import {
 import { reconcileOpenDocumentsAfterWorkspaceChange } from "./workspace-resource-reconciliation";
 import { platform } from "./platform";
 import {
+  moveActivityButton,
+  orderedActivityButtons,
+  type ActivityBarSide,
+  type ActivityButtonDescriptor,
+} from "./activity-layout";
+import {
   DEFAULT_LAYOUT,
   deserializeEntries,
   readReactSnapshot,
@@ -238,7 +244,19 @@ import {
   updatePluginSettingValue,
 } from "./plugin-settings";
 import { editorLineNumbers, resolveEditorSettings } from "./editor-settings";
-import { reconcileToolWindowLayout } from "./workbench-layout";
+import {
+  closeSidebarForSide,
+  maximumSidebarWidth,
+  moveOpenSidebar,
+  reconcileToolWindowLayout,
+  sidebarActivityKey,
+  sidebarViewFromActivityKey,
+  sidebarWidthForView,
+  toggleSidebarViewForSide,
+  updateVerticalPanelWidth,
+  type SidebarViewsBySide,
+  type VerticalPanelWidths,
+} from "./workbench-layout";
 import {
   nextPanelTabAfterClosingProfile,
   openProfileExecutionTab,
@@ -607,11 +625,13 @@ function IconButton({
   label,
   children,
   onClick,
+  onKeyDown,
   active = false,
 }: {
   readonly label: string;
   readonly children: React.ReactNode;
   readonly onClick: () => void;
+  readonly onKeyDown?: React.KeyboardEventHandler<HTMLButtonElement>;
   readonly active?: boolean;
 }) {
   return (
@@ -622,6 +642,7 @@ function IconButton({
           type="button"
           aria-label={label}
           onClick={onClick}
+          onKeyDown={onKeyDown}
         >
           {children}
         </button>
@@ -633,6 +654,156 @@ function IconButton({
         </Tooltip.Content>
       </Tooltip.Portal>
     </Tooltip.Root>
+  );
+}
+
+interface PluginActivityButton extends ActivityButtonDescriptor {
+  readonly id: string;
+  readonly kind: "sidebar" | "toolWindow";
+  readonly label: string;
+  readonly icon?: WorkbenchActivityIcon;
+}
+
+function FixedActivitySlot({
+  itemKey,
+  side,
+  draggingKey,
+  spacer = false,
+  children,
+  onMove,
+  onDragStateChange,
+}: {
+  readonly itemKey: string;
+  readonly side: ActivityBarSide;
+  readonly draggingKey?: string;
+  readonly spacer?: boolean;
+  readonly children?: React.ReactNode;
+  readonly onMove: (
+    key: string,
+    side: ActivityBarSide,
+    targetKey?: string,
+    placeAfter?: boolean,
+  ) => void;
+  readonly onDragStateChange: (key?: string) => void;
+}) {
+  return (
+    <div
+      className={`activity-fixed-slot${spacer ? " activity-spacer" : " activity-button-slot"}${draggingKey ? " is-drag-active" : ""}${draggingKey === itemKey ? " is-dragging" : ""}`}
+      data-activity-key={itemKey}
+      draggable={!spacer}
+      onDragStart={spacer ? undefined : (event) => {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/x-tinyide-activity-button", itemKey);
+        onDragStateChange(itemKey);
+      }}
+      onDragEnd={spacer ? undefined : () => onDragStateChange()}
+      onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes("text/x-tinyide-activity-button")) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+      }}
+      onDrop={(event) => {
+        const key = event.dataTransfer.getData("text/x-tinyide-activity-button");
+        if (!key) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const bounds = event.currentTarget.getBoundingClientRect();
+        onMove(key, side, itemKey, event.clientY >= bounds.top + bounds.height / 2);
+        onDragStateChange();
+      }}
+      onKeyDown={spacer ? undefined : (event) => {
+        if (!event.altKey) return;
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+          event.preventDefault();
+          onMove(itemKey, event.key === "ArrowLeft" ? "left" : "right");
+        } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+          event.preventDefault();
+          const sibling = event.key === "ArrowUp"
+            ? event.currentTarget.previousElementSibling
+            : event.currentTarget.nextElementSibling;
+          const targetKey = sibling instanceof HTMLElement ? sibling.dataset.activityKey : undefined;
+          if (targetKey) onMove(itemKey, side, targetKey, event.key === "ArrowDown");
+        }
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function MovableActivityButton({
+  item,
+  side,
+  active,
+  dragging,
+  dragActive,
+  onActivate,
+  onMove,
+  onDragStateChange,
+}: {
+  readonly item: PluginActivityButton;
+  readonly side: ActivityBarSide;
+  readonly active: boolean;
+  readonly dragging: boolean;
+  readonly dragActive: boolean;
+  readonly onActivate: () => void;
+  readonly onMove: (
+    key: string,
+    side: ActivityBarSide,
+    targetKey?: string,
+    placeAfter?: boolean,
+  ) => void;
+  readonly onDragStateChange: (key?: string) => void;
+}) {
+  return (
+    <div
+      className={`activity-button-slot${dragActive ? " is-drag-active" : ""}${dragging ? " is-dragging" : ""}`}
+      data-activity-key={item.key}
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/x-tinyide-activity-button", item.key);
+        onDragStateChange(item.key);
+      }}
+      onDragEnd={() => onDragStateChange()}
+      onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes("text/x-tinyide-activity-button")) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+      }}
+      onDrop={(event) => {
+        const key = event.dataTransfer.getData("text/x-tinyide-activity-button");
+        if (!key) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const bounds = event.currentTarget.getBoundingClientRect();
+        onMove(key, side, item.key, event.clientY >= bounds.top + bounds.height / 2);
+        onDragStateChange();
+      }}
+    >
+      <IconButton
+        label={item.label}
+        active={active}
+        onClick={onActivate}
+        onKeyDown={(event) => {
+          if (!event.altKey) return;
+          if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+            event.preventDefault();
+            onMove(item.key, event.key === "ArrowLeft" ? "left" : "right");
+          } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+            event.preventDefault();
+            const slot = event.currentTarget.closest<HTMLElement>(".activity-button-slot");
+            const sibling = event.key === "ArrowUp"
+              ? slot?.previousElementSibling
+              : slot?.nextElementSibling;
+            const targetKey = sibling instanceof HTMLElement ? sibling.dataset.activityKey : undefined;
+            if (targetKey) onMove(item.key, side, targetKey, event.key === "ArrowDown");
+          }
+        }}
+      >
+        <WorkbenchActivityIconView icon={item.icon} />
+      </IconButton>
+    </div>
   );
 }
 
@@ -2259,15 +2430,22 @@ export function App() {
   const [platformSnapshot, setPlatformSnapshot] = useState(() => platform.snapshot());
   const [sidebarView, setSidebarView] = useState<SidebarView>(initialSession.sidebarView);
   const [sidebarVisible, setSidebarVisible] = useState(initialSession.sidebarVisible);
-  const [sidebarWidth, setSidebarWidth] = useState(initialSession.sidebarWidth);
+  const [sidebarViewsBySide, setSidebarViewsBySide] = useState<SidebarViewsBySide>(
+    initialSession.sidebarViewsBySide,
+  );
+  const [verticalPanelWidths, setVerticalPanelWidths] = useState<VerticalPanelWidths>({
+    left: initialSession.leftVerticalPanelWidth,
+    right: initialSession.rightVerticalPanelWidth,
+  });
   const [panelVisible, setPanelVisible] = useState(initialSession.panelVisible);
   const [panelHeight, setPanelHeight] = useState(initialSession.panelHeight);
   const [panelTab, setPanelTab] = useState(initialSession.panelTab);
   const [problemsVisible, setProblemsVisible] = useState(initialSession.problemsVisible);
-  const [problemsWidth, setProblemsWidth] = useState(initialSession.problemsWidth);
   const [toolWindowVisible, setToolWindowVisible] = useState(initialSession.toolWindowVisible);
   const [toolWindowHeight, setToolWindowHeight] = useState(initialSession.toolWindowHeight);
   const [activeToolWindowId, setActiveToolWindowId] = useState<string | undefined>(initialSession.activeToolWindowId);
+  const [activityButtonPlacements, setActivityButtonPlacements] = useState(initialSession.activityButtonPlacements);
+  const [draggingActivityButtonKey, setDraggingActivityButtonKey] = useState<string>();
   const [toolWindowViewRequest, setToolWindowViewRequest] = useState<WorkbenchToolWindowViewRequest>();
   const toolWindowViewRequestSequenceRef = useRef(0);
   const [workspaceHandle, setWorkspaceHandle] = useState<BrowserDirectoryHandle>();
@@ -2427,6 +2605,28 @@ export function App() {
     .flatMap(expandWorkbenchToolWindowContribution)
     .slice()
     .sort((left, right) => (left.order ?? 0) - (right.order ?? 0) || left.label.localeCompare(right.label)), [platformSnapshot]);
+  const activityButtons = useMemo<readonly PluginActivityButton[]>(() => [
+    ...workbenchSidebars.map((sidebar, index) => ({
+      key: `sidebar:${sidebar.id}`,
+      id: sidebar.id,
+      kind: "sidebar" as const,
+      label: sidebar.label,
+      ...(sidebar.icon ? { icon: sidebar.icon } : {}),
+      defaultOrder: 100 + (sidebar.order ?? index),
+      defaultSide: "left" as const,
+      movable: true,
+    })),
+    ...workbenchToolWindows.map((toolWindow, index) => ({
+      key: `toolWindow:${toolWindow.id}`,
+      id: toolWindow.id,
+      kind: "toolWindow" as const,
+      label: toolWindow.label,
+      ...(toolWindow.icon ? { icon: toolWindow.icon } : {}),
+      defaultOrder: 12_000 + (toolWindow.order ?? index),
+      defaultSide: "left" as const,
+      movable: true,
+    })),
+  ], [workbenchSidebars, workbenchToolWindows]);
   const workbenchTitlebarContributions = useMemo(() => platform.capabilities
     .getAll<WorkbenchTitlebarContribution>("workbench.titlebar")
     .slice()
@@ -2505,6 +2705,53 @@ export function App() {
   const activeExecutionTab = profileExecutionPanelTab(panelTab);
   const executionPanelActive = panelVisible
     && Boolean(activeExecutionTab && openProfileTabIds.includes(panelTab));
+  const activityLayoutItems = useMemo<readonly ActivityButtonDescriptor[]>(() => [
+    { key: "builtin:explorer", defaultOrder: 0, defaultSide: "left", movable: true },
+    ...activityButtons.filter((item) => item.kind === "sidebar"),
+    { key: "builtin:plugins", defaultOrder: 2_000, defaultSide: "left", movable: true },
+    ...(environmentProvider()
+      ? [{ key: "builtin:environments", defaultOrder: 3_000, defaultSide: "left" as const, movable: true }]
+      : []),
+    { key: "builtin:left-spacer", defaultOrder: 10_000, defaultSide: "left" },
+    ...(profileOutputTabs.length
+      ? [{ key: "builtin:executions", defaultOrder: 11_000, defaultSide: "left" as const, movable: true }]
+      : []),
+    ...activityButtons.filter((item) => item.kind === "toolWindow"),
+    { key: "builtin:right-spacer", defaultOrder: 10_000, defaultSide: "right" },
+    { key: "builtin:problems", defaultOrder: 11_000, defaultSide: "right", movable: true },
+  ], [activityButtons, platformSnapshot, profileOutputTabs.length]);
+  const leftActivityItems = useMemo(
+    () => orderedActivityButtons(activityLayoutItems, activityButtonPlacements, "left"),
+    [activityLayoutItems, activityButtonPlacements],
+  );
+  const rightActivityItems = useMemo(
+    () => orderedActivityButtons(activityLayoutItems, activityButtonPlacements, "right"),
+    [activityLayoutItems, activityButtonPlacements],
+  );
+  const activitySideFor = (key: string): ActivityBarSide => (
+    activityButtonPlacements[key]?.side
+    ?? activityLayoutItems.find((item) => item.key === key)?.defaultSide
+    ?? "left"
+  );
+  const problemsDockSide = activitySideFor("builtin:problems");
+  const executionDockSide = activitySideFor("builtin:executions");
+  const bottomRegionDockSide = executionPanelActive
+    ? executionDockSide
+    : undefined;
+  const leftDockWidth = bottomRegionDockSide === "left"
+    ? Math.min(640, Math.max(220, verticalPanelWidths.left))
+    : problemsVisible && problemsDockSide === "left"
+      ? Math.min(640, Math.max(220, verticalPanelWidths.left))
+      : sidebarViewsBySide.left
+        ? sidebarWidthForView(verticalPanelWidths.left, sidebarViewsBySide.left)
+        : 0;
+  const rightDockWidth = bottomRegionDockSide === "right"
+    ? Math.min(640, Math.max(220, verticalPanelWidths.right))
+    : problemsVisible && problemsDockSide === "right"
+      ? Math.min(640, Math.max(220, verticalPanelWidths.right))
+      : sidebarViewsBySide.right
+        ? sidebarWidthForView(verticalPanelWidths.right, sidebarViewsBySide.right)
+        : 0;
   const bottomPanelAvailable = profileOutputTabs.length > 0
     || Boolean(debugSession)
     || workbenchPanels.some((panel) => panel.id === panelTab);
@@ -2603,6 +2850,8 @@ export function App() {
       if (!workbenchSidebars.some((sidebar) => sidebar.id === id)) {
         throw new Error(`Sidebar não registrada: ${id}`);
       }
+      const side = activitySideFor(`sidebar:${id}`);
+      setSidebarViewsBySide((current) => ({ ...current, [side]: id }));
       setSidebarView(id);
       setSidebarVisible(true);
     },
@@ -3209,12 +3458,14 @@ export function App() {
     writeSession({
       sidebarView,
       sidebarVisible,
-      sidebarWidth,
+      sidebarWidth: verticalPanelWidths.left,
+      leftVerticalPanelWidth: verticalPanelWidths.left,
+      rightVerticalPanelWidth: verticalPanelWidths.right,
       panelVisible,
       panelHeight,
       panelTab,
       problemsVisible,
-      problemsWidth,
+      problemsWidth: verticalPanelWidths.right,
       toolWindowVisible,
       toolWindowHeight,
       ...(activeToolWindowId ? { activeToolWindowId } : {}),
@@ -3223,8 +3474,10 @@ export function App() {
       ...(activeDocumentId ? { activeDocumentId } : {}),
       expandedDirectories: [...expanded],
       explorerShowHidden,
+      activityButtonPlacements,
+      sidebarViewsBySide,
     });
-  }, [sidebarView, sidebarVisible, sidebarWidth, panelVisible, panelHeight, panelTab, problemsVisible, problemsWidth, toolWindowVisible, toolWindowHeight, activeToolWindowId, workspaceName, workspaceRoot, activeDocumentId, expanded, explorerShowHidden]);
+  }, [sidebarView, sidebarVisible, sidebarViewsBySide, verticalPanelWidths, panelVisible, panelHeight, panelTab, problemsVisible, toolWindowVisible, toolWindowHeight, activeToolWindowId, workspaceName, workspaceRoot, activeDocumentId, expanded, explorerShowHidden, activityButtonPlacements]);
 
   useEffect(() => {
     if (!restoredRef.current) return;
@@ -3968,6 +4221,8 @@ export function App() {
     const nextExpanded = new Set([...expanded, ...explorerAncestorDirectoryPaths(path)]);
     if (workspacePathContainsHiddenSegment(path)) setExplorerShowHidden(true);
     setSidebarView("explorer");
+    const side = activitySideFor("builtin:explorer");
+    setSidebarViewsBySide((current) => ({ ...current, [side]: "explorer" }));
     setSidebarVisible(true);
     setExpanded(nextExpanded);
     await refreshExplorer(nextExpanded);
@@ -4980,11 +5235,20 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [newDocument, openSingleFile, saveDocument, invoke, sidebarView, selectedExplorerPath, entries, expanded, explorerShowHidden, workspaceHandle, documents, activeDocumentId, explorerHistory]);
 
-  const beginSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
+  const beginSidebarResize = (
+    event: React.PointerEvent<HTMLDivElement>,
+    side: ActivityBarSide,
+    view: string,
+  ) => {
     event.currentTarget.setPointerCapture(event.pointerId);
     const startX = event.clientX;
-    const startWidth = sidebarWidth;
-    const move = (pointerEvent: PointerEvent) => setSidebarWidth(Math.min(720, Math.max(180, startWidth + pointerEvent.clientX - startX)));
+    const startWidth = sidebarWidthForView(verticalPanelWidths[side], view);
+    const maximumWidth = maximumSidebarWidth(view);
+    const move = (pointerEvent: PointerEvent) => setVerticalPanelWidths((current) => ({
+      ...current,
+      [side]: Math.min(maximumWidth, Math.max(180, startWidth
+        + (side === "left" ? pointerEvent.clientX - startX : startX - pointerEvent.clientX))),
+    }));
     const finish = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", finish);
@@ -4995,6 +5259,22 @@ export function App() {
 
   const beginPanelResize = (event: React.PointerEvent<HTMLDivElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
+    if (executionPanelActive) {
+      const startX = event.clientX;
+      const startWidth = verticalPanelWidths[executionDockSide];
+      const move = (pointerEvent: PointerEvent) => setVerticalPanelWidths((current) => ({
+        ...current,
+        [executionDockSide]: Math.min(640, Math.max(220, startWidth
+          + (executionDockSide === "left" ? pointerEvent.clientX - startX : startX - pointerEvent.clientX))),
+      }));
+      const finish = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", finish);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", finish);
+      return;
+    }
     const startY = event.clientY;
     const startHeight = panelHeight;
     const move = (pointerEvent: PointerEvent) => setPanelHeight(Math.min(640, Math.max(96, startHeight + startY - pointerEvent.clientY)));
@@ -5046,8 +5326,12 @@ export function App() {
   const beginProblemsResize = (event: React.PointerEvent<HTMLDivElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
     const startX = event.clientX;
-    const startWidth = problemsWidth;
-    const move = (pointerEvent: PointerEvent) => setProblemsWidth(Math.min(640, Math.max(220, startWidth + startX - pointerEvent.clientX)));
+    const startWidth = verticalPanelWidths[problemsDockSide];
+    const move = (pointerEvent: PointerEvent) => setVerticalPanelWidths((current) => ({
+      ...current,
+      [problemsDockSide]: Math.min(640, Math.max(220, startWidth
+        + (problemsDockSide === "left" ? pointerEvent.clientX - startX : startX - pointerEvent.clientX))),
+    }));
     const finish = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", finish);
@@ -5069,6 +5353,38 @@ export function App() {
     window.addEventListener("pointerup", finish);
   };
 
+  const closeDockConflicts = (
+    side: ActivityBarSide,
+    keep: "sidebar" | "problems" | "toolWindow" | "execution",
+  ) => {
+    if (keep !== "sidebar" && sidebarViewsBySide[side]) {
+      const next = closeSidebarForSide(sidebarViewsBySide, side);
+      setSidebarViewsBySide(next);
+      const remaining = next.left ?? next.right;
+      setSidebarVisible(Boolean(remaining));
+      if (remaining) setSidebarView(remaining);
+    }
+    if (keep !== "problems" && problemsVisible && problemsDockSide === side) setProblemsVisible(false);
+    if (keep !== "execution" && executionPanelActive && executionDockSide === side) setPanelVisible(false);
+  };
+
+  const openVerticalSidebar = (view: string, side: ActivityBarSide) => {
+    if (problemsVisible && problemsDockSide === side) setProblemsVisible(false);
+    const next = toggleSidebarViewForSide(sidebarViewsBySide, side, view);
+    setSidebarViewsBySide(next);
+    const remaining = next[side] ?? next.left ?? next.right;
+    setSidebarVisible(Boolean(remaining));
+    if (remaining) setSidebarView(remaining);
+  };
+
+  const closeVerticalSidebar = (side: ActivityBarSide) => {
+    const next = closeSidebarForSide(sidebarViewsBySide, side);
+    setSidebarViewsBySide(next);
+    const remaining = next.left ?? next.right;
+    setSidebarVisible(Boolean(remaining));
+    if (remaining) setSidebarView(remaining);
+  };
+
   const toggleToolWindow = (toolWindowId: string) => {
     if (activeToolWindowId === toolWindowId) {
       setToolWindowVisible((visible) => {
@@ -5084,15 +5400,131 @@ export function App() {
   };
 
   const togglePluginSidebar = (sidebarId: string) => {
-    if (sidebarView === sidebarId && sidebarVisible) {
-      setSidebarVisible(false);
-      return;
-    }
-    setSidebarView(sidebarId);
-    setSidebarVisible(true);
+    const targetSide = activitySideFor(`sidebar:${sidebarId}`);
+    openVerticalSidebar(sidebarId, targetSide);
   };
 
-  const toggleProblemsPanel = () => setProblemsVisible((visible) => !visible);
+  const toggleBuiltinSidebar = (view: "explorer" | "plugins" | "environments") => {
+    const targetSide = activitySideFor(`builtin:${view}`);
+    openVerticalSidebar(view, targetSide);
+    if (view === "environments") invoke(refreshEnvironments);
+  };
+
+  const repositionActivityButton = (
+    key: string,
+    side: ActivityBarSide,
+    targetKey?: string,
+    placeAfter = false,
+  ) => {
+    const movingSidebarView = sidebarViewFromActivityKey(key);
+    if (movingSidebarView) {
+      const from = sidebarViewsBySide.left === movingSidebarView ? "left"
+        : sidebarViewsBySide.right === movingSidebarView ? "right"
+          : undefined;
+      if (from) {
+        const next = moveOpenSidebar(sidebarViewsBySide, movingSidebarView, from, side);
+        setSidebarViewsBySide(next);
+        setSidebarVisible(true);
+        setSidebarView(movingSidebarView);
+      }
+    } else if (key === "builtin:problems" && problemsVisible) closeDockConflicts(side, "problems");
+    else if (key === "builtin:executions" && executionPanelActive) closeDockConflicts(side, "execution");
+    setActivityButtonPlacements((current) => (
+      moveActivityButton(activityLayoutItems, current, key, side, targetKey, placeAfter)
+    ));
+  };
+
+  const renderActivityButton = (item: PluginActivityButton, side: ActivityBarSide) => (
+    <MovableActivityButton
+      key={item.key}
+      item={item}
+      side={side}
+      dragging={draggingActivityButtonKey === item.key}
+      dragActive={Boolean(draggingActivityButtonKey)}
+      active={item.kind === "sidebar"
+        ? sidebarViewsBySide[side] === item.id
+        : toolWindowVisible && activeToolWindowId === item.id}
+      onActivate={() => (
+        item.kind === "sidebar" ? togglePluginSidebar(item.id) : toggleToolWindow(item.id)
+      )}
+      onMove={repositionActivityButton}
+      onDragStateChange={setDraggingActivityButtonKey}
+    />
+  );
+
+  const renderFixedActivitySlot = (
+    itemKey: string,
+    side: ActivityBarSide,
+    children?: React.ReactNode,
+    spacer = false,
+  ) => (
+    <FixedActivitySlot
+      key={itemKey}
+      itemKey={itemKey}
+      side={side}
+      {...(draggingActivityButtonKey ? { draggingKey: draggingActivityButtonKey } : {})}
+      spacer={spacer}
+      onMove={repositionActivityButton}
+      onDragStateChange={setDraggingActivityButtonKey}
+    >
+      {children}
+    </FixedActivitySlot>
+  );
+
+  const renderActivityLayoutItem = (item: ActivityButtonDescriptor, side: ActivityBarSide) => {
+    const pluginItem = activityButtons.find((candidate) => candidate.key === item.key);
+    if (pluginItem) return renderActivityButton(pluginItem, side);
+    if (item.key === "builtin:explorer") {
+      return renderFixedActivitySlot(item.key, side, (
+        <IconButton label="Explorador" active={sidebarViewsBySide[side] === "explorer"} onClick={() => toggleBuiltinSidebar("explorer")}>
+          <Files size={20} />
+        </IconButton>
+      ));
+    }
+    if (item.key === "builtin:plugins") {
+      return renderFixedActivitySlot(item.key, side, (
+        <IconButton label="Plugins" active={sidebarViewsBySide[side] === "plugins"} onClick={() => toggleBuiltinSidebar("plugins")}>
+          <Plug size={20} />
+        </IconButton>
+      ));
+    }
+    if (item.key === "builtin:environments") {
+      return renderFixedActivitySlot(item.key, side, (
+        <IconButton label={environmentProvider()?.name ?? "Ambientes"} active={sidebarViewsBySide[side] === "environments"} onClick={() => toggleBuiltinSidebar("environments")}>
+          <WorkbenchActivityIconView icon={environmentProvider()?.icon} />
+        </IconButton>
+      ));
+    }
+    if (item.key === "builtin:executions") {
+      return renderFixedActivitySlot(item.key, side, (
+        <IconButton
+          label={`Execuções: ${profileOutputTabs.length}${runningProfileOutputCount ? `, ${runningProfileOutputCount} em execução` : ""}`}
+          active={executionPanelActive}
+          onClick={toggleExecutionPanel}
+        >
+          <Play size={20} />
+          <span
+            aria-hidden="true"
+            className={`execution-activity__badge${runningProfileOutputCount ? " is-running" : ""}`}
+          >{profileOutputTabs.length}</span>
+        </IconButton>
+      ));
+    }
+    if (item.key === "builtin:problems") {
+      return renderFixedActivitySlot(item.key, side, (
+        <IconButton label={`Problemas: ${diagnostics.length}`} active={problemsVisible} onClick={toggleProblemsPanel}>
+          <CircleAlert size={20} />
+          <span className="right-activity-bar__badge" aria-hidden="true">{diagnostics.length}</span>
+        </IconButton>
+      ));
+    }
+    return renderFixedActivitySlot(item.key, side, undefined, true);
+  };
+
+  const toggleProblemsPanel = () => setProblemsVisible((visible) => {
+    if (!visible) closeDockConflicts(problemsDockSide, "problems");
+    return !visible;
+  });
 
   const toggleExecutionPanel = () => {
     const targetTabId = openProfileTabIds.includes(panelTab)
@@ -5103,13 +5535,17 @@ export function App() {
       setPanelVisible(false);
       return;
     }
+    closeDockConflicts(executionDockSide, "execution");
     setToolWindowVisible(false);
     setPanelTab(targetTabId);
     setPanelVisible(true);
   };
 
   const closeToolWindow = useCallback(() => setToolWindowVisible(false), []);
-  const closeSidebar = useCallback(() => setSidebarVisible(false), []);
+  const closeSidebar = useCallback(() => {
+    setSidebarViewsBySide({});
+    setSidebarVisible(false);
+  }, []);
 
   const installedIds = useMemo(() => new Set(platformSnapshot.plugins.map((plugin) => plugin.manifest.id)), [platformSnapshot.plugins]);
   const pluginPendingRemoval = platformSnapshot.plugins.find((plugin) => plugin.manifest.id === pluginRemovalId);
@@ -5180,6 +5616,406 @@ export function App() {
   if (!restorationComplete) {
     return <div className="boot-screen">Inicializando tinyIde...</div>;
   }
+
+  const renderVerticalSidebar = (side: ActivityBarSide, view: string) => {
+    const pluginSidebar = workbenchSidebars.find((candidate) => candidate.id === view);
+    return (
+      <>
+            <aside
+              className={`sidebar sidebar--${side}`}
+              style={{ gridColumn: side === "left" ? 2 : 6 }}
+            >
+              <div className="sidebar-heading">
+                <span>{pluginSidebar?.label.toLocaleUpperCase() ?? (view === "explorer" ? "EXPLORER" : view === "plugins" ? "PLUGINS" : "AMBIENTES")}</span>
+                <div className="sidebar-heading-actions">
+                  {view === "explorer" ? (
+                    <>
+                      <button
+                        className="icon-button small"
+                        type="button"
+                        aria-label="Localizar arquivo aberto no Explorer"
+                        disabled={!activeDocument?.path || !workspaceHandle}
+                        onClick={() => invoke(revealActiveDocumentInExplorer)}
+                      ><LocateFixed size={15} /></button>
+                      <DropdownMenu.Root>
+                        <DropdownMenu.Trigger asChild>
+                          <button className="icon-button small" type="button" aria-label="Ações do Explorer"><MoreVertical size={15} /></button>
+                        </DropdownMenu.Trigger>
+                        <DropdownMenu.Portal>
+                          <DropdownMenu.Content className="menu-content" align="end" sideOffset={6}>
+                            {workspaceFileCreationOptions.length ? (
+                              <DropdownMenu.Sub>
+                                <DropdownMenu.SubTrigger className="menu-item" disabled={!workspaceHandle}>
+                                  <FilePlus2 size={15} /> Novo arquivo <ChevronRight className="menu-item__submenu-arrow" size={14} />
+                                </DropdownMenu.SubTrigger>
+                                <DropdownMenu.Portal>
+                                  <DropdownMenu.SubContent className="menu-content" sideOffset={6} alignOffset={-5}>
+                                    {fileCreationOptions(workspaceFileCreationOptions).map((option) => (
+                                      <DropdownMenu.Item
+                                        className="menu-item"
+                                        key={`${option.id}:${option.extension}`}
+                                        onSelect={() => invoke(() => startExplorerCreation("file", undefined, option))}
+                                      >
+                                        {option.icon ? (
+                                          <span
+                                            className="resource-icon resource-icon--menu"
+                                            title={option.icon.title}
+                                            style={{
+                                              color: option.icon.foreground ?? "currentColor",
+                                              background: option.icon.background ?? "transparent",
+                                            }}
+                                          >{option.icon.label}</span>
+                                        ) : <File size={15} />}
+                                        <span>{option.label}</span>
+                                        <span className="menu-item__hint">{option.extension}</span>
+                                      </DropdownMenu.Item>
+                                    ))}
+                                  </DropdownMenu.SubContent>
+                                </DropdownMenu.Portal>
+                              </DropdownMenu.Sub>
+                            ) : (
+                              <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(() => startExplorerCreation("file"))}>
+                                <FilePlus2 size={15} /> Novo arquivo
+                              </DropdownMenu.Item>
+                            )}
+                            <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(() => startExplorerCreation("directory"))}>
+                              <FolderOpen size={15} /> Nova pasta
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Separator className="menu-separator" />
+                            <DropdownMenu.Item className="menu-item" disabled={!explorerHistory.undo.length} onSelect={() => invoke(undoExplorerOperation)}>
+                              <Undo2 size={15} /> {explorerUndoLabel(explorerHistory) ?? "Desfazer"}
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Item className="menu-item" disabled={!explorerHistory.redo.length} onSelect={() => invoke(redoExplorerOperation)}>
+                              <Redo2 size={15} /> {explorerRedoLabel(explorerHistory) ?? "Refazer"}
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Separator className="menu-separator" />
+                            <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(refreshExplorer)}>
+                              <RefreshCw size={15} /> Atualizar
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Separator className="menu-separator" />
+                            <DropdownMenu.Item className="menu-item" onSelect={toggleExplorerHiddenEntries}>
+                              {explorerHiddenEntriesVisible ? <EyeOff size={15} /> : <Eye size={15} />}
+                              {explorerHiddenEntriesVisible ? "Ocultar arquivos ocultos" : "Mostrar arquivos ocultos"}
+                            </DropdownMenu.Item>
+                          </DropdownMenu.Content>
+                        </DropdownMenu.Portal>
+                      </DropdownMenu.Root>
+                    </>
+                  ) : null}
+                  <button className="icon-button small" type="button" onClick={() => closeVerticalSidebar(side)} aria-label="Fechar sidebar"><X size={14} /></button>
+                </div>
+              </div>
+
+              {view === "explorer" ? (
+                <div
+                  className={`sidebar-content explorer-content${dropTargetExplorerPath === "" ? " is-root-drop-target" : ""}`}
+                  onDragOver={(event) => {
+                    const target = (event.target as Element).closest<HTMLElement>("[data-explorer-path]");
+                    if (target?.dataset.explorerKind === "directory") return;
+                    const containingDirectoryPath = (event.target as Element)
+                      .closest<HTMLElement>("[data-explorer-directory-path]")
+                      ?.dataset.explorerDirectoryPath ?? "";
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    setDropTargetExplorerPath(explorerDropTargetDirectory(
+                      target?.dataset.explorerPath,
+                      target?.dataset.explorerKind as WorkspaceEntry["kind"] | undefined,
+                      containingDirectoryPath,
+                    ));
+                  }}
+                  onDragLeave={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTargetExplorerPath(undefined);
+                  }}
+                  onDrop={(event) => {
+                    const target = (event.target as Element).closest<HTMLElement>("[data-explorer-path]");
+                    if (target?.dataset.explorerKind === "directory") return;
+                    const containingDirectoryPath = (event.target as Element)
+                      .closest<HTMLElement>("[data-explorer-directory-path]")
+                      ?.dataset.explorerDirectoryPath ?? "";
+                    event.preventDefault();
+                    const sourcePath = event.dataTransfer.getData("application/x-tinyide-workspace-path");
+                    const targetDirectoryPath = explorerDropTargetDirectory(
+                      target?.dataset.explorerPath,
+                      target?.dataset.explorerKind as WorkspaceEntry["kind"] | undefined,
+                      containingDirectoryPath,
+                    );
+                    setDropTargetExplorerPath(undefined);
+                    if (sourcePath && workspacePathParent(sourcePath) !== targetDirectoryPath) {
+                      invoke(() => moveExplorerEntry(sourcePath, targetDirectoryPath));
+                    }
+                  }}
+                >
+                  {workspaceName !== "Sem workspace" ? (
+                    <div
+                      className={`workspace-name${selectedExplorerPath === "" ? " is-selected" : ""}`}
+                      data-explorer-root
+                      role="treeitem"
+                      tabIndex={0}
+                      aria-selected={selectedExplorerPath === ""}
+                      onClick={(event) => {
+                        if ((event.target as Element).closest("button")) return;
+                        setSelectedExplorerPath("");
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        event.preventDefault();
+                        setSelectedExplorerPath("");
+                      }}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        setSelectedExplorerPath("");
+                        invoke(() => openRootMenu(event.clientX, event.clientY));
+                      }}
+                    >
+                      <span className="workspace-name__label"><FolderRoot size={14} /> {workspaceName}</span>
+                      <span className="workspace-name__actions">
+                        <button
+                          className="icon-button small"
+                          type="button"
+                          aria-label="Expandir próximo nível"
+                          disabled={!workspaceHandle}
+                          onClick={() => invoke(expandExplorerLevel)}
+                        ><ChevronDown size={14} /></button>
+                        <button
+                          className="icon-button small"
+                          type="button"
+                          aria-label="Recolher nível mais profundo"
+                          disabled={!expanded.size}
+                          onClick={() => invoke(collapseExplorerLevel)}
+                        ><ChevronUp size={14} /></button>
+                      </span>
+                    </div>
+                  ) : null}
+                  {entries.length || (explorerCreation && explorerCreationParentPath === "") ? (
+                    <EntryTree
+                      entries={entries}
+                      parentPath=""
+                      expanded={expanded}
+                      showHidden={explorerShowHidden}
+                      revealHidden={explorerShowHidden}
+                      revealedHiddenPaths={explorerRevealedHiddenPaths}
+                      highlightedPath={highlightedExplorerPath}
+                      selectedPath={selectedExplorerPath}
+                      resourceDecorations={resourceDecorations}
+                      onToggle={(entry) => invoke(() => toggleEntry(entry))}
+                      onSelect={(entry) => setSelectedExplorerPath(entry.path)}
+                      onOpen={(entry) => invoke(() => openEntry(entry))}
+                      onContextMenu={(entry, x, y) => invoke(() => openResourceMenu(entry, x, y))}
+                      onMove={(sourcePath, targetPath) => invoke(() => moveExplorerEntry(sourcePath, targetPath))}
+                      draggingPath={draggingExplorerPath}
+                      dropTargetPath={dropTargetExplorerPath}
+                      onDraggingPathChange={setDraggingExplorerPath}
+                      onDropTargetPathChange={setDropTargetExplorerPath}
+                      onShowHiddenDirectory={(path) => setExplorerRevealedHiddenPaths((current) => new Set(current).add(path))}
+                      renamePath={explorerRenamePath}
+                      renameName={explorerRenameName}
+                      renameError={explorerRenameError}
+                      onRenameNameChange={(name) => { setExplorerRenameName(name); setExplorerRenameError(undefined); }}
+                      onRenameSubmit={() => { void renameSelectedExplorerEntry(); }}
+                      onRenameCancel={() => { setExplorerRenamePath(undefined); setExplorerRenameName(""); setExplorerRenameError(undefined); }}
+                      creationKind={explorerCreation}
+                      creationParentPath={explorerCreationParentPath}
+                      creationName={explorerCreationName}
+                      creationError={explorerCreationError}
+                      onCreationNameChange={(name) => { setExplorerCreationName(name); setExplorerCreationError(undefined); }}
+                      onCreationSubmit={() => { void createWorkspaceEntry(); }}
+                      onCreationCancel={cancelExplorerCreation}
+                      workspaceName={workspaceName}
+                      {...(workspaceRoot ? { workspaceRoot } : {})}
+                    />
+                  ) : (
+                    <div className="empty-sidebar">
+                      <p>{workspaceAccess === "permission-required"
+                        ? "O acesso ao workspace precisa ser restaurado."
+                        : workspaceAccess === "missing"
+                          ? "O workspace salvo não está mais disponível."
+                          : "Nenhum arquivo ou pasta aberto."}</p>
+                      {workspaceAccess === "permission-required" && workspaceHandle
+                        ? <button className="button primary compact" type="button" onClick={() => invoke(reconnectWorkspace)}>Reconectar pasta</button>
+                        : null}
+                      {workspaceAccess === "missing"
+                        ? <button className="button primary compact" type="button" onClick={() => invoke(openFolder)}>Reabrir pasta</button>
+                        : null}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              {view === "plugins" ? (
+                <div className="sidebar-content plugins-view">
+                  <div className="toolbar-row spread">
+                    <span>{platformSnapshot.plugins.length} instalado(s)</span>
+                    <button className="icon-button small" type="button" aria-label="Atualizar catálogo" onClick={() => invoke(() => platform.discoverPlugins())}><RefreshCw size={14} /></button>
+                  </div>
+                  {platformSnapshot.plugins.map((plugin) => {
+                    const enabled = plugin.state === "active" || plugin.state === "enabled";
+                    return (
+                      <article className="plugin-card" key={plugin.manifest.id}>
+                        <button className="card-delete" type="button" aria-label={`Remover ${plugin.manifest.name}`} title={`Remover ${plugin.manifest.name}`} onClick={() => setPluginRemovalId(plugin.manifest.id)}><X size={14} /></button>
+                        <div className="plugin-card-heading"><Package size={16} /><strong>{plugin.manifest.name}</strong></div>
+                        <p>{plugin.manifest.description}</p>
+                        <small>{plugin.manifest.id} · {plugin.manifest.version}</small>
+                        <div className="plugin-actions">
+                          <button className="button secondary compact" type="button" onClick={() => invoke(() => platform.setEnabled(plugin.manifest.id, !enabled))}>{enabled ? "Desativar" : "Ativar"}</button>
+                          {settingsProviders.some((provider) => provider.pluginId === plugin.manifest.id) ? (
+                            <button
+                              className="button secondary compact"
+                              type="button"
+                              onClick={() => {
+                                const provider = settingsProviders.find((candidate) => candidate.pluginId === plugin.manifest.id);
+                                if (provider) openSettings(provider.pluginId);
+                              }}
+                            >
+                              <Settings2 size={13} /> Configurar
+                            </button>
+                          ) : null}
+                        </div>
+                      </article>
+                    );
+                  })}
+                  {platformSnapshot.catalog.filter((entry) => !installedIds.has(entry.manifest.id)).map((entry) => (
+                    <article className="plugin-card available" key={entry.manifest.id}>
+                      <div className="plugin-card-heading"><Box size={16} /><strong>{entry.manifest.name}</strong></div>
+                      <p>{entry.manifest.description}</p>
+                      <button className="button primary compact full" type="button" onClick={() => invoke(() => platform.install(entry.manifestUrl))}>Instalar</button>
+                    </article>
+                  ))}
+                </div>
+              ) : null}
+
+              {view === "environments" ? (
+                <div className="sidebar-content environment-manager">
+                  {packageManagerEnvironment && environmentProvider() ? (
+                    <EnvironmentPackageManager
+                      environment={packageManagerEnvironment}
+                      provider={environmentProvider()!}
+                      onClose={() => setPackageManagerEnvironmentId(undefined)}
+                      onEnvironmentChanged={() => refreshEnvironments(packageManagerEnvironment.id)}
+                    />
+                  ) : (
+                  <>
+                  <div className="environment-manager__intro">
+                    <div>
+                      <strong>{environmentProvider()?.name ?? "Ambientes de execução"}</strong>
+                      <p>Gerencie intérpretes, ambientes e pacotes do workspace atual.</p>
+                    </div>
+                    <ButtonTooltip label="Atualizar ambientes" side="left">
+                      <button className="icon-button small" type="button" aria-label="Atualizar ambientes" onClick={() => invoke(refreshEnvironments)}><RefreshCw size={14} /></button>
+                    </ButtonTooltip>
+                  </div>
+                  <div className="environment-manager__summary">
+                    <span><CheckCircle2 size={13} /> {environments.length} ambientes</span>
+                    <span><Package size={13} /> {managedEnvironmentCount} gerenciados</span>
+                    <span><FolderOpen size={13} /> {importedEnvironmentCount} importados</span>
+                    <span><Terminal size={13} /> {executableEnvironmentCount} executáveis</span>
+                  </div>
+                  <label className="search-field environment-manager__search">
+                    <Search size={14} />
+                    <input value={environmentSearch} onChange={(event) => setEnvironmentSearch(event.target.value)} placeholder="Buscar ambiente por nome, versão ou caminho" />
+                  </label>
+                  <div className="environment-manager__toolbar">
+                    <ButtonTooltip label="Criar ambiente">
+                      <button className="button primary compact" type="button" aria-label="Criar ambiente" onClick={() => { setEnvironmentForm("createEnvironment"); setEnvironmentPath(""); }}><Plus size={14} /><span className="responsive-action__label">Criar</span></button>
+                    </ButtonTooltip>
+                    <ButtonTooltip label="Importar ambiente">
+                      <button className="button secondary compact" type="button" aria-label="Importar ambiente" onClick={() => { setEnvironmentForm("importEnvironment"); setEnvironmentPath(""); }}><FolderOpen size={14} /><span className="responsive-action__label">Importar</span></button>
+                    </ButtonTooltip>
+                    <ButtonTooltip label="Adicionar executável Python">
+                      <button className="button secondary compact" type="button" aria-label="Adicionar executável Python" onClick={() => { setEnvironmentForm("addExecutable"); setEnvironmentPath(""); }}><Terminal size={14} /><span className="responsive-action__label">Executável</span></button>
+                    </ButtonTooltip>
+                  </div>
+
+                  {environmentForm ? (
+                    <form className="environment-form" onSubmit={(event) => invoke(() => submitEnvironmentForm(event))}>
+                      <strong>{environmentForm === "addExecutable" ? "Adicionar executável" : environmentForm === "importEnvironment" ? "Importar ambiente existente" : environmentForm === "createEnvironment" ? "Criar ambiente" : environmentForm === "edit" ? "Editar ambiente" : "Instalar dependências"}</strong>
+                      {environmentForm === "addExecutable" ? (
+                        <>
+                          <label>Nome<input name="name" placeholder="Runtime local" /></label>
+                          <label>Executável<div className="path-row"><input readOnly value={environmentPath} placeholder="Nenhum executável selecionado" /><button className="button secondary compact" type="button" onClick={() => invoke(async () => { const path = await pickHostPath("file", true); if (path) setEnvironmentPath(path); })}><Search size={13} /> Procurar</button></div></label>
+                        </>
+                      ) : null}
+                      {environmentForm === "importEnvironment" ? (
+                        <>
+                          <label>Nome opcional<input name="name" /></label>
+                          <label>Pasta<div className="path-row"><input readOnly value={environmentPath} placeholder="Nenhum venv selecionado" /><button className="button secondary compact" type="button" onClick={() => invoke(async () => { const path = await pickHostPath("directory"); if (path) setEnvironmentPath(path); })}><FolderOpen size={13} /> Procurar</button></div></label>
+                        </>
+                      ) : null}
+                      {environmentForm === "createEnvironment" ? (
+                        <>
+                          <label>Nome<input name="name" defaultValue=".venv" /></label>
+                          <label>Executável de origem<select name="baseExecutable" defaultValue={environments.find((environment) => environment.executable)?.executable ?? ""}><option value="">Selecione</option>{environments.filter((environment) => environment.executable).map((environment) => <option key={environment.id} value={environment.executable}>{environment.name}</option>)}</select></label>
+                          <label>Diretório opcional<input name="path" /></label>
+                        </>
+                      ) : null}
+                      {environmentForm === "edit" && editingEnvironment ? (
+                        <>
+                          <label>Nome<input name="name" defaultValue={editingEnvironment.name} /></label>
+                          <label>{editingEnvironment.type === "venv" ? "Pasta" : "Executável"}<div className="path-row"><input readOnly value={environmentPath} /><button className="button secondary compact" type="button" onClick={() => invoke(async () => { const path = await pickHostPath(editingEnvironment.type === "venv" ? "directory" : "file", editingEnvironment.type === "process"); if (path) setEnvironmentPath(path); })}><Search size={13} /> Procurar</button></div></label>
+                        </>
+                      ) : null}
+                      {environmentForm === "dependencies" ? <label>Dependências<input name="dependencies" placeholder="pacote-a pacote-b" /></label> : null}
+                      <div className="dialog-actions"><button className="button secondary compact" type="button" onClick={() => setEnvironmentForm(undefined)}><X size={13} /> Cancelar</button><button className="button primary compact" disabled={environmentBusy} type="submit"><Check size={13} /> Confirmar</button></div>
+                    </form>
+                  ) : null}
+
+                  <div className="environment-list">
+                    {visibleEnvironments.map((environment) => (
+                      <article className={`environment-card${selectedEnvironmentId === environment.id ? " is-active" : ""}`} key={environment.id}>
+                        <button className="card-delete" type="button" aria-label={`Remover ${environment.name}`} title={`Remover ${environment.name}`} onClick={() => invoke(() => removeEnvironment(environment.id))}><X size={14} /></button>
+                        <div>
+                          <strong>{environment.name}</strong>
+                          <div className="environment-card__badges">
+                            <span className={`environment-chip is-${environment.status}`}>{environment.status === "ready" ? <CheckCircle2 size={12} /> : <CircleAlert size={12} />}{environment.status === "ready" ? "Pronto" : environment.status === "creating" ? "Criando" : "Erro"}</span>
+                            <span className="environment-chip">{environment.type === "venv" ? environment.managed === false ? <FolderOpen size={12} /> : <Package size={12} /> : <Terminal size={12} />}{environment.type === "venv" ? environment.managed === false ? "Importado" : "Gerenciado" : "Executável"}</span>
+                            {environment.version ? <span className="environment-chip"><Box size={12} /> {environment.version}</span> : null}
+                          </div>
+                          <small>{environment.executable ?? environment.path}</small>
+                        </div>
+                        <div className="environment-card__actions">
+                          <ButtonTooltip label={selectedEnvironmentId === environment.id ? "Ambiente selecionado" : `Selecionar ${environment.name}`}>
+                            <button className="button secondary compact" aria-label={selectedEnvironmentId === environment.id ? "Ambiente selecionado" : `Selecionar ${environment.name}`} disabled={selectedEnvironmentId === environment.id} type="button" onClick={() => selectEnvironment(environment.id)}><Check size={13} /><span className="responsive-action__label">{selectedEnvironmentId === environment.id ? "Selecionado" : "Selecionar"}</span></button>
+                          </ButtonTooltip>
+                          {environmentProvider()?.update ? (
+                            <ButtonTooltip label={`Editar ${environment.name}`}>
+                              <button className="button secondary compact" type="button" aria-label={`Editar ${environment.name}`} onClick={() => { setEditingEnvironmentId(environment.id); setEnvironmentPath(environment.type === "venv" ? environment.path ?? "" : environment.executable ?? ""); setEnvironmentForm("edit"); }}><Settings2 size={13} /><span className="responsive-action__label">Editar</span></button>
+                            </ButtonTooltip>
+                          ) : null}
+                          {environment.type === "venv" ? (
+                            <ButtonTooltip label={`Gerenciar pacotes de ${environment.name}`}>
+                              <button className="button secondary compact" type="button" aria-label={`Gerenciar pacotes de ${environment.name}`} onClick={() => { selectEnvironment(environment.id); setPackageManagerEnvironmentId(environment.id); }}><Package size={13} /><span className="responsive-action__label">Pacotes</span></button>
+                            </ButtonTooltip>
+                          ) : null}
+                        </div>
+                      </article>
+                    ))}
+                    {!visibleEnvironments.length ? <div className="empty-sidebar"><HardDrive size={26} /><p>{environmentSearch ? "Nenhum ambiente corresponde à busca." : "Nenhum ambiente cadastrado."}</p></div> : null}
+                  </div>
+                  </>
+                  )}
+                </div>
+              ) : null}
+
+              {pluginSidebar ? (
+                <WorkbenchSidebarHost
+                  provider={pluginSidebar}
+                  state={workbenchState}
+                  onClose={() => closeVerticalSidebar(side)}
+                />
+              ) : null}
+            </aside>
+
+        <div
+          className={`resize-handle ${side === "left" ? "resize-handle--sidebar" : "resize-handle--problems"}`}
+          role="separator"
+          aria-label="Redimensionar painel lateral"
+          onPointerDown={(event) => beginSidebarResize(event, side, view)}
+          onDoubleClick={() => setVerticalPanelWidths((current) => (
+            updateVerticalPanelWidth(current, side, DEFAULT_LAYOUT.sidebarWidth)
+          ))}
+        />
+      </>
+    );
+  };
 
   return (
     <Tooltip.Provider delayDuration={350}>
@@ -5327,439 +6163,15 @@ export function App() {
         <div
           className="workbench"
           style={{
-            gridTemplateColumns: `48px ${sidebarVisible ? `${sidebarWidth}px 5px` : "0 0"} minmax(0, 1fr) ${problemsVisible ? `5px ${problemsWidth}px` : "0 0"} 48px`,
+            gridTemplateColumns: `48px ${leftDockWidth ? `${leftDockWidth}px 5px` : "0 0"} minmax(0, 1fr) ${rightDockWidth ? `5px ${rightDockWidth}px` : "0 0"} 48px`,
           }}
         >
           <aside className="activity-bar">
-            <IconButton label="Explorador" active={sidebarView === "explorer" && sidebarVisible} onClick={() => { setSidebarView("explorer"); setSidebarVisible(true); }}>
-              <Files size={20} />
-            </IconButton>
-            {workbenchSidebars.map((sidebar) => (
-              <IconButton
-                key={sidebar.id}
-                label={sidebar.label}
-                active={sidebarView === sidebar.id && sidebarVisible}
-                onClick={() => togglePluginSidebar(sidebar.id)}
-              >
-                <WorkbenchActivityIconView icon={sidebar.icon} />
-              </IconButton>
-            ))}
-            <IconButton label="Plugins" active={sidebarView === "plugins" && sidebarVisible} onClick={() => { setSidebarView("plugins"); setSidebarVisible(true); }}>
-              <Plug size={20} />
-            </IconButton>
-            {environmentProvider() ? (
-              <IconButton label={environmentProvider()?.name ?? "Ambientes"} active={sidebarView === "environments" && sidebarVisible} onClick={() => { setSidebarView("environments"); setSidebarVisible(true); invoke(refreshEnvironments); }}>
-                <WorkbenchActivityIconView icon={environmentProvider()?.icon} />
-              </IconButton>
-            ) : null}
-            <div className="activity-spacer" />
-            {profileOutputTabs.length ? (
-              <IconButton
-                label={`Execuções: ${profileOutputTabs.length}${runningProfileOutputCount ? `, ${runningProfileOutputCount} em execução` : ""}`}
-                active={executionPanelActive}
-                onClick={toggleExecutionPanel}
-              >
-                <Play size={20} />
-                <span
-                  aria-hidden="true"
-                  className={`execution-activity__badge${runningProfileOutputCount ? " is-running" : ""}`}
-                >{profileOutputTabs.length}</span>
-              </IconButton>
-            ) : null}
-            {workbenchToolWindows.map((toolWindow) => (
-              <IconButton
-                key={toolWindow.id}
-                label={toolWindow.label}
-                active={toolWindowVisible && activeToolWindowId === toolWindow.id}
-                onClick={() => toggleToolWindow(toolWindow.id)}
-              >
-                <WorkbenchActivityIconView icon={toolWindow.icon} />
-              </IconButton>
-            ))}
+            {leftActivityItems.map((item) => renderActivityLayoutItem(item, "left"))}
           </aside>
 
-          {sidebarVisible ? (
-            <aside className="sidebar">
-              <div className="sidebar-heading">
-                <span>{activePluginSidebar?.label.toLocaleUpperCase() ?? (sidebarView === "explorer" ? "EXPLORER" : sidebarView === "plugins" ? "PLUGINS" : "AMBIENTES")}</span>
-                <div className="sidebar-heading-actions">
-                  {sidebarView === "explorer" ? (
-                    <>
-                      <button
-                        className="icon-button small"
-                        type="button"
-                        aria-label="Localizar arquivo aberto no Explorer"
-                        disabled={!activeDocument?.path || !workspaceHandle}
-                        onClick={() => invoke(revealActiveDocumentInExplorer)}
-                      ><LocateFixed size={15} /></button>
-                      <DropdownMenu.Root>
-                        <DropdownMenu.Trigger asChild>
-                          <button className="icon-button small" type="button" aria-label="Ações do Explorer"><MoreVertical size={15} /></button>
-                        </DropdownMenu.Trigger>
-                        <DropdownMenu.Portal>
-                          <DropdownMenu.Content className="menu-content" align="end" sideOffset={6}>
-                            {workspaceFileCreationOptions.length ? (
-                              <DropdownMenu.Sub>
-                                <DropdownMenu.SubTrigger className="menu-item" disabled={!workspaceHandle}>
-                                  <FilePlus2 size={15} /> Novo arquivo <ChevronRight className="menu-item__submenu-arrow" size={14} />
-                                </DropdownMenu.SubTrigger>
-                                <DropdownMenu.Portal>
-                                  <DropdownMenu.SubContent className="menu-content" sideOffset={6} alignOffset={-5}>
-                                    {fileCreationOptions(workspaceFileCreationOptions).map((option) => (
-                                      <DropdownMenu.Item
-                                        className="menu-item"
-                                        key={`${option.id}:${option.extension}`}
-                                        onSelect={() => invoke(() => startExplorerCreation("file", undefined, option))}
-                                      >
-                                        {option.icon ? (
-                                          <span
-                                            className="resource-icon resource-icon--menu"
-                                            title={option.icon.title}
-                                            style={{
-                                              color: option.icon.foreground ?? "currentColor",
-                                              background: option.icon.background ?? "transparent",
-                                            }}
-                                          >{option.icon.label}</span>
-                                        ) : <File size={15} />}
-                                        <span>{option.label}</span>
-                                        <span className="menu-item__hint">{option.extension}</span>
-                                      </DropdownMenu.Item>
-                                    ))}
-                                  </DropdownMenu.SubContent>
-                                </DropdownMenu.Portal>
-                              </DropdownMenu.Sub>
-                            ) : (
-                              <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(() => startExplorerCreation("file"))}>
-                                <FilePlus2 size={15} /> Novo arquivo
-                              </DropdownMenu.Item>
-                            )}
-                            <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(() => startExplorerCreation("directory"))}>
-                              <FolderOpen size={15} /> Nova pasta
-                            </DropdownMenu.Item>
-                            <DropdownMenu.Separator className="menu-separator" />
-                            <DropdownMenu.Item className="menu-item" disabled={!explorerHistory.undo.length} onSelect={() => invoke(undoExplorerOperation)}>
-                              <Undo2 size={15} /> {explorerUndoLabel(explorerHistory) ?? "Desfazer"}
-                            </DropdownMenu.Item>
-                            <DropdownMenu.Item className="menu-item" disabled={!explorerHistory.redo.length} onSelect={() => invoke(redoExplorerOperation)}>
-                              <Redo2 size={15} /> {explorerRedoLabel(explorerHistory) ?? "Refazer"}
-                            </DropdownMenu.Item>
-                            <DropdownMenu.Separator className="menu-separator" />
-                            <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(refreshExplorer)}>
-                              <RefreshCw size={15} /> Atualizar
-                            </DropdownMenu.Item>
-                            <DropdownMenu.Separator className="menu-separator" />
-                            <DropdownMenu.Item className="menu-item" onSelect={toggleExplorerHiddenEntries}>
-                              {explorerHiddenEntriesVisible ? <EyeOff size={15} /> : <Eye size={15} />}
-                              {explorerHiddenEntriesVisible ? "Ocultar arquivos ocultos" : "Mostrar arquivos ocultos"}
-                            </DropdownMenu.Item>
-                          </DropdownMenu.Content>
-                        </DropdownMenu.Portal>
-                      </DropdownMenu.Root>
-                    </>
-                  ) : null}
-                  <button className="icon-button small" type="button" onClick={() => setSidebarVisible(false)} aria-label="Fechar sidebar"><X size={14} /></button>
-                </div>
-              </div>
-
-              {sidebarView === "explorer" ? (
-                <div
-                  className={`sidebar-content explorer-content${dropTargetExplorerPath === "" ? " is-root-drop-target" : ""}`}
-                  onDragOver={(event) => {
-                    const target = (event.target as Element).closest<HTMLElement>("[data-explorer-path]");
-                    if (target?.dataset.explorerKind === "directory") return;
-                    const containingDirectoryPath = (event.target as Element)
-                      .closest<HTMLElement>("[data-explorer-directory-path]")
-                      ?.dataset.explorerDirectoryPath ?? "";
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = "move";
-                    setDropTargetExplorerPath(explorerDropTargetDirectory(
-                      target?.dataset.explorerPath,
-                      target?.dataset.explorerKind as WorkspaceEntry["kind"] | undefined,
-                      containingDirectoryPath,
-                    ));
-                  }}
-                  onDragLeave={(event) => {
-                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTargetExplorerPath(undefined);
-                  }}
-                  onDrop={(event) => {
-                    const target = (event.target as Element).closest<HTMLElement>("[data-explorer-path]");
-                    if (target?.dataset.explorerKind === "directory") return;
-                    const containingDirectoryPath = (event.target as Element)
-                      .closest<HTMLElement>("[data-explorer-directory-path]")
-                      ?.dataset.explorerDirectoryPath ?? "";
-                    event.preventDefault();
-                    const sourcePath = event.dataTransfer.getData("application/x-tinyide-workspace-path");
-                    const targetDirectoryPath = explorerDropTargetDirectory(
-                      target?.dataset.explorerPath,
-                      target?.dataset.explorerKind as WorkspaceEntry["kind"] | undefined,
-                      containingDirectoryPath,
-                    );
-                    setDropTargetExplorerPath(undefined);
-                    if (sourcePath && workspacePathParent(sourcePath) !== targetDirectoryPath) {
-                      invoke(() => moveExplorerEntry(sourcePath, targetDirectoryPath));
-                    }
-                  }}
-                >
-                  {workspaceName !== "Sem workspace" ? (
-                    <div
-                      className={`workspace-name${selectedExplorerPath === "" ? " is-selected" : ""}`}
-                      data-explorer-root
-                      role="treeitem"
-                      tabIndex={0}
-                      aria-selected={selectedExplorerPath === ""}
-                      onClick={(event) => {
-                        if ((event.target as Element).closest("button")) return;
-                        setSelectedExplorerPath("");
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter" && event.key !== " ") return;
-                        event.preventDefault();
-                        setSelectedExplorerPath("");
-                      }}
-                      onContextMenu={(event) => {
-                        event.preventDefault();
-                        setSelectedExplorerPath("");
-                        invoke(() => openRootMenu(event.clientX, event.clientY));
-                      }}
-                    >
-                      <span className="workspace-name__label"><FolderRoot size={14} /> {workspaceName}</span>
-                      <span className="workspace-name__actions">
-                        <button
-                          className="icon-button small"
-                          type="button"
-                          aria-label="Expandir próximo nível"
-                          disabled={!workspaceHandle}
-                          onClick={() => invoke(expandExplorerLevel)}
-                        ><ChevronDown size={14} /></button>
-                        <button
-                          className="icon-button small"
-                          type="button"
-                          aria-label="Recolher nível mais profundo"
-                          disabled={!expanded.size}
-                          onClick={() => invoke(collapseExplorerLevel)}
-                        ><ChevronUp size={14} /></button>
-                      </span>
-                    </div>
-                  ) : null}
-                  {entries.length || (explorerCreation && explorerCreationParentPath === "") ? (
-                    <EntryTree
-                      entries={entries}
-                      parentPath=""
-                      expanded={expanded}
-                      showHidden={explorerShowHidden}
-                      revealHidden={explorerShowHidden}
-                      revealedHiddenPaths={explorerRevealedHiddenPaths}
-                      highlightedPath={highlightedExplorerPath}
-                      selectedPath={selectedExplorerPath}
-                      resourceDecorations={resourceDecorations}
-                      onToggle={(entry) => invoke(() => toggleEntry(entry))}
-                      onSelect={(entry) => setSelectedExplorerPath(entry.path)}
-                      onOpen={(entry) => invoke(() => openEntry(entry))}
-                      onContextMenu={(entry, x, y) => invoke(() => openResourceMenu(entry, x, y))}
-                      onMove={(sourcePath, targetPath) => invoke(() => moveExplorerEntry(sourcePath, targetPath))}
-                      draggingPath={draggingExplorerPath}
-                      dropTargetPath={dropTargetExplorerPath}
-                      onDraggingPathChange={setDraggingExplorerPath}
-                      onDropTargetPathChange={setDropTargetExplorerPath}
-                      onShowHiddenDirectory={(path) => setExplorerRevealedHiddenPaths((current) => new Set(current).add(path))}
-                      renamePath={explorerRenamePath}
-                      renameName={explorerRenameName}
-                      renameError={explorerRenameError}
-                      onRenameNameChange={(name) => { setExplorerRenameName(name); setExplorerRenameError(undefined); }}
-                      onRenameSubmit={() => { void renameSelectedExplorerEntry(); }}
-                      onRenameCancel={() => { setExplorerRenamePath(undefined); setExplorerRenameName(""); setExplorerRenameError(undefined); }}
-                      creationKind={explorerCreation}
-                      creationParentPath={explorerCreationParentPath}
-                      creationName={explorerCreationName}
-                      creationError={explorerCreationError}
-                      onCreationNameChange={(name) => { setExplorerCreationName(name); setExplorerCreationError(undefined); }}
-                      onCreationSubmit={() => { void createWorkspaceEntry(); }}
-                      onCreationCancel={cancelExplorerCreation}
-                      workspaceName={workspaceName}
-                      {...(workspaceRoot ? { workspaceRoot } : {})}
-                    />
-                  ) : (
-                    <div className="empty-sidebar">
-                      <p>{workspaceAccess === "permission-required"
-                        ? "O acesso ao workspace precisa ser restaurado."
-                        : workspaceAccess === "missing"
-                          ? "O workspace salvo não está mais disponível."
-                          : "Nenhum arquivo ou pasta aberto."}</p>
-                      {workspaceAccess === "permission-required" && workspaceHandle
-                        ? <button className="button primary compact" type="button" onClick={() => invoke(reconnectWorkspace)}>Reconectar pasta</button>
-                        : null}
-                      {workspaceAccess === "missing"
-                        ? <button className="button primary compact" type="button" onClick={() => invoke(openFolder)}>Reabrir pasta</button>
-                        : null}
-                    </div>
-                  )}
-                </div>
-              ) : null}
-
-              {sidebarView === "plugins" ? (
-                <div className="sidebar-content plugins-view">
-                  <div className="toolbar-row spread">
-                    <span>{platformSnapshot.plugins.length} instalado(s)</span>
-                    <button className="icon-button small" type="button" aria-label="Atualizar catálogo" onClick={() => invoke(() => platform.discoverPlugins())}><RefreshCw size={14} /></button>
-                  </div>
-                  {platformSnapshot.plugins.map((plugin) => {
-                    const enabled = plugin.state === "active" || plugin.state === "enabled";
-                    return (
-                      <article className="plugin-card" key={plugin.manifest.id}>
-                        <button className="card-delete" type="button" aria-label={`Remover ${plugin.manifest.name}`} title={`Remover ${plugin.manifest.name}`} onClick={() => setPluginRemovalId(plugin.manifest.id)}><X size={14} /></button>
-                        <div className="plugin-card-heading"><Package size={16} /><strong>{plugin.manifest.name}</strong></div>
-                        <p>{plugin.manifest.description}</p>
-                        <small>{plugin.manifest.id} · {plugin.manifest.version}</small>
-                        <div className="plugin-actions">
-                          <button className="button secondary compact" type="button" onClick={() => invoke(() => platform.setEnabled(plugin.manifest.id, !enabled))}>{enabled ? "Desativar" : "Ativar"}</button>
-                          {settingsProviders.some((provider) => provider.pluginId === plugin.manifest.id) ? (
-                            <button
-                              className="button secondary compact"
-                              type="button"
-                              onClick={() => {
-                                const provider = settingsProviders.find((candidate) => candidate.pluginId === plugin.manifest.id);
-                                if (provider) openSettings(provider.pluginId);
-                              }}
-                            >
-                              <Settings2 size={13} /> Configurar
-                            </button>
-                          ) : null}
-                        </div>
-                      </article>
-                    );
-                  })}
-                  {platformSnapshot.catalog.filter((entry) => !installedIds.has(entry.manifest.id)).map((entry) => (
-                    <article className="plugin-card available" key={entry.manifest.id}>
-                      <div className="plugin-card-heading"><Box size={16} /><strong>{entry.manifest.name}</strong></div>
-                      <p>{entry.manifest.description}</p>
-                      <button className="button primary compact full" type="button" onClick={() => invoke(() => platform.install(entry.manifestUrl))}>Instalar</button>
-                    </article>
-                  ))}
-                </div>
-              ) : null}
-
-              {sidebarView === "environments" ? (
-                <div className="sidebar-content environment-manager">
-                  {packageManagerEnvironment && environmentProvider() ? (
-                    <EnvironmentPackageManager
-                      environment={packageManagerEnvironment}
-                      provider={environmentProvider()!}
-                      onClose={() => setPackageManagerEnvironmentId(undefined)}
-                      onEnvironmentChanged={() => refreshEnvironments(packageManagerEnvironment.id)}
-                    />
-                  ) : (
-                  <>
-                  <div className="environment-manager__intro">
-                    <div>
-                      <strong>{environmentProvider()?.name ?? "Ambientes de execução"}</strong>
-                      <p>Gerencie intérpretes, ambientes e pacotes do workspace atual.</p>
-                    </div>
-                    <ButtonTooltip label="Atualizar ambientes" side="left">
-                      <button className="icon-button small" type="button" aria-label="Atualizar ambientes" onClick={() => invoke(refreshEnvironments)}><RefreshCw size={14} /></button>
-                    </ButtonTooltip>
-                  </div>
-                  <div className="environment-manager__summary">
-                    <span><CheckCircle2 size={13} /> {environments.length} ambientes</span>
-                    <span><Package size={13} /> {managedEnvironmentCount} gerenciados</span>
-                    <span><FolderOpen size={13} /> {importedEnvironmentCount} importados</span>
-                    <span><Terminal size={13} /> {executableEnvironmentCount} executáveis</span>
-                  </div>
-                  <label className="search-field environment-manager__search">
-                    <Search size={14} />
-                    <input value={environmentSearch} onChange={(event) => setEnvironmentSearch(event.target.value)} placeholder="Buscar ambiente por nome, versão ou caminho" />
-                  </label>
-                  <div className="environment-manager__toolbar">
-                    <ButtonTooltip label="Criar ambiente">
-                      <button className="button primary compact" type="button" aria-label="Criar ambiente" onClick={() => { setEnvironmentForm("createEnvironment"); setEnvironmentPath(""); }}><Plus size={14} /><span className="responsive-action__label">Criar</span></button>
-                    </ButtonTooltip>
-                    <ButtonTooltip label="Importar ambiente">
-                      <button className="button secondary compact" type="button" aria-label="Importar ambiente" onClick={() => { setEnvironmentForm("importEnvironment"); setEnvironmentPath(""); }}><FolderOpen size={14} /><span className="responsive-action__label">Importar</span></button>
-                    </ButtonTooltip>
-                    <ButtonTooltip label="Adicionar executável Python">
-                      <button className="button secondary compact" type="button" aria-label="Adicionar executável Python" onClick={() => { setEnvironmentForm("addExecutable"); setEnvironmentPath(""); }}><Terminal size={14} /><span className="responsive-action__label">Executável</span></button>
-                    </ButtonTooltip>
-                  </div>
-
-                  {environmentForm ? (
-                    <form className="environment-form" onSubmit={(event) => invoke(() => submitEnvironmentForm(event))}>
-                      <strong>{environmentForm === "addExecutable" ? "Adicionar executável" : environmentForm === "importEnvironment" ? "Importar ambiente existente" : environmentForm === "createEnvironment" ? "Criar ambiente" : environmentForm === "edit" ? "Editar ambiente" : "Instalar dependências"}</strong>
-                      {environmentForm === "addExecutable" ? (
-                        <>
-                          <label>Nome<input name="name" placeholder="Runtime local" /></label>
-                          <label>Executável<div className="path-row"><input readOnly value={environmentPath} placeholder="Nenhum executável selecionado" /><button className="button secondary compact" type="button" onClick={() => invoke(async () => { const path = await pickHostPath("file", true); if (path) setEnvironmentPath(path); })}><Search size={13} /> Procurar</button></div></label>
-                        </>
-                      ) : null}
-                      {environmentForm === "importEnvironment" ? (
-                        <>
-                          <label>Nome opcional<input name="name" /></label>
-                          <label>Pasta<div className="path-row"><input readOnly value={environmentPath} placeholder="Nenhum venv selecionado" /><button className="button secondary compact" type="button" onClick={() => invoke(async () => { const path = await pickHostPath("directory"); if (path) setEnvironmentPath(path); })}><FolderOpen size={13} /> Procurar</button></div></label>
-                        </>
-                      ) : null}
-                      {environmentForm === "createEnvironment" ? (
-                        <>
-                          <label>Nome<input name="name" defaultValue=".venv" /></label>
-                          <label>Executável de origem<select name="baseExecutable" defaultValue={environments.find((environment) => environment.executable)?.executable ?? ""}><option value="">Selecione</option>{environments.filter((environment) => environment.executable).map((environment) => <option key={environment.id} value={environment.executable}>{environment.name}</option>)}</select></label>
-                          <label>Diretório opcional<input name="path" /></label>
-                        </>
-                      ) : null}
-                      {environmentForm === "edit" && editingEnvironment ? (
-                        <>
-                          <label>Nome<input name="name" defaultValue={editingEnvironment.name} /></label>
-                          <label>{editingEnvironment.type === "venv" ? "Pasta" : "Executável"}<div className="path-row"><input readOnly value={environmentPath} /><button className="button secondary compact" type="button" onClick={() => invoke(async () => { const path = await pickHostPath(editingEnvironment.type === "venv" ? "directory" : "file", editingEnvironment.type === "process"); if (path) setEnvironmentPath(path); })}><Search size={13} /> Procurar</button></div></label>
-                        </>
-                      ) : null}
-                      {environmentForm === "dependencies" ? <label>Dependências<input name="dependencies" placeholder="pacote-a pacote-b" /></label> : null}
-                      <div className="dialog-actions"><button className="button secondary compact" type="button" onClick={() => setEnvironmentForm(undefined)}><X size={13} /> Cancelar</button><button className="button primary compact" disabled={environmentBusy} type="submit"><Check size={13} /> Confirmar</button></div>
-                    </form>
-                  ) : null}
-
-                  <div className="environment-list">
-                    {visibleEnvironments.map((environment) => (
-                      <article className={`environment-card${selectedEnvironmentId === environment.id ? " is-active" : ""}`} key={environment.id}>
-                        <button className="card-delete" type="button" aria-label={`Remover ${environment.name}`} title={`Remover ${environment.name}`} onClick={() => invoke(() => removeEnvironment(environment.id))}><X size={14} /></button>
-                        <div>
-                          <strong>{environment.name}</strong>
-                          <div className="environment-card__badges">
-                            <span className={`environment-chip is-${environment.status}`}>{environment.status === "ready" ? <CheckCircle2 size={12} /> : <CircleAlert size={12} />}{environment.status === "ready" ? "Pronto" : environment.status === "creating" ? "Criando" : "Erro"}</span>
-                            <span className="environment-chip">{environment.type === "venv" ? environment.managed === false ? <FolderOpen size={12} /> : <Package size={12} /> : <Terminal size={12} />}{environment.type === "venv" ? environment.managed === false ? "Importado" : "Gerenciado" : "Executável"}</span>
-                            {environment.version ? <span className="environment-chip"><Box size={12} /> {environment.version}</span> : null}
-                          </div>
-                          <small>{environment.executable ?? environment.path}</small>
-                        </div>
-                        <div className="environment-card__actions">
-                          <ButtonTooltip label={selectedEnvironmentId === environment.id ? "Ambiente selecionado" : `Selecionar ${environment.name}`}>
-                            <button className="button secondary compact" aria-label={selectedEnvironmentId === environment.id ? "Ambiente selecionado" : `Selecionar ${environment.name}`} disabled={selectedEnvironmentId === environment.id} type="button" onClick={() => selectEnvironment(environment.id)}><Check size={13} /><span className="responsive-action__label">{selectedEnvironmentId === environment.id ? "Selecionado" : "Selecionar"}</span></button>
-                          </ButtonTooltip>
-                          {environmentProvider()?.update ? (
-                            <ButtonTooltip label={`Editar ${environment.name}`}>
-                              <button className="button secondary compact" type="button" aria-label={`Editar ${environment.name}`} onClick={() => { setEditingEnvironmentId(environment.id); setEnvironmentPath(environment.type === "venv" ? environment.path ?? "" : environment.executable ?? ""); setEnvironmentForm("edit"); }}><Settings2 size={13} /><span className="responsive-action__label">Editar</span></button>
-                            </ButtonTooltip>
-                          ) : null}
-                          {environment.type === "venv" ? (
-                            <ButtonTooltip label={`Gerenciar pacotes de ${environment.name}`}>
-                              <button className="button secondary compact" type="button" aria-label={`Gerenciar pacotes de ${environment.name}`} onClick={() => { selectEnvironment(environment.id); setPackageManagerEnvironmentId(environment.id); }}><Package size={13} /><span className="responsive-action__label">Pacotes</span></button>
-                            </ButtonTooltip>
-                          ) : null}
-                        </div>
-                      </article>
-                    ))}
-                    {!visibleEnvironments.length ? <div className="empty-sidebar"><HardDrive size={26} /><p>{environmentSearch ? "Nenhum ambiente corresponde à busca." : "Nenhum ambiente cadastrado."}</p></div> : null}
-                  </div>
-                  </>
-                  )}
-                </div>
-              ) : null}
-
-              {activePluginSidebar ? (
-                <WorkbenchSidebarHost
-                  provider={activePluginSidebar}
-                  state={workbenchState}
-                  onClose={closeSidebar}
-                />
-              ) : null}
-            </aside>
-          ) : null}
-          {sidebarVisible ? <div className="resize-handle resize-handle--sidebar" role="separator" aria-label="Redimensionar painel lateral" onPointerDown={beginSidebarResize} onDoubleClick={() => setSidebarWidth(DEFAULT_LAYOUT.sidebarWidth)} /> : null}
+          {sidebarViewsBySide.left ? renderVerticalSidebar("left", sidebarViewsBySide.left) : null}
+          {sidebarViewsBySide.right ? renderVerticalSidebar("right", sidebarViewsBySide.right) : null}
 
           <main className="editor-region">
             {documents.length ? (
@@ -6033,16 +6445,22 @@ export function App() {
 
           {problemsVisible ? (
             <div
-              className="resize-handle resize-handle--problems"
+              className={`resize-handle ${problemsDockSide === "left" ? "resize-handle--sidebar" : "resize-handle--problems"}`}
               role="separator"
               aria-label="Redimensionar painel de problemas"
               onPointerDown={beginProblemsResize}
-              onDoubleClick={() => setProblemsWidth(DEFAULT_LAYOUT.problemsWidth)}
+              onDoubleClick={() => setVerticalPanelWidths((current) => (
+                updateVerticalPanelWidth(current, problemsDockSide, DEFAULT_LAYOUT.problemsWidth)
+              ))}
             />
           ) : null}
 
           {problemsVisible ? (
-            <aside className="problems-panel" aria-label="Problemas">
+            <aside
+              className={`problems-panel problems-panel--${problemsDockSide}`}
+              style={{ gridColumn: problemsDockSide === "left" ? 2 : 6 }}
+              aria-label="Problemas"
+            >
               <div className="problems-panel__heading">
                 <span>PROBLEMAS <b>{diagnostics.length}</b></span>
                 <button className="icon-button small" type="button" aria-label="Fechar problemas" onClick={() => setProblemsVisible(false)}><X size={14} /></button>
@@ -6060,16 +6478,20 @@ export function App() {
           ) : null}
 
           <aside className="right-activity-bar" aria-label="Barra lateral direita">
-            <IconButton label={`Problemas: ${diagnostics.length}`} active={problemsVisible} onClick={toggleProblemsPanel}>
-              <CircleAlert size={20} />
-              <span className="right-activity-bar__badge" aria-hidden="true">{diagnostics.length}</span>
-            </IconButton>
+            {rightActivityItems.map((item) => renderActivityLayoutItem(item, "right"))}
           </aside>
 
-          <div className="workbench-bottom-region">
+          <div
+            className={`workbench-bottom-region${bottomRegionDockSide ? ` workbench-bottom-region--side workbench-bottom-region--${bottomRegionDockSide}` : ""}`}
+            {...(bottomRegionDockSide
+              ? { style: { gridColumn: bottomRegionDockSide === "left" ? 2 : 6 } }
+              : {})}
+          >
             {panelVisible && bottomPanelAvailable ? (
-              <section className={`output-panel${panelVisible ? "" : " output-panel--hidden"}`} style={{ height: panelHeight }}>
-                <div className="resize-handle resize-handle--panel" role="separator" aria-label="Redimensionar painel inferior" onPointerDown={beginPanelResize} onDoubleClick={() => setPanelHeight(DEFAULT_LAYOUT.panelHeight)} />
+              <section className={`output-panel${executionPanelActive ? ` output-panel--side output-panel--${executionDockSide}` : ""}${panelVisible ? "" : " output-panel--hidden"}`} style={executionPanelActive ? undefined : { height: panelHeight }}>
+                <div className={`resize-handle ${executionPanelActive
+                  ? executionDockSide === "left" ? "resize-handle--sidebar" : "resize-handle--problems"
+                  : "resize-handle--panel"}`} role="separator" aria-label="Redimensionar painel inferior" onPointerDown={beginPanelResize} onDoubleClick={() => setPanelHeight(DEFAULT_LAYOUT.panelHeight)} />
                 <div className="panel-heading">
                   <div className="panel-tabs">
                     {profileOutputTabs.map((tab) => {

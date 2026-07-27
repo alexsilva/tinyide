@@ -10,14 +10,25 @@ import type {
   WorkspaceEntry,
 } from "../browser-filesystem";
 import { readFileDocument, resolveFileHandle } from "../browser-filesystem";
+import {
+  isActivityButtonPlacement,
+  type ActivityButtonPlacements,
+} from "./activity-layout";
 
 const SESSION_KEY = "tinyide.react.session.v2";
 
 export type PersistedSidebarView = string;
 
+export interface PersistedSidebarViewsBySide {
+  readonly left?: PersistedSidebarView;
+  readonly right?: PersistedSidebarView;
+}
+
 export interface LayoutState {
   readonly sidebarVisible: boolean;
   readonly sidebarWidth: number;
+  readonly leftVerticalPanelWidth: number;
+  readonly rightVerticalPanelWidth: number;
   readonly sidebarView: PersistedSidebarView;
   readonly panelVisible: boolean;
   readonly panelHeight: number;
@@ -36,6 +47,8 @@ export interface SessionState extends LayoutState {
   readonly expandedDirectories: readonly string[];
   readonly explorerShowHidden: boolean;
   readonly selectedEnvironmentId?: string;
+  readonly activityButtonPlacements: ActivityButtonPlacements;
+  readonly sidebarViewsBySide: PersistedSidebarViewsBySide;
 }
 
 interface StoredWorkspaceEntry {
@@ -76,6 +89,8 @@ export interface ApplicationSnapshot {
 export const DEFAULT_LAYOUT: LayoutState = {
   sidebarVisible: true,
   sidebarWidth: 280,
+  leftVerticalPanelWidth: 280,
+  rightVerticalPanelWidth: 320,
   sidebarView: "explorer",
   panelVisible: false,
   panelHeight: 190,
@@ -90,6 +105,25 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
 }
 
+function readSidebarViewsBySide(value: unknown): PersistedSidebarViewsBySide {
+  if (!value || typeof value !== "object") return {};
+  const candidate = value as Partial<Record<"left" | "right", unknown>>;
+  return {
+    ...(typeof candidate.left === "string" && candidate.left.trim()
+      ? { left: candidate.left }
+      : {}),
+    ...(typeof candidate.right === "string" && candidate.right.trim()
+      ? { right: candidate.right }
+      : {}),
+  };
+}
+
+function sidebarActivityKey(view: string): string {
+  return view === "explorer" || view === "plugins" || view === "environments"
+    ? `builtin:${view}`
+    : `sidebar:${view}`;
+}
+
 export function readSession(): SessionState {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
@@ -98,6 +132,8 @@ export function readSession(): SessionState {
       workspaceName: "Sem workspace",
       expandedDirectories: [],
       explorerShowHidden: false,
+      activityButtonPlacements: {},
+      sidebarViewsBySide: { left: DEFAULT_LAYOUT.sidebarView },
     };
     const parsed = JSON.parse(raw) as Partial<SessionState>;
     const sidebarView = typeof parsed.sidebarView === "string" && parsed.sidebarView.trim()
@@ -107,9 +143,38 @@ export function readSession(): SessionState {
       ? parsed.panelTab
       : "output";
     const panelTab = storedPanelTab === "problems" ? "output" : storedPanelTab;
+    const activityButtonPlacements = parsed.activityButtonPlacements
+      && typeof parsed.activityButtonPlacements === "object"
+      ? Object.fromEntries(Object.entries(parsed.activityButtonPlacements)
+        .filter((entry): entry is [string, ActivityButtonPlacements[string]] => (
+          Boolean(entry[0]) && isActivityButtonPlacement(entry[1])
+        )))
+      : {};
+    const hasStoredSidebarViews = Object.prototype.hasOwnProperty.call(parsed, "sidebarViewsBySide");
+    const storedSidebarViews = readSidebarViewsBySide(parsed.sidebarViewsBySide);
+    const legacySidebarSide = activityButtonPlacements[sidebarActivityKey(sidebarView)]?.side ?? "left";
+    const sidebarViewsBySide = hasStoredSidebarViews
+      ? storedSidebarViews
+      : parsed.sidebarVisible !== false
+        ? { [legacySidebarSide]: sidebarView }
+        : {};
     return {
-      sidebarVisible: parsed.sidebarVisible !== false,
+      sidebarVisible: Boolean(sidebarViewsBySide.left || sidebarViewsBySide.right),
       sidebarWidth: clamp(Number(parsed.sidebarWidth) || DEFAULT_LAYOUT.sidebarWidth, 180, 720),
+      leftVerticalPanelWidth: clamp(
+        Number(parsed.leftVerticalPanelWidth)
+          || Number(parsed.sidebarWidth)
+          || DEFAULT_LAYOUT.leftVerticalPanelWidth,
+        180,
+        720,
+      ),
+      rightVerticalPanelWidth: clamp(
+        Number(parsed.rightVerticalPanelWidth)
+          || Number(parsed.problemsWidth)
+          || DEFAULT_LAYOUT.rightVerticalPanelWidth,
+        180,
+        720,
+      ),
       sidebarView,
       panelVisible: parsed.panelVisible === true
         && panelTab !== "output"
@@ -134,6 +199,8 @@ export function readSession(): SessionState {
       ...(typeof parsed.selectedEnvironmentId === "string"
         ? { selectedEnvironmentId: parsed.selectedEnvironmentId }
         : {}),
+      activityButtonPlacements,
+      sidebarViewsBySide,
     };
   } catch {
     localStorage.removeItem(SESSION_KEY);
@@ -142,6 +209,8 @@ export function readSession(): SessionState {
       workspaceName: "Sem workspace",
       expandedDirectories: [],
       explorerShowHidden: false,
+      activityButtonPlacements: {},
+      sidebarViewsBySide: { left: DEFAULT_LAYOUT.sidebarView },
     };
   }
 }

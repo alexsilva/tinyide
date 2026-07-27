@@ -324,7 +324,10 @@ function expandWorkbenchToolWindowContribution(
     mount({ container, headerContainer, tabs, state }) {
       container.replaceChildren();
       const views = [...contribution.views]
-        .sort((left, right) => (left.order ?? 0) - (right.order ?? 0) || left.label.localeCompare(right.label));
+        .sort((left, right) =>
+          Number(left.placement === "end") - Number(right.placement === "end")
+          || (left.order ?? 0) - (right.order ?? 0)
+          || left.label.localeCompare(right.label));
       const sections = new Map<string, HTMLElement>();
       const tabDisposables: Array<{ dispose(): void }> = [];
       const mountedDisposables: Array<{ dispose(): void }> = [];
@@ -345,6 +348,7 @@ function expandWorkbenchToolWindowContribution(
           id: view.id,
           label: view.label,
           ...(view.order !== undefined ? { order: view.order } : {}),
+          ...(view.placement ? { placement: view.placement } : {}),
           onSelect: () => activate(view.id),
         }));
         try {
@@ -407,6 +411,7 @@ function createWorkbenchTabApi(container: HTMLElement): WorkbenchTabApi & { disp
       if (tabs.has(contribution.id)) throw new Error(`Aba já registrada: ${contribution.id}`);
       const group = document.createElement("div");
       group.className = "workbench-tab-group";
+      group.classList.toggle("is-end", contribution.placement === "end");
       const button = document.createElement("button");
       button.type = "button";
       button.role = "tab";
@@ -428,8 +433,12 @@ function createWorkbenchTabApi(container: HTMLElement): WorkbenchTabApi & { disp
       }
       tabs.set(contribution.id, { contribution, element: group });
       const ordered = [...tabs.entries()].sort(([, left], [, right]) =>
+        Number(left.contribution.placement === "end") - Number(right.contribution.placement === "end")
+        ||
         (left.contribution.order ?? 0) - (right.contribution.order ?? 0)
         || left.contribution.label.localeCompare(right.contribution.label));
+      for (const [, record] of ordered) record.element.classList.remove("is-end-start");
+      ordered.find(([, record]) => record.contribution.placement === "end")?.[1].element.classList.add("is-end-start");
       strip.replaceChildren(...ordered.map(([, record]) => record.element));
       if (!activeId) select(contribution.id);
       else renderSelection();
@@ -5380,7 +5389,6 @@ export function App() {
                         className={`panel-tab__execution-dot${selectedProfileRunning ? " is-running" : ""}`}
                       />
                     </button>
-                    <button className={`panel-tab${panelTab === "problems" ? " active" : ""}`} type="button" onClick={() => setPanelTab("problems")}>PROBLEMAS <span>{diagnostics.length}</span></button>
                     {workbenchPanels.map((panel) => (
                       <button
                         className={`panel-tab${panelTab === panel.id ? " active" : ""}`}
@@ -5389,6 +5397,7 @@ export function App() {
                         onClick={() => setPanelTab(panel.id)}
                       >{panel.label}</button>
                     ))}
+                    <button className={`panel-tab panel-tab--end${panelTab === "problems" ? " active" : ""}`} type="button" onClick={() => setPanelTab("problems")}>PROBLEMAS <span>{diagnostics.length}</span></button>
                   </div>
                   <button className="icon-button small" type="button" aria-label="Fechar painel" onClick={() => setPanelVisible(false)}><X size={14} /></button>
                 </div>
@@ -5408,7 +5417,7 @@ export function App() {
                 state={workbenchState}
                 visible={toolWindowVisible}
                 height={toolWindowHeight}
-                viewRequest={toolWindowViewRequest}
+                {...(toolWindowViewRequest ? { viewRequest: toolWindowViewRequest } : {})}
                 onClose={closeToolWindow}
                 onResize={beginToolWindowResize}
                 onResetHeight={() => setToolWindowHeight(DEFAULT_LAYOUT.toolWindowHeight)}

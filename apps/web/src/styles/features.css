@@ -347,6 +347,7 @@
 .editor-line-diff-peek__empty { padding: 5px 8px; color: #687486; font-size: 9px; font-style: italic; }
 .workbench-tab-strip { display: flex; min-width: 0; flex: 1 1 auto; align-items: stretch; overflow-x: auto; overflow-y: hidden; }
 .workbench-tab-group { display: flex; min-width: 96px; max-width: 220px; flex: 0 0 auto; align-items: stretch; border-bottom: 2px solid transparent; }
+.workbench-tab-group.is-end-start { margin-left: auto; border-left: 1px solid #303846; padding-left: 9px; }
 .workbench-tab-group.is-active { border-bottom-color: #6d91df; background: #191e27; }
 .workbench-tab { min-width: 0; flex: 1; overflow: hidden; border: 0; padding: 0 8px; background: transparent; color: #929baa; font: 10px/1 system-ui, sans-serif; letter-spacing: .06em; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .workbench-tab-group.is-active .workbench-tab { color: #f0f3f8; }

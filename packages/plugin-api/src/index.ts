@@ -468,6 +468,7 @@ export interface WorkbenchTabContribution {
   readonly label: string;
   readonly closable?: boolean;
   readonly order?: number;
+  readonly placement?: "start" | "end";
   onSelect(): void;
   onClose?(): void | Promise<void>;
 }
@@ -526,6 +527,7 @@ export interface WorkbenchToolWindowViewContribution {
   readonly id: string;
   readonly label: string;
   readonly order?: number;
+  readonly placement?: "start" | "end";
   mount(context: WorkbenchPanelMountContext): void | Disposable | Promise<void | Disposable>;
 }
 

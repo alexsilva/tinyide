@@ -106,6 +106,7 @@ export interface PluginExtensionApi {
   registerWorkspaceFileCreationProvider(provider: WorkspaceFileCreationProvider): Disposable;
   registerExecutionEnvironmentProvider(provider: ExecutionEnvironmentProvider): Disposable;
   registerExecutionProfileContributionProvider(provider: ExecutionProfileContributionProvider): Disposable;
+  registerDebugAdapterProvider(provider: DebugAdapterProvider): Disposable;
   registerScriptExecution(contribution: ScriptExecutionContribution): Disposable;
   registerResourceContextMenuProvider(provider: ResourceContextMenuProvider): Disposable;
   registerInteractiveSessionHook(provider: InteractiveSessionHookProvider): Disposable;
@@ -264,6 +265,93 @@ export interface ExecutionProfileContributionProvider {
 }
 
 export const EXECUTION_PROFILE_CONTRIBUTION_CAPABILITY = "execution.profile.contribution";
+
+export interface DebugBreakpoint {
+  /** Workspace-relative source path. */
+  readonly path: string;
+  /** One-based source line. */
+  readonly line: number;
+  readonly column?: number;
+  readonly enabled?: boolean;
+  readonly verified?: boolean;
+  readonly message?: string;
+}
+
+export type DebugSessionStatus = "starting" | "running" | "paused" | "stopped" | "completed" | "failed";
+
+export interface DebugStackFrame {
+  readonly id: string;
+  readonly name: string;
+  readonly path?: string;
+  readonly line?: number;
+  readonly column?: number;
+}
+
+export interface DebugVariable {
+  readonly name: string;
+  readonly value: string;
+  readonly type?: string;
+}
+
+export interface DebugScope {
+  readonly name: string;
+  readonly variables: readonly DebugVariable[];
+}
+
+export interface DebugSessionSnapshot {
+  readonly id: string;
+  readonly adapterId: string;
+  readonly profileId: string;
+  readonly profileName: string;
+  readonly status: DebugSessionStatus;
+  readonly reason?: string;
+  readonly breakpoints: readonly DebugBreakpoint[];
+  readonly frames: readonly DebugStackFrame[];
+  readonly selectedFrameId?: string;
+  readonly scopes: readonly DebugScope[];
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly error?: string;
+  readonly startedAt: number;
+  readonly finishedAt?: number;
+}
+
+export interface DebugLaunchRequest {
+  readonly profileId: string;
+  readonly profileName: string;
+  readonly environmentId?: string;
+  readonly executable: string;
+  readonly arguments: readonly string[];
+  readonly workingDirectory: string;
+  readonly environmentVariables?: Readonly<Record<string, string>>;
+  readonly workspaceRoot: string;
+  readonly breakpoints: readonly DebugBreakpoint[];
+  readonly stopOnEntry?: boolean;
+}
+
+export type DebugAdapterCommand = "pause" | "resume" | "stepOver" | "stepInto" | "stepOut" | "stop";
+
+export interface DebugAdapterContext {
+  readonly profile: ExecutionProfile;
+  readonly environment?: ExecutionEnvironment;
+  readonly environmentProviderId?: string;
+  readonly activeFileName?: string;
+}
+
+export interface DebugAdapterProvider {
+  readonly id: string;
+  readonly name: string;
+  readonly environmentProviderId?: string;
+  readonly extensions?: readonly string[];
+  supports(context: DebugAdapterContext): boolean;
+  launch(request: DebugLaunchRequest): Promise<DebugSessionSnapshot>;
+  read(sessionId: string): Promise<DebugSessionSnapshot>;
+  setBreakpoints(sessionId: string, breakpoints: readonly DebugBreakpoint[]): Promise<DebugSessionSnapshot>;
+  command(sessionId: string, command: DebugAdapterCommand): Promise<DebugSessionSnapshot>;
+  evaluate?(sessionId: string, expression: string, frameId?: string): Promise<DebugVariable>;
+}
+
+export const DEBUG_ADAPTER_CAPABILITY = "execution.debugAdapter";
 
 export interface LanguageProvider {
   readonly id: string;
@@ -865,6 +953,8 @@ export type ExecutionEnvironmentStatus = "ready" | "creating" | "error";
 
 export interface ExecutionEnvironment {
   readonly id: string;
+  /** Provider que descobriu/criou este ambiente. Preenchido pelo workbench. */
+  readonly providerId?: string;
   readonly name: string;
   readonly type: ExecutionEnvironmentType;
   readonly status: ExecutionEnvironmentStatus;

@@ -1,4 +1,5 @@
 import type {
+  DebugBreakpoint,
   ExecutionProfile,
   LanguageLintSettings,
   PluginSettingsMap,
@@ -22,6 +23,8 @@ export interface WorkspaceSettings {
   readonly version: 1;
   /** Project-specific execution profiles, equivalent to IDE run configurations. */
   readonly executionProfiles?: WorkspaceExecutionProfiles;
+  /** Project-local debugger breakpoints, interpreted by the selected runtime adapter. */
+  readonly debugBreakpoints?: readonly DebugBreakpoint[];
   /** Per-language lint choices that belong to this project. */
   readonly lint?: Readonly<Record<string, LanguageLintSettings>>;
   /** Environment selected for this project. Environment definitions are plugin-owned under .tinyide. */

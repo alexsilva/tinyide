@@ -5,6 +5,7 @@ import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   ArrowLeft,
   ArrowUpCircle,
+  Bug,
   Box,
   Check,
   CheckCircle2,
@@ -30,6 +31,7 @@ import {
   MoreVertical,
   Package,
   PackageCheck,
+  Pause,
   Play,
   Plug,
   Plus,
@@ -40,6 +42,9 @@ import {
   Search,
   Settings2,
   Square,
+  StepForward,
+  CornerDownRight,
+  CornerUpRight,
   Terminal,
   Trash2,
   Undo2,
@@ -60,6 +65,9 @@ import {
   WORKSPACE_RESOURCES_CHANGED_EVENT,
 } from "@tinyide/plugin-api";
 import type {
+  DebugAdapterProvider,
+  DebugBreakpoint,
+  DebugSessionSnapshot,
   ExecutionEnvironment,
   ExecutionEnvironmentDirectoryListing,
   ExecutionEnvironmentPackageInventory,
@@ -178,6 +186,7 @@ import {
 } from "./persistence";
 import { resolveSyntaxHighlighter, type SyntaxHighlighter } from "./generic-syntax";
 import {
+  debugAdapterForProfile,
   environmentProvider,
   hostProcessOutputLines,
   languageProviderFor,
@@ -188,6 +197,8 @@ import {
   readHostContext,
   readHostProcess,
   runExecutionProfile,
+  sendDebugCommand,
+  startDebugProfile,
   runScript,
   clearHostWorkspace,
   pluginSettingsProviders,
@@ -2218,6 +2229,9 @@ export function App() {
   const [closingProfileTabIds, setClosingProfileTabIds] = useState<ReadonlySet<string>>(new Set());
   const [resumedProfileProcesses, setResumedProfileProcesses] = useState<readonly ResumedProfileProcess[]>([]);
   const [profilesState, setProfilesState] = useState<StoredProfiles>({ profiles: [] });
+  const [debugBreakpoints, setDebugBreakpoints] = useState<readonly DebugBreakpoint[]>([]);
+  const [debugSession, setDebugSession] = useState<DebugSessionSnapshot>();
+  const [debugAdapter, setDebugAdapter] = useState<DebugAdapterProvider>();
   const [workspaceSettings, setWorkspaceSettings] = useState<WorkspaceSettings>(EMPTY_WORKSPACE_SETTINGS);
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -2342,24 +2356,45 @@ export function App() {
   }, [activeDocument, platformSnapshot]);
   const activeToolWindow = workbenchToolWindows.find((toolWindow) => toolWindow.id === activeToolWindowId);
   const selectedProfile = profilesState.profiles.find((profile) => profile.id === profilesState.selectedId);
+  const selectedProfileDebugAdapter = selectedProfile
+    ? debugAdapterForProfile({
+        profile: selectedProfile,
+        ...(activeDocument ? { activeDocument } : {}),
+        environments,
+      })
+    : undefined;
   const selectedProfileExecution = selectedProfile ? profileExecutions[selectedProfile.id] : undefined;
   const selectedProfileRunning = selectedProfileExecution?.status === "running";
+  const debugSessionActive = Boolean(debugSession && !["stopped", "completed", "failed"].includes(debugSession.status));
+  useEffect(() => {
+    if (!debugSessionActive || !debugSession || !debugAdapter) return;
+    const timer = window.setInterval(() => {
+      void debugAdapter.read(debugSession.id).then(setDebugSession).catch(() => undefined);
+    }, 400);
+    return () => window.clearInterval(timer);
+  }, [debugSessionActive, debugSession?.id, debugAdapter]);
   const profileOutputTabs = openProfileTabIds.flatMap((profileId) => {
     const profile = profilesState.profiles.find((candidate) => candidate.id === profileId);
     const execution = profileExecutions[profileId];
-    if (!profile && !execution) return [];
+    const tabDebugSession = debugSession?.profileId === profileId ? debugSession : undefined;
+    if (!profile && !execution && !tabDebugSession) return [];
     return [{
       profileId,
       tabId: profileExecutionPanelTabId(profileId),
-      name: profile?.name ?? execution?.profileName ?? profileId,
+      name: profile?.name ?? execution?.profileName ?? tabDebugSession?.profileName ?? profileId,
       execution,
+      debugSession: tabDebugSession,
     }];
   });
-  const runningProfileOutputCount = profileOutputTabs.filter((tab) => tab.execution?.status === "running").length;
+  const runningProfileOutputCount = profileOutputTabs.filter((tab) => (
+    tab.execution?.status === "running"
+    || Boolean(tab.debugSession && !["stopped", "completed", "failed"].includes(tab.debugSession.status))
+  )).length;
   const activeExecutionProfileId = profileIdFromExecutionPanelTab(panelTab);
   const executionPanelActive = panelVisible
     && Boolean(activeExecutionProfileId && openProfileTabIds.includes(activeExecutionProfileId));
   const bottomPanelAvailable = profileOutputTabs.length > 0
+    || Boolean(debugSession)
     || workbenchPanels.some((panel) => panel.id === panelTab);
   const settingsProviders = pluginSettingsProviders();
   const activePluginSettingsProvider = settingsSectionId === "editor"
@@ -2412,7 +2447,7 @@ export function App() {
   }, [editorLineDecorations]);
   const showEditorGutter = activeDocument?.kind === "text"
     && !activeResourceEditorProvider
-    && (editorSettings.lineNumbers || editorLineDecorations.length > 0);
+    && (editorSettings.lineNumbers || editorLineDecorations.length > 0 || debugBreakpoints.some((breakpoint) => breakpoint.path === activeDocument.path));
 
   useEffect(() => {
     const snapshot: WorkbenchStateSnapshot = {
@@ -2792,6 +2827,7 @@ export function App() {
     }
     replaceWorkspaceSettings(settings);
     setProfilesState(settings.executionProfiles ?? { profiles: [] });
+    setDebugBreakpoints(settings.debugBreakpoints ?? []);
     return settings;
   }, [replaceWorkspaceSettings]);
 
@@ -3973,6 +4009,41 @@ export function App() {
     }));
   };
 
+  const toggleBreakpoint = (path: string, line: number) => {
+    const exists = debugBreakpoints.some((breakpoint) => breakpoint.path === path && breakpoint.line === line);
+    const next = exists
+      ? debugBreakpoints.filter((breakpoint) => !(breakpoint.path === path && breakpoint.line === line))
+      : [...debugBreakpoints, { path, line, enabled: true }];
+    setDebugBreakpoints(next);
+    void updateWorkspaceSettings((current) => ({ ...current, debugBreakpoints: next }))
+      .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+    if (debugSession && debugAdapter) {
+      void debugAdapter.setBreakpoints(debugSession.id, next).then(setDebugSession).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+    }
+  };
+
+  const startSelectedDebugProfile = async () => {
+    if (!selectedProfile) throw new Error("Selecione um perfil de execução.");
+    if (!selectedProfileDebugAdapter) throw new Error("O perfil selecionado não possui runtime com suporte a debug.");
+    if (selectedProfile.saveBeforeRun && activeDocument && activeDocument.content !== activeDocument.savedContent) await saveDocument();
+    const started = await startDebugProfile({
+      profile: selectedProfile,
+      ...(activeDocument ? { activeDocument } : {}),
+      environments,
+      breakpoints: debugBreakpoints,
+    });
+    setDebugAdapter(started.adapter);
+    setDebugSession(started.session);
+    setOpenProfileTabIds((current) => openProfileExecutionTab(current, selectedProfile.id));
+    setPanelVisible(true);
+    setPanelTab(profileExecutionPanelTabId(selectedProfile.id));
+  };
+
+  const debugCommand = async (command: "pause" | "resume" | "stepOver" | "stepInto" | "stepOut" | "stop") => {
+    if (!debugSession || !debugAdapter) throw new Error("Nenhuma sessão de debug ativa.");
+    setDebugSession(await sendDebugCommand(debugAdapter, debugSession.id, command));
+  };
+
   const runSelectedProfile = async () => {
     if (!selectedProfile) throw new Error("Selecione um perfil de execução.");
     if (!selectedProfile.steps.length) throw new Error("O perfil não possui etapas.");
@@ -4350,17 +4421,16 @@ export function App() {
     if (processId) await stopHostProcess(processId);
   };
 
-  const stopExecution = async () => {
-    if (selectedProfileExecution?.status === "running" && selectedProfile) {
-      await stopProfileExecution(selectedProfile.id);
-      return;
-    }
-    if (activeProcessId) await stopHostProcess(activeProcessId);
-  };
-
   const closeProfileOutputTab = async (profileId: string) => {
     setClosingProfileTabIds((current) => new Set(current).add(profileId));
     try {
+      if (debugSession?.profileId === profileId && debugAdapter) {
+        if (!["stopped", "completed", "failed"].includes(debugSession.status)) {
+          await sendDebugCommand(debugAdapter, debugSession.id, "stop");
+        }
+        setDebugSession(undefined);
+        setDebugAdapter(undefined);
+      }
       if (profileExecutionsRef.current[profileId]?.status === "running") {
         await stopProfileExecution(profileId);
       }
@@ -4909,9 +4979,26 @@ export function App() {
               {profilesState.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
             </select>
             <button className="icon-button small" type="button" aria-label="Gerenciar perfis" onClick={() => setProfilesOpen(true)}><Settings2 size={14} /></button>
-            {selectedProfileRunning || busy
-              ? <button className="button danger compact" type="button" onClick={() => invoke(stopExecution)}><Square size={13} /> Parar</button>
-              : <button className="button primary compact" type="button" disabled={!selectedProfile} onClick={() => invoke(runSelectedProfile)}><Play size={13} /> Executar</button>}
+            <ButtonTooltip label="Executar perfil">
+              <button
+                className="icon-button small"
+                type="button"
+                aria-label="Executar perfil"
+                disabled={!selectedProfile || selectedProfileRunning || busy || debugSessionActive}
+                onClick={() => invoke(runSelectedProfile)}
+              ><Play size={15} /></button>
+            </ButtonTooltip>
+            <ButtonTooltip label={selectedProfile && !selectedProfileDebugAdapter
+              ? "O runtime selecionado não oferece depuração para este perfil"
+              : "Depurar perfil"}>
+              <button
+                className="icon-button small"
+                type="button"
+                aria-label="Depurar perfil"
+                disabled={!selectedProfileDebugAdapter || selectedProfileRunning || busy || debugSessionActive}
+                onClick={() => invoke(startSelectedDebugProfile)}
+              ><Bug size={15} /></button>
+            </ButtonTooltip>
             <button className="icon-button small" type="button" aria-label="Recarregar página" title="Recarregar página" onClick={() => location.reload()}><RotateCw size={14} /></button>
           </div>
         </header>
@@ -5438,6 +5525,9 @@ export function App() {
                         <pre ref={editorLineRulerRef}>
                           {editorRulerLines.map((lineNumber, index) => {
                             const line = index + 1;
+                            const breakpoint = activeDocument?.path
+                              ? debugBreakpoints.find((candidate) => candidate.path === activeDocument.path && candidate.line === line)
+                              : undefined;
                             const decorations = editorDecorationsByLine.get(line) ?? [];
                             const changeDecoration = decorations.find((decoration) => decoration.change);
                             const tooltip = decorations
@@ -5445,7 +5535,7 @@ export function App() {
                               .filter((value): value is string => Boolean(value))
                               .join("\n");
                             const content = <>
-                              <i className="editor-line-ruler__marker" />
+                              <i className={`editor-line-ruler__marker${breakpoint ? " is-breakpoint" : ""}`} />
                               {editorSettings.lineNumbers ? <b>{lineNumber}</b> : null}
                             </>;
                             return changeDecoration ? (
@@ -5456,11 +5546,18 @@ export function App() {
                                 title={tooltip || undefined}
                                 aria-label={`${tooltip || "Exibir alteração"}, linha ${line}`}
                                 onClick={() => setSelectedEditorLineDecoration((current) => current === changeDecoration ? undefined : changeDecoration)}
+                                onDoubleClick={() => { if (activeDocument?.path) toggleBreakpoint(activeDocument.path, line); }}
                               >
                                 {content}
                               </button>
                             ) : (
-                              <span className="editor-line-ruler__line" key={line}>{content}</span>
+                              <button
+                                className="editor-line-ruler__line"
+                                key={line}
+                                type="button"
+                                aria-label={`${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${line}`}
+                                onClick={() => { if (activeDocument?.path) toggleBreakpoint(activeDocument.path, line); }}
+                              >{content}</button>
                             );
                           })}
                         </pre>
@@ -5641,8 +5738,11 @@ export function App() {
                 <div className="panel-heading">
                   <div className="panel-tabs">
                     {profileOutputTabs.map((tab) => {
-                      const statusLabel = profileExecutionStatusLabel(tab.execution);
-                      const running = tab.execution?.status === "running";
+                      const statusLabel = tab.debugSession
+                        ? `Depuração: ${tab.debugSession.status}`
+                        : profileExecutionStatusLabel(tab.execution);
+                      const running = tab.execution?.status === "running"
+                        || Boolean(tab.debugSession && !["stopped", "completed", "failed"].includes(tab.debugSession.status));
                       const closing = closingProfileTabIds.has(tab.profileId);
                       return (
                         <div className={`panel-tab-group${panelTab === tab.tabId ? " active" : ""}`} key={tab.profileId}>
@@ -5653,6 +5753,7 @@ export function App() {
                             type="button"
                             onClick={() => setPanelTab(tab.tabId)}
                           >
+                            {tab.debugSession ? <Bug size={11} aria-hidden="true" /> : null}
                             <span className="panel-tab__label">{tab.name}</span>
                             <span aria-hidden="true" className={`panel-tab__execution-dot${running ? " is-running" : ""}`} />
                           </button>
@@ -5681,11 +5782,86 @@ export function App() {
                   </div>
                   <button className="icon-button small" type="button" aria-label="Fechar painel" onClick={() => setPanelVisible(false)}><X size={14} /></button>
                 </div>
-                {profileOutputTabs.map((tab) => (
-                  <pre hidden={panelTab !== tab.tabId} key={tab.profileId}>
-                    {profileExecutionOutput({ name: tab.name }, tab.execution).join("\n")}
-                  </pre>
-                ))}
+                {profileOutputTabs.map((tab) => {
+                  const tabDebugSession = tab.debugSession;
+                  const debugging = Boolean(tabDebugSession);
+                  const debugEnded = Boolean(tabDebugSession && ["stopped", "completed", "failed"].includes(tabDebugSession.status));
+                  const executionRunning = tab.execution?.status === "running";
+                  return (
+                    <div className="execution-panel-view" hidden={panelTab !== tab.tabId} key={tab.profileId}>
+                      <div className="execution-panel-toolbar">
+                        <div className="execution-panel-toolbar__actions">
+                          {tabDebugSession ? (
+                            <>
+                              <ButtonTooltip label={tabDebugSession.status === "paused" ? "Continuar" : "Pausar"} side="top">
+                                <button
+                                  className="icon-button small"
+                                  type="button"
+                                  aria-label={tabDebugSession.status === "paused" ? "Continuar depuração" : "Pausar depuração"}
+                                  disabled={debugEnded || !["running", "paused"].includes(tabDebugSession.status)}
+                                  onClick={() => invoke(() => debugCommand(tabDebugSession.status === "paused" ? "resume" : "pause"))}
+                                >{tabDebugSession.status === "paused" ? <Play size={14} /> : <Pause size={14} />}</button>
+                              </ButtonTooltip>
+                              <ButtonTooltip label="Step over" side="top">
+                                <button className="icon-button small" type="button" aria-label="Step over" disabled={tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepOver"))}><StepForward size={14} /></button>
+                              </ButtonTooltip>
+                              <ButtonTooltip label="Step into" side="top">
+                                <button className="icon-button small" type="button" aria-label="Step into" disabled={tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepInto"))}><CornerDownRight size={14} /></button>
+                              </ButtonTooltip>
+                              <ButtonTooltip label="Step out" side="top">
+                                <button className="icon-button small" type="button" aria-label="Step out" disabled={tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepOut"))}><CornerUpRight size={14} /></button>
+                              </ButtonTooltip>
+                              <ButtonTooltip label="Parar depuração" side="top">
+                                <button className="icon-button small danger" type="button" aria-label="Parar depuração" disabled={debugEnded} onClick={() => invoke(() => debugCommand("stop"))}><Square size={13} /></button>
+                              </ButtonTooltip>
+                            </>
+                          ) : executionRunning ? (
+                            <ButtonTooltip label="Parar execução" side="top">
+                              <button className="icon-button small danger" type="button" aria-label="Parar execução" onClick={() => invoke(() => stopProfileExecution(tab.profileId))}><Square size={13} /></button>
+                            </ButtonTooltip>
+                          ) : null}
+                        </div>
+                        <span className="execution-panel-toolbar__status">
+                          {tabDebugSession ? `Depuração · ${tabDebugSession.status}` : profileExecutionStatusLabel(tab.execution)}
+                        </span>
+                      </div>
+                      {tabDebugSession ? (
+                        <div className="execution-debug-layout">
+                          <pre className="execution-panel-output">{[tabDebugSession.stdout, tabDebugSession.stderr, tabDebugSession.error].filter(Boolean).join("\n")}</pre>
+                          <aside className="execution-debug-inspector" aria-label="Estado da depuração">
+                            <section>
+                              <h3>Breakpoints</h3>
+                              {debugBreakpoints.length ? debugBreakpoints.map((breakpoint) => (
+                                <button key={`${breakpoint.path}:${breakpoint.line}`} type="button" onClick={() => toggleBreakpoint(breakpoint.path, breakpoint.line)}>
+                                  {breakpoint.path}:{breakpoint.line}
+                                </button>
+                              )) : <p>Nenhum breakpoint.</p>}
+                            </section>
+                            <section>
+                              <h3>Pilha</h3>
+                              {tabDebugSession.frames.length ? tabDebugSession.frames.map((frame) => (
+                                <button key={frame.id} type="button">
+                                  {frame.name}{frame.path ? ` — ${frame.path}:${frame.line ?? 0}` : ""}
+                                </button>
+                              )) : <p>{tabDebugSession.status === "paused" ? "Pilha ainda não recebida do runtime." : "Aguardando pausa."}</p>}
+                            </section>
+                            <section>
+                              <h3>Variáveis</h3>
+                              {tabDebugSession.scopes.length ? tabDebugSession.scopes.map((scope) => (
+                                <div key={scope.name}>
+                                  <strong>{scope.name}</strong>
+                                  <dl>{scope.variables.map((variable) => <div key={variable.name}><dt>{variable.name}</dt><dd>{variable.value}</dd></div>)}</dl>
+                                </div>
+                              )) : <p>Nenhuma variável disponível.</p>}
+                            </section>
+                          </aside>
+                        </div>
+                      ) : (
+                        <pre className="execution-panel-output">{profileExecutionOutput({ name: tab.name }, tab.execution).join("\n")}</pre>
+                      )}
+                    </div>
+                  );
+                })}
                 {restorationComplete ? workbenchPanels.map((panel) => (
                   <div className="plugin-panel-container" hidden={panelTab !== panel.id} key={panel.id}>
                     <WorkbenchPanelHost provider={panel} state={workbenchState} />

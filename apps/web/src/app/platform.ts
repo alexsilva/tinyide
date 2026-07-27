@@ -5,6 +5,7 @@ import {
   PluginManager,
 } from "@tinyide/core";
 import type {
+  DebugAdapterProvider,
   ExecutionEnvironmentProvider,
   ExecutionProfileContributionProvider,
   InteractiveSessionHookProvider,
@@ -177,6 +178,7 @@ function pluginContext(platform: TinyIdePlatform, pluginId: string): PluginConte
       registerWorkspaceFileCreationProvider: (provider: WorkspaceFileCreationProvider) => platform.capabilities.register("workspace.fileCreation", provider),
       registerExecutionEnvironmentProvider: (provider: ExecutionEnvironmentProvider) => platform.capabilities.register("execution.environment", provider),
       registerExecutionProfileContributionProvider: (provider: ExecutionProfileContributionProvider) => platform.capabilities.register("execution.profile.contribution", provider),
+      registerDebugAdapterProvider: (provider: DebugAdapterProvider) => platform.capabilities.register("execution.debugAdapter", provider),
       registerScriptExecution: (contribution: ScriptExecutionContribution) => platform.capabilities.register("execution.script", contribution),
       registerResourceContextMenuProvider: (provider: ResourceContextMenuProvider) => platform.capabilities.register("resource.contextMenu", provider),
       registerInteractiveSessionHook: (provider: InteractiveSessionHookProvider) => platform.capabilities.register("interactive.session.hook", provider),

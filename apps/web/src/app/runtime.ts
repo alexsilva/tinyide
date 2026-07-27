@@ -1,5 +1,9 @@
 import { resolveExecutionProfile } from "@tinyide/core";
 import type {
+  DebugAdapterCommand,
+  DebugAdapterProvider,
+  DebugBreakpoint,
+  DebugSessionSnapshot,
   ExecutionEnvironment,
   ExecutionEnvironmentProvider,
   ExecutionProfile,
@@ -110,6 +114,32 @@ export function textEditorLineDecorationProviders(): readonly TextEditorLineDeco
   return platform.capabilities.getAll<TextEditorLineDecorationProvider>("textEditor.lineDecoration");
 }
 
+export function debugAdapterProviders(): readonly DebugAdapterProvider[] {
+  return platform.capabilities.getAll<DebugAdapterProvider>("execution.debugAdapter");
+}
+
+export function debugAdapterForProfile(input: {
+  readonly profile: ExecutionProfile;
+  readonly activeDocument?: OpenDocument;
+  readonly environments: readonly ExecutionEnvironment[];
+}): DebugAdapterProvider | undefined {
+  const environmentId = input.profile.environment.mode === "fixed"
+    ? input.profile.environment.environmentId
+    : undefined;
+  const environment = environmentId
+    ? input.environments.find((candidate) => candidate.id === environmentId)
+    : undefined;
+  return debugAdapterProviders().find((candidate) => (
+    (!environment?.providerId || candidate.environmentProviderId === environment.providerId)
+    && candidate.supports({
+      profile: input.profile,
+      ...(environment ? { environment } : {}),
+      ...(environment?.providerId ? { environmentProviderId: environment.providerId } : {}),
+      ...(input.activeDocument?.name ? { activeFileName: input.activeDocument.name } : {}),
+    })
+  ));
+}
+
 export function workbenchResourceDescriptor(document: OpenDocument): WorkbenchResourceDescriptor {
   return {
     id: document.id,
@@ -149,8 +179,11 @@ export function environmentProviderFor(document: OpenDocument | undefined): Exec
 }
 
 export async function loadEnvironments(): Promise<readonly ExecutionEnvironment[]> {
-  const provider = environmentProvider();
-  return provider ? provider.list() : [];
+  const providers = platform.capabilities.getAll<ExecutionEnvironmentProvider>("execution.environment");
+  const listed = await Promise.all(providers.map(async (provider) => (
+    (await provider.list()).map((environment) => ({ ...environment, providerId: provider.id }))
+  )));
+  return listed.flat();
 }
 
 export async function loadProfileContributions(input: {
@@ -391,6 +424,55 @@ export async function runExecutionProfile(input: {
   }
   callbacks.onOutput(completedOutput.filter(Boolean));
   return "completed";
+}
+
+export async function startDebugProfile(input: {
+  readonly profile: ExecutionProfile;
+  readonly activeDocument?: OpenDocument;
+  readonly environments: readonly ExecutionEnvironment[];
+  readonly breakpoints: readonly DebugBreakpoint[];
+}): Promise<{ readonly adapter: DebugAdapterProvider; readonly session: DebugSessionSnapshot }> {
+  const { profile, activeDocument, environments, breakpoints } = input;
+  const environmentId = profile.environment.mode === "fixed" ? profile.environment.environmentId : undefined;
+  const environment = environmentId ? environments.find((candidate) => candidate.id === environmentId) : undefined;
+  const adapter = debugAdapterForProfile({
+    profile,
+    ...(activeDocument ? { activeDocument } : {}),
+    environments,
+  });
+  if (!adapter) throw new Error("Nenhum runtime configurado oferece um adaptador compatível com este perfil.");
+  const { workspaceRoot } = await readHostContext();
+  const activePath = activeDocument?.path ? `${workspaceRoot}/${activeDocument.path.replace(/^\/+/, "")}` : activeDocument?.name;
+  const activeDirectory = activeFileDirectory(activePath);
+  const [step] = resolveExecutionProfile(profile, {
+    workspaceRoot,
+    ...(activePath ? { activeFile: activePath } : {}),
+    ...(activeDirectory ? { activeFileDirectory: activeDirectory } : {}),
+    ...(activeDocument?.name ? { activeFileName: activeDocument.name } : {}),
+    ...(environment?.executable ? { environmentExecutable: environment.executable } : {}),
+    ...(environment?.path ? { environmentPath: environment.path } : {}),
+  });
+  if (!step) throw new Error("O perfil de debug não possui etapa executável.");
+  const session = await adapter.launch({
+    profileId: profile.id,
+    profileName: profile.name,
+    ...(environmentId ? { environmentId } : {}),
+    executable: step.executable,
+    arguments: step.arguments,
+    workingDirectory: step.workingDirectory ?? workspaceRoot,
+    ...(step.environmentVariables ? { environmentVariables: step.environmentVariables } : {}),
+    workspaceRoot,
+    breakpoints,
+  });
+  return { adapter, session };
+}
+
+export async function sendDebugCommand(
+  adapter: DebugAdapterProvider,
+  sessionId: string,
+  command: DebugAdapterCommand,
+): Promise<DebugSessionSnapshot> {
+  return adapter.command(sessionId, command);
 }
 
 export async function runScript(input: {

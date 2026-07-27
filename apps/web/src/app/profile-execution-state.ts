@@ -1,4 +1,4 @@
-import type { DebugSessionSnapshot, ExecutionProfile } from "@tinyide/plugin-api";
+import type { ExecutionProfile } from "@tinyide/plugin-api";
 import { hostProcessOutputLines, type HostProcessSnapshot } from "./runtime";
 
 export type ProfileExecutionStatus = "running" | "completed" | "failed" | "stopped";
@@ -27,28 +27,49 @@ export interface RestoredProfileExecutions {
 
 const PROFILE_EXECUTION_PANEL_TAB_PREFIX = "execution-profile:";
 
-export function profileExecutionPanelTabId(profileId: string): string {
-  return `${PROFILE_EXECUTION_PANEL_TAB_PREFIX}${encodeURIComponent(profileId)}`;
+export type ProfileExecutionTabMode = "run" | "debug";
+
+export interface ProfileExecutionPanelTab {
+  readonly profileId: string;
+  readonly mode: ProfileExecutionTabMode;
 }
 
-export function profileIdFromExecutionPanelTab(tabId: string): string | undefined {
+export function profileExecutionPanelTabId(
+  profileId: string,
+  mode: ProfileExecutionTabMode = "run",
+): string {
+  return `${PROFILE_EXECUTION_PANEL_TAB_PREFIX}${mode}:${encodeURIComponent(profileId)}`;
+}
+
+export function profileExecutionPanelTab(tabId: string): ProfileExecutionPanelTab | undefined {
   if (!tabId.startsWith(PROFILE_EXECUTION_PANEL_TAB_PREFIX)) return undefined;
-  const encodedProfileId = tabId.slice(PROFILE_EXECUTION_PANEL_TAB_PREFIX.length);
+  const encoded = tabId.slice(PROFILE_EXECUTION_PANEL_TAB_PREFIX.length);
+  const separator = encoded.indexOf(":");
+  if (separator <= 0) return undefined;
+  const mode = encoded.slice(0, separator);
+  if (mode !== "run" && mode !== "debug") return undefined;
+  const encodedProfileId = encoded.slice(separator + 1);
   if (!encodedProfileId) return undefined;
   try {
-    return decodeURIComponent(encodedProfileId);
+    return { profileId: decodeURIComponent(encodedProfileId), mode };
   } catch {
     return undefined;
   }
 }
 
+export function profileIdFromExecutionPanelTab(tabId: string): string | undefined {
+  return profileExecutionPanelTab(tabId)?.profileId;
+}
+
 export function openProfileExecutionTab(
-  currentProfileIds: readonly string[],
+  currentTabIds: readonly string[],
   profileId: string,
+  mode: ProfileExecutionTabMode = "run",
 ): readonly string[] {
-  return currentProfileIds.includes(profileId)
-    ? currentProfileIds
-    : [...currentProfileIds, profileId];
+  const tabId = profileExecutionPanelTabId(profileId, mode);
+  return currentTabIds.includes(tabId)
+    ? currentTabIds
+    : [...currentTabIds, tabId];
 }
 
 export function restoredProfileExecutionTabIds(
@@ -58,19 +79,18 @@ export function restoredProfileExecutionTabIds(
     .filter((state) => state.status === "running")
     .slice()
     .sort((left, right) => (left.startedAt ?? 0) - (right.startedAt ?? 0) || left.profileName.localeCompare(right.profileName))
-    .map((state) => state.profileId);
+    .map((state) => profileExecutionPanelTabId(state.profileId, "run"));
 }
 
 export function nextPanelTabAfterClosingProfile(
-  currentProfileIds: readonly string[],
-  profileId: string,
+  currentTabIds: readonly string[],
+  tabId: string,
   fallbackTabId = "output",
 ): string {
-  const closedIndex = currentProfileIds.indexOf(profileId);
-  const remaining = currentProfileIds.filter((candidate) => candidate !== profileId);
+  const closedIndex = currentTabIds.indexOf(tabId);
+  const remaining = currentTabIds.filter((candidate) => candidate !== tabId);
   if (!remaining.length) return fallbackTabId;
-  const nextProfileId = remaining[Math.min(Math.max(closedIndex, 0), remaining.length - 1)] ?? remaining.at(-1);
-  return nextProfileId ? profileExecutionPanelTabId(nextProfileId) : fallbackTabId;
+  return remaining[Math.min(Math.max(closedIndex, 0), remaining.length - 1)] ?? remaining.at(-1) ?? fallbackTabId;
 }
 
 function linesForProfileProcess(
@@ -93,16 +113,6 @@ export function profileExecutionStatusLabel(state: ProfileExecutionState | undef
   if (state.status === "completed") return "Concluído";
   if (state.status === "stopped") return "Interrompido";
   return "Falhou";
-}
-
-export function debugSessionForProfilePanel(
-  profileId: string,
-  execution: ProfileExecutionState | undefined,
-  debugSession: DebugSessionSnapshot | undefined,
-): DebugSessionSnapshot | undefined {
-  if (debugSession?.profileId !== profileId) return undefined;
-  if (!execution?.startedAt) return debugSession;
-  return debugSession.startedAt >= execution.startedAt ? debugSession : undefined;
 }
 
 export function profileExecutionOutput(

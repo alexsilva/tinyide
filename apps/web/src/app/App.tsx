@@ -240,13 +240,12 @@ import {
 import { editorLineNumbers, resolveEditorSettings } from "./editor-settings";
 import { reconcileToolWindowLayout } from "./workbench-layout";
 import {
-  debugSessionForProfilePanel,
   nextPanelTabAfterClosingProfile,
   openProfileExecutionTab,
+  profileExecutionPanelTab,
   profileExecutionPanelTabId,
   profileExecutionOutput,
   profileExecutionStatusLabel,
-  profileIdFromExecutionPanelTab,
   restoreProfileExecutions,
   restoredProfileExecutionTabIds,
   resumedProfileProcessOutput,
@@ -2477,15 +2476,21 @@ export function App() {
       if (outputElement) outputElement.scrollTop = outputElement.scrollHeight;
     });
   }, [debugSession?.stdout, debugSession?.stderr, debugSession?.error, debugOutputFollowTail, debugOutputFilter]);
-  const profileOutputTabs = openProfileTabIds.flatMap((profileId) => {
-    const profile = profilesState.profiles.find((candidate) => candidate.id === profileId);
-    const execution = profileExecutions[profileId];
-    const tabDebugSession = debugSessionForProfilePanel(profileId, execution, debugSession);
+  const profileOutputTabs = openProfileTabIds.flatMap((tabId) => {
+    const tab = profileExecutionPanelTab(tabId);
+    if (!tab) return [];
+    const profile = profilesState.profiles.find((candidate) => candidate.id === tab.profileId);
+    const execution = tab.mode === "run" ? profileExecutions[tab.profileId] : undefined;
+    const tabDebugSession = tab.mode === "debug" && debugSession?.profileId === tab.profileId
+      ? debugSession
+      : undefined;
     if (!profile && !execution && !tabDebugSession) return [];
     return [{
-      profileId,
-      tabId: profileExecutionPanelTabId(profileId),
-      name: profile?.name ?? execution?.profileName ?? tabDebugSession?.profileName ?? profileId,
+      profileId: tab.profileId,
+      mode: tab.mode,
+      tabId,
+      name: profile?.name ?? execution?.profileName ?? tabDebugSession?.profileName ?? tab.profileId,
+      profile,
       execution,
       debugSession: tabDebugSession,
     }];
@@ -2494,9 +2499,9 @@ export function App() {
     tab.execution?.status === "running"
     || Boolean(tab.debugSession && !["stopped", "completed", "failed"].includes(tab.debugSession.status))
   )).length;
-  const activeExecutionProfileId = profileIdFromExecutionPanelTab(panelTab);
+  const activeExecutionTab = profileExecutionPanelTab(panelTab);
   const executionPanelActive = panelVisible
-    && Boolean(activeExecutionProfileId && openProfileTabIds.includes(activeExecutionProfileId));
+    && Boolean(activeExecutionTab && openProfileTabIds.includes(panelTab));
   const bottomPanelAvailable = profileOutputTabs.length > 0
     || Boolean(debugSession)
     || workbenchPanels.some((panel) => panel.id === panelTab);
@@ -3076,7 +3081,7 @@ export function App() {
         const restoredProfiles = restoreProfileExecutions(processes);
         const restoredDebugSession = restoredDebug.current?.session;
         const restoredTabIds = restoredDebugSession
-          ? openProfileExecutionTab(restoredProfileExecutionTabIds(restoredProfiles.states), restoredDebugSession.profileId)
+          ? openProfileExecutionTab(restoredProfileExecutionTabIds(restoredProfiles.states), restoredDebugSession.profileId, "debug")
           : restoredProfileExecutionTabIds(restoredProfiles.states);
         setProfileExecutions(restoredProfiles.states);
         setOpenProfileTabIds(restoredTabIds);
@@ -3088,8 +3093,8 @@ export function App() {
           setError(restoredDebug.errors.map((item) => item.message).join("\n"));
         }
         setPanelTab((current) => {
-          const profileId = profileIdFromExecutionPanelTab(current);
-          return profileId && !restoredTabIds.includes(profileId) ? "output" : current;
+          const tab = profileExecutionPanelTab(current);
+          return tab && !restoredTabIds.includes(current) ? "output" : current;
         });
         setResumedProfileProcesses(restoredProfiles.running);
         const latestRunningProfile = restoredProfiles.running.at(-1);
@@ -3098,10 +3103,10 @@ export function App() {
           : 0;
         if (restoredDebugSession && restoredDebugSession.startedAt >= latestRunningProfileStartedAt) {
           setPanelVisible(true);
-          setPanelTab(profileExecutionPanelTabId(restoredDebugSession.profileId));
+          setPanelTab(profileExecutionPanelTabId(restoredDebugSession.profileId, "debug"));
         } else if (latestRunningProfile) {
           setPanelVisible(true);
-          setPanelTab(profileExecutionPanelTabId(latestRunningProfile.profileId));
+          setPanelTab(profileExecutionPanelTabId(latestRunningProfile.profileId, "run"));
         }
         const running = processes
           .filter((process) => process.status === "running" && process.presentation?.kind !== "profile")
@@ -4216,10 +4221,11 @@ export function App() {
     });
     setDebugAdapter(started.adapter);
     setDebugSession(started.session);
-    setOpenProfileTabIds((current) => openProfileExecutionTab(current, selectedProfile.id));
+    const tabId = profileExecutionPanelTabId(selectedProfile.id, "debug");
+    setOpenProfileTabIds((current) => openProfileExecutionTab(current, selectedProfile.id, "debug"));
     setPanelVisible(true);
     setPanelHeight((current) => Math.max(current, 420));
-    setPanelTab(profileExecutionPanelTabId(selectedProfile.id));
+    setPanelTab(tabId);
   };
 
   const debugCommand = async (command: "pause" | "resume" | "stepOver" | "stepInto" | "stepOut" | "stop") => {
@@ -4253,9 +4259,10 @@ export function App() {
       });
       setDebugAdapter(started.adapter);
       setDebugSession(started.session);
-      setOpenProfileTabIds((current) => openProfileExecutionTab(current, profile.id));
+      const tabId = profileExecutionPanelTabId(profile.id, "debug");
+      setOpenProfileTabIds((current) => openProfileExecutionTab(current, profile.id, "debug"));
       setPanelVisible(true);
-      setPanelTab(profileExecutionPanelTabId(profile.id));
+      setPanelTab(tabId);
     })();
     debugRestartPromiseRef.current = restart;
     try {
@@ -4266,22 +4273,16 @@ export function App() {
     }
   };
 
-  const runSelectedProfile = async () => {
-    if (!selectedProfile) throw new Error("Selecione um perfil de execução.");
-    if (!selectedProfile.steps.length) throw new Error("O perfil não possui etapas.");
-    if (profileExecutions[selectedProfile.id]?.status === "running") {
-      throw new Error(`O perfil '${selectedProfile.name}' já está em execução.`);
+  const runProfile = async (profile: ExecutionProfile) => {
+    if (!profile.steps.length) throw new Error("O perfil não possui etapas.");
+    if (profileExecutionsRef.current[profile.id]?.status === "running") {
+      throw new Error(`O perfil '${profile.name}' já está em execução.`);
     }
-    if (selectedProfile.saveBeforeRun && activeDocument && activeDocument.content !== activeDocument.savedContent) {
+    if (profile.saveBeforeRun && activeDocument && activeDocument.content !== activeDocument.savedContent) {
       await saveDocument();
     }
 
-    const profile = selectedProfile;
     const startedAt = Date.now();
-    if (debugSession?.profileId === profile.id && ["stopped", "completed", "failed"].includes(debugSession.status)) {
-      setDebugSession(undefined);
-      setDebugAdapter(undefined);
-    }
     const cancellation = { cancelled: false };
     profileRunCancellationRef.current.set(profile.id, cancellation);
     setProfileExecutions((current) => ({
@@ -4294,10 +4295,11 @@ export function App() {
         startedAt,
       },
     }));
-    setOpenProfileTabIds((current) => openProfileExecutionTab(current, profile.id));
+    const tabId = profileExecutionPanelTabId(profile.id, "run");
+    setOpenProfileTabIds((current) => openProfileExecutionTab(current, profile.id, "run"));
     setToolWindowVisible(false);
     setPanelVisible(true);
-    setPanelTab(profileExecutionPanelTabId(profile.id));
+    setPanelTab(tabId);
     try {
       const result = await runExecutionProfile({
         profile,
@@ -4385,6 +4387,11 @@ export function App() {
     }
   };
 
+  const runSelectedProfile = async () => {
+    if (!selectedProfile) throw new Error("Selecione um perfil de execução.");
+    await runProfile(selectedProfile);
+  };
+
   const runDocumentScript = async (document: OpenDocument) => {
     const contribution = scriptExecutionFor(document);
     if (!contribution) throw new Error(`Nenhum plugin oferece execução para '${document.name}'.`);
@@ -4419,11 +4426,12 @@ export function App() {
         startedAt,
       },
     }));
-    setOpenProfileTabIds((current) => openProfileExecutionTab(current, executionId));
+    const tabId = profileExecutionPanelTabId(executionId, "run");
+    setOpenProfileTabIds((current) => openProfileExecutionTab(current, executionId, "run"));
     setBusy(true);
     setToolWindowVisible(false);
     setPanelVisible(true);
-    setPanelTab(profileExecutionPanelTabId(executionId));
+    setPanelTab(tabId);
     try {
       const result = await runScript({
         contribution,
@@ -4647,37 +4655,38 @@ export function App() {
     if (processId) await stopHostProcess(processId);
   };
 
-  const closeProfileOutputTab = async (profileId: string) => {
-    setClosingProfileTabIds((current) => new Set(current).add(profileId));
+  const closeProfileOutputTab = async (tabId: string) => {
+    const tab = profileExecutionPanelTab(tabId);
+    if (!tab) return;
+    setClosingProfileTabIds((current) => new Set(current).add(tabId));
     try {
-      if (debugSession?.profileId === profileId && debugAdapter) {
+      if (tab.mode === "debug" && debugSession?.profileId === tab.profileId && debugAdapter) {
         if (!["stopped", "completed", "failed"].includes(debugSession.status)) {
           await sendDebugCommand(debugAdapter, debugSession.id, "stop");
         }
         setDebugSession(undefined);
         setDebugAdapter(undefined);
       }
-      if (profileExecutionsRef.current[profileId]?.status === "running") {
-        await stopProfileExecution(profileId);
+      if (tab.mode === "run" && profileExecutionsRef.current[tab.profileId]?.status === "running") {
+        await stopProfileExecution(tab.profileId);
       }
-      const tabId = profileExecutionPanelTabId(profileId);
-      const currentProfileIds = openProfileTabIdsRef.current;
-      const remainingProfileIds = currentProfileIds.filter((candidate) => candidate !== profileId);
+      const currentTabIds = openProfileTabIdsRef.current;
+      const remainingTabIds = currentTabIds.filter((candidate) => candidate !== tabId);
       const fallbackTabId = nextPanelTabAfterClosingProfile(
-        currentProfileIds,
-        profileId,
+        currentTabIds,
+        tabId,
         "output",
       );
-      setOpenProfileTabIds(remainingProfileIds);
+      setOpenProfileTabIds(remainingTabIds);
       setPanelTab((current) => {
         if (current !== tabId) return current;
-        if (!remainingProfileIds.length) setPanelVisible(false);
+        if (!remainingTabIds.length) setPanelVisible(false);
         return fallbackTabId;
       });
     } finally {
       setClosingProfileTabIds((current) => {
         const next = new Set(current);
-        next.delete(profileId);
+        next.delete(tabId);
         return next;
       });
     }
@@ -5049,17 +5058,16 @@ export function App() {
   const toggleProblemsPanel = () => setProblemsVisible((visible) => !visible);
 
   const toggleExecutionPanel = () => {
-    const currentProfileId = profileIdFromExecutionPanelTab(panelTab);
-    const targetProfileId = currentProfileId && openProfileTabIds.includes(currentProfileId)
-      ? currentProfileId
+    const targetTabId = openProfileTabIds.includes(panelTab)
+      ? panelTab
       : openProfileTabIds.at(-1);
-    if (!targetProfileId) return;
-    if (panelVisible && currentProfileId === targetProfileId) {
+    if (!targetTabId) return;
+    if (panelVisible && panelTab === targetTabId) {
       setPanelVisible(false);
       return;
     }
     setToolWindowVisible(false);
-    setPanelTab(profileExecutionPanelTabId(targetProfileId));
+    setPanelTab(targetTabId);
     setPanelVisible(true);
   };
 
@@ -5247,7 +5255,7 @@ export function App() {
                 className="icon-button small"
                 type="button"
                 aria-label="Executar perfil"
-                disabled={!selectedProfile || selectedProfileRunning || busy || debugSessionActive}
+                disabled={!selectedProfile || selectedProfileRunning || busy}
                 onClick={() => invoke(runSelectedProfile)}
               ><Play size={15} /></button>
             </ButtonTooltip>
@@ -5258,7 +5266,7 @@ export function App() {
                 className="icon-button small"
                 type="button"
                 aria-label="Depurar perfil"
-                disabled={!selectedProfileDebugAdapter || selectedProfileRunning || busy || debugSessionActive}
+                disabled={!selectedProfileDebugAdapter || busy || debugSessionActive}
                 onClick={() => invoke(startSelectedDebugProfile)}
               ><Bug size={15} /></button>
             </ButtonTooltip>
@@ -6020,29 +6028,30 @@ export function App() {
                         : profileExecutionStatusLabel(tab.execution);
                       const running = tab.execution?.status === "running"
                         || Boolean(tab.debugSession && !["stopped", "completed", "failed"].includes(tab.debugSession.status));
-                      const closing = closingProfileTabIds.has(tab.profileId);
+                      const closing = closingProfileTabIds.has(tab.tabId);
+                      const tabLabel = tab.mode === "debug" ? `${tab.name} (Debug)` : tab.name;
                       return (
-                        <div className={`panel-tab-group${panelTab === tab.tabId ? " active" : ""}`} key={tab.profileId}>
+                        <div className={`panel-tab-group${panelTab === tab.tabId ? " active" : ""}`} key={tab.tabId}>
                           <button
-                            aria-label={`${tab.name}: ${statusLabel}`}
+                            aria-label={`${tabLabel}: ${statusLabel}`}
                             className="panel-tab panel-tab--profile"
-                            title={`${tab.name}: ${statusLabel}`}
+                            title={`${tabLabel}: ${statusLabel}`}
                             type="button"
                             onClick={() => setPanelTab(tab.tabId)}
                           >
-                            {tab.debugSession ? <Bug size={11} aria-hidden="true" /> : null}
-                            <span className="panel-tab__label">{tab.name}</span>
+                            {tab.mode === "debug" ? <Bug size={11} aria-hidden="true" /> : null}
+                            <span className="panel-tab__label">{tabLabel}</span>
                             <span aria-hidden="true" className={`panel-tab__execution-dot${running ? " is-running" : ""}`} />
                           </button>
                           <button
-                            aria-label={running ? `Fechar e interromper ${tab.name}` : `Fechar saída de ${tab.name}`}
+                            aria-label={running ? `Fechar e interromper ${tabLabel}` : `Fechar saída de ${tabLabel}`}
                             className="panel-tab-close"
                             disabled={closing}
                             title={running ? "Fechar aba e interromper processo" : "Fechar aba"}
                             type="button"
                             onClick={(event) => {
                               event.stopPropagation();
-                              invoke(() => closeProfileOutputTab(tab.profileId));
+                              invoke(() => closeProfileOutputTab(tab.tabId));
                             }}
                           ><X size={12} /></button>
                         </div>
@@ -6072,7 +6081,7 @@ export function App() {
                     ? debugOutputSegments(tabDebugSession, outputOffsets, debugOutputFilter)
                     : [];
                   return (
-                    <div className="execution-panel-view" hidden={panelTab !== tab.tabId} key={tab.profileId}>
+                    <div className="execution-panel-view" hidden={panelTab !== tab.tabId} key={tab.tabId}>
                       <div className="execution-panel-toolbar">
                         <div className="execution-panel-toolbar__actions">
                           {tabDebugSession ? (
@@ -6100,6 +6109,36 @@ export function App() {
                               </ButtonTooltip>
                               <ButtonTooltip label="Parar depuração" side="top">
                                 <button className="icon-button small danger" type="button" aria-label="Parar depuração" disabled={debugRestarting || debugEnded} onClick={() => invoke(() => debugCommand("stop"))}><Square size={13} /></button>
+                              </ButtonTooltip>
+                            </>
+                          ) : tab.profile ? (
+                            <>
+                              <ButtonTooltip label="Executar perfil" side="top">
+                                <button
+                                  className="icon-button small"
+                                  type="button"
+                                  aria-label="Executar perfil nesta aba"
+                                  disabled={executionRunning}
+                                  onClick={() => invoke(() => runProfile(tab.profile!))}
+                                ><Play size={14} /></button>
+                              </ButtonTooltip>
+                              <ButtonTooltip label="Reexecutar perfil" side="top">
+                                <button
+                                  className="icon-button small"
+                                  type="button"
+                                  aria-label="Reexecutar perfil nesta aba"
+                                  disabled={executionRunning || !tab.execution}
+                                  onClick={() => invoke(() => runProfile(tab.profile!))}
+                                ><RotateCw size={13} /></button>
+                              </ButtonTooltip>
+                              <ButtonTooltip label="Parar execução" side="top">
+                                <button
+                                  className="icon-button small danger"
+                                  type="button"
+                                  aria-label="Parar execução"
+                                  disabled={!executionRunning}
+                                  onClick={() => invoke(() => stopProfileExecution(tab.profileId))}
+                                ><Square size={13} /></button>
                               </ButtonTooltip>
                             </>
                           ) : executionRunning ? (

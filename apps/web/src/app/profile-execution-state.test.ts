@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { HostProcessSnapshot } from "./runtime";
 import {
-  debugSessionForProfilePanel,
   nextPanelTabAfterClosingProfile,
   openProfileExecutionTab,
+  profileExecutionPanelTab,
   profileExecutionPanelTabId,
   profileExecutionOutput,
   profileExecutionStatusLabel,
@@ -48,46 +48,28 @@ function processSnapshot(input: Partial<HostProcessSnapshot> & {
 }
 
 describe("profile execution state", () => {
-  it("shows the newest mode when a profile switches from debug to normal execution", () => {
-    const debugSession = {
-      id: "debug-1",
-      adapterId: "python-pdb",
-      profileId: "django",
-      profileName: "Django",
-      status: "stopped" as const,
-      breakpoints: [],
-      frames: [],
-      scopes: [],
-      stdout: "debug-output",
-      stderr: "",
-      startedAt: 10,
-      finishedAt: 20,
-    };
-
-    expect(debugSessionForProfilePanel("django", undefined, debugSession)).toBe(debugSession);
-    expect(debugSessionForProfilePanel("django", {
-      profileId: "django",
-      profileName: "Django",
-      status: "running",
-      output: ["normal-output"],
-      startedAt: 30,
-    }, debugSession)).toBeUndefined();
-  });
-
-  it("uses stable reusable panel tab ids for profiles", () => {
-    const tabId = profileExecutionPanelTabId("python/dev server");
-    expect(tabId).toBe("execution-profile:python%2Fdev%20server");
+  it("uses independent panel tab ids for run and debug sessions", () => {
+    const tabId = profileExecutionPanelTabId("python/dev server", "run");
+    const debugTabId = profileExecutionPanelTabId("python/dev server", "debug");
+    expect(tabId).toBe("execution-profile:run:python%2Fdev%20server");
+    expect(debugTabId).toBe("execution-profile:debug:python%2Fdev%20server");
+    expect(profileExecutionPanelTab(tabId)).toEqual({ profileId: "python/dev server", mode: "run" });
+    expect(profileExecutionPanelTab(debugTabId)).toEqual({ profileId: "python/dev server", mode: "debug" });
     expect(profileIdFromExecutionPanelTab(tabId)).toBe("python/dev server");
     expect(profileIdFromExecutionPanelTab("output")).toBeUndefined();
-    expect(profileIdFromExecutionPanelTab("execution-profile:%E0%A4%A")).toBeUndefined();
+    expect(profileIdFromExecutionPanelTab("execution-profile:run:%E0%A4%A")).toBeUndefined();
   });
 
-  it("reuses an existing profile tab and selects a neighboring tab after close", () => {
-    expect(openProfileExecutionTab(["python"], "python")).toEqual(["python"]);
-    expect(openProfileExecutionTab(["python"], "node")).toEqual(["python", "node"]);
-    expect(nextPanelTabAfterClosingProfile(["python", "node", "django"], "node"))
-      .toBe(profileExecutionPanelTabId("django"));
-    expect(nextPanelTabAfterClosingProfile(["python"], "python")).toBe("output");
+  it("reuses only the same mode tab and selects a neighboring tab after close", () => {
+    const pythonRun = profileExecutionPanelTabId("python", "run");
+    const pythonDebug = profileExecutionPanelTabId("python", "debug");
+    const nodeRun = profileExecutionPanelTabId("node", "run");
+    expect(openProfileExecutionTab([pythonRun], "python", "run")).toEqual([pythonRun]);
+    expect(openProfileExecutionTab([pythonRun], "python", "debug")).toEqual([pythonRun, pythonDebug]);
+    expect(openProfileExecutionTab([pythonRun, pythonDebug], "node", "run"))
+      .toEqual([pythonRun, pythonDebug, nodeRun]);
+    expect(nextPanelTabAfterClosingProfile([pythonRun, pythonDebug, nodeRun], pythonDebug)).toBe(nodeRun);
+    expect(nextPanelTabAfterClosingProfile([pythonRun], pythonRun)).toBe("output");
   });
 
   it("restores independent state and output for any number of profiles", () => {
@@ -121,7 +103,9 @@ describe("profile execution state", () => {
     expect(restored.running).toEqual([
       expect.objectContaining({ profileId: "python", processId: "python-step" }),
     ]);
-    expect(restoredProfileExecutionTabIds(restored.states)).toEqual(["python"]);
+    expect(restoredProfileExecutionTabIds(restored.states)).toEqual([
+      profileExecutionPanelTabId("python", "run"),
+    ]);
   });
 
   it("keeps earlier steps while a resumed profile updates its running step", () => {

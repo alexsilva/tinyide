@@ -186,6 +186,7 @@ import {
 } from "./persistence";
 import { resolveSyntaxHighlighter, type SyntaxHighlighter } from "./generic-syntax";
 import {
+  debugAdapterProviders,
   debugAdapterForProfile,
   environmentProvider,
   hostProcessOutputLines,
@@ -211,6 +212,7 @@ import {
   textEditorLineDecorationProviders,
   workbenchResourceDescriptor,
 } from "./runtime";
+import { restoreActiveDebugSession } from "./debug-session-state";
 import {
   isDesktopHost,
   isDesktopWorkspaceHandle,
@@ -642,6 +644,34 @@ function ButtonTooltip({
       </Tooltip.Portal>
     </Tooltip.Root>
   );
+}
+
+function workspaceRelativeDebugPath(path: string | undefined, root: string | undefined): string | undefined {
+  if (!path) return undefined;
+  const normalized = path.replaceAll("\\", "/");
+  const normalizedRoot = root?.replaceAll("\\", "/").replace(/\/$/, "");
+  if (normalizedRoot && normalized.startsWith(`${normalizedRoot}/`)) return normalized.slice(normalizedRoot.length + 1);
+  return normalized.replace(/^\.\//, "");
+}
+
+function formattedDebugValue(value: string, type?: string): { text: string; kind: string } {
+  const normalizedType = type?.toLocaleLowerCase() ?? "";
+  const trimmed = value.trim();
+  const kind = normalizedType.includes("bool") || /^(true|false)$/i.test(trimmed)
+    ? "boolean"
+    : normalizedType.includes("int") || normalizedType.includes("float") || normalizedType.includes("number") || /^-?\d+(?:\.\d+)?$/.test(trimmed)
+      ? "number"
+      : normalizedType.includes("none") || normalizedType.includes("null") || /^(none|null|undefined)$/i.test(trimmed)
+        ? "null"
+        : normalizedType.includes("str") || normalizedType.includes("string")
+          ? "string"
+          : "object";
+  if (trimmed.length < 80 || !/^[\[{]/.test(trimmed)) return { text: value, kind };
+  try {
+    return { text: JSON.stringify(JSON.parse(trimmed), null, 2), kind };
+  } catch {
+    return { text: value, kind };
+  }
 }
 
 function GitBrandIcon() {
@@ -2232,6 +2262,7 @@ export function App() {
   const [debugBreakpoints, setDebugBreakpoints] = useState<readonly DebugBreakpoint[]>([]);
   const [debugSession, setDebugSession] = useState<DebugSessionSnapshot>();
   const [debugAdapter, setDebugAdapter] = useState<DebugAdapterProvider>();
+  const [debugRestartingProfileId, setDebugRestartingProfileId] = useState<string>();
   const [workspaceSettings, setWorkspaceSettings] = useState<WorkspaceSettings>(EMPTY_WORKSPACE_SETTINGS);
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -2275,6 +2306,7 @@ export function App() {
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const highlightedEditorScrollRef = useRef<HTMLDivElement | null>(null);
   const editorLineRulerRef = useRef<HTMLPreElement | null>(null);
+  const editorDebugCurrentLineRef = useRef<HTMLDivElement | null>(null);
   const editorHistoriesRef = useRef<Map<string, EditorHistory>>(new Map());
   const documentsRef = useRef<readonly OpenDocument[]>(documents);
   documentsRef.current = documents;
@@ -2283,6 +2315,7 @@ export function App() {
   const openProfileTabIdsRef = useRef(openProfileTabIds);
   openProfileTabIdsRef.current = openProfileTabIds;
   const profileRunCancellationRef = useRef(new Map<string, { cancelled: boolean }>());
+  const debugRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
   const workspaceSettingsRef = useRef<WorkspaceSettings>(EMPTY_WORKSPACE_SETTINGS);
   const workspaceSettingsWriteQueueRef = useRef<Promise<WorkspaceSettings>>(Promise.resolve(EMPTY_WORKSPACE_SETTINGS));
   const workbenchStateRef = useRef<WorkbenchStateSnapshot>({
@@ -2366,10 +2399,17 @@ export function App() {
   const selectedProfileExecution = selectedProfile ? profileExecutions[selectedProfile.id] : undefined;
   const selectedProfileRunning = selectedProfileExecution?.status === "running";
   const debugSessionActive = Boolean(debugSession && !["stopped", "completed", "failed"].includes(debugSession.status));
+  const activeDebugFrame = debugSession?.status === "paused"
+    ? debugSession.frames.find((frame) => frame.id === debugSession.selectedFrameId) ?? debugSession.frames[0]
+    : undefined;
+  const activeDebugPath = workspaceRelativeDebugPath(activeDebugFrame?.path, workspaceRoot);
+  const activeDebugLine = activeDebugFrame?.line;
   useEffect(() => {
     if (!debugSessionActive || !debugSession || !debugAdapter) return;
     const timer = window.setInterval(() => {
-      void debugAdapter.read(debugSession.id).then(setDebugSession).catch(() => undefined);
+      void debugAdapter.read(debugSession.id).then((snapshot) => {
+        setDebugSession((current) => current?.id === snapshot.id ? snapshot : current);
+      }).catch(() => undefined);
     }, 400);
     return () => window.clearInterval(timer);
   }, [debugSessionActive, debugSession?.id, debugAdapter]);
@@ -2954,21 +2994,44 @@ export function App() {
     setProfileExecutions({});
     setOpenProfileTabIds([]);
     setClosingProfileTabIds(new Set());
+    setDebugSession(undefined);
+    setDebugAdapter(undefined);
+    setDebugRestartingProfileId(undefined);
     profileRunCancellationRef.current.clear();
-    void listHostProcesses()
-      .then((processes) => {
+    debugRestartPromiseRef.current = undefined;
+    void Promise.all([
+      listHostProcesses(),
+      restoreActiveDebugSession(debugAdapterProviders()),
+    ])
+      .then(([processes, restoredDebug]) => {
         if (cancelled) return;
         const restoredProfiles = restoreProfileExecutions(processes);
-        const restoredTabIds = restoredProfileExecutionTabIds(restoredProfiles.states);
+        const restoredDebugSession = restoredDebug.current?.session;
+        const restoredTabIds = restoredDebugSession
+          ? openProfileExecutionTab(restoredProfileExecutionTabIds(restoredProfiles.states), restoredDebugSession.profileId)
+          : restoredProfileExecutionTabIds(restoredProfiles.states);
         setProfileExecutions(restoredProfiles.states);
         setOpenProfileTabIds(restoredTabIds);
+        if (restoredDebug.current) {
+          setDebugAdapter(restoredDebug.current.adapter);
+          setDebugSession(restoredDebug.current.session);
+        }
+        if (restoredDebug.errors.length) {
+          setError(restoredDebug.errors.map((item) => item.message).join("\n"));
+        }
         setPanelTab((current) => {
           const profileId = profileIdFromExecutionPanelTab(current);
           return profileId && !restoredTabIds.includes(profileId) ? "output" : current;
         });
         setResumedProfileProcesses(restoredProfiles.running);
         const latestRunningProfile = restoredProfiles.running.at(-1);
-        if (latestRunningProfile) {
+        const latestRunningProfileStartedAt = latestRunningProfile
+          ? restoredProfiles.states[latestRunningProfile.profileId]?.startedAt ?? 0
+          : 0;
+        if (restoredDebugSession && restoredDebugSession.startedAt >= latestRunningProfileStartedAt) {
+          setPanelVisible(true);
+          setPanelTab(profileExecutionPanelTabId(restoredDebugSession.profileId));
+        } else if (latestRunningProfile) {
           setPanelVisible(true);
           setPanelTab(profileExecutionPanelTabId(latestRunningProfile.profileId));
         }
@@ -3203,6 +3266,34 @@ export function App() {
     });
     setActiveDocumentId(document.id);
   };
+
+  useEffect(() => {
+    if (!activeDebugPath || !activeDebugLine || debugSession?.status !== "paused") return;
+    let cancelled = false;
+    void (async () => {
+      const opened = documents.find((document) => document.path === activeDebugPath);
+      if (!opened) {
+        const entry = findWorkspaceEntry(entries, activeDebugPath);
+        if (!entry || entry.kind !== "file") return;
+        await openEntry(entry);
+      } else {
+        setActiveDocumentId(opened.id);
+      }
+      if (cancelled) return;
+      const targetScrollTop = Math.max(0, 18 + (activeDebugLine - 1) * 21.45 - 120);
+      window.requestAnimationFrame(() => {
+        const scrollContainer = highlightedEditorScrollRef.current ?? editorRef.current;
+        if (!scrollContainer) return;
+        scrollContainer.scrollTop = targetScrollTop;
+        const actualScrollTop = scrollContainer.scrollTop;
+        syncEditorLineRuler(actualScrollTop);
+        setDocuments((current) => current.map((document) => document.path === activeDebugPath
+          ? { ...document, scrollTop: actualScrollTop }
+          : document));
+      });
+    })().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+    return () => { cancelled = true; };
+  }, [activeDebugPath, activeDebugLine, debugSession?.status]);
 
   const resourceContext = (entry: WorkspaceEntry): ResourceContext => ({
     kind: entry.kind,
@@ -3564,8 +3655,11 @@ export function App() {
   };
 
   const syncEditorLineRuler = (scrollTop: number) => {
+    editorDebugCurrentLineRef.current?.style.setProperty("--editor-scroll-top", `${scrollTop}px`);
     if (!editorLineRulerRef.current) return;
-    editorLineRulerRef.current.style.transform = `translate3d(0, -${scrollTop}px, 0)`;
+    const rulerViewport = editorLineRulerRef.current.parentElement;
+    if (!rulerViewport) return;
+    rulerViewport.scrollTop = scrollTop;
   };
 
   useEffect(() => {
@@ -4042,6 +4136,45 @@ export function App() {
   const debugCommand = async (command: "pause" | "resume" | "stepOver" | "stepInto" | "stepOut" | "stop") => {
     if (!debugSession || !debugAdapter) throw new Error("Nenhuma sessão de debug ativa.");
     setDebugSession(await sendDebugCommand(debugAdapter, debugSession.id, command));
+  };
+
+  const restartDebugSession = async (profileId: string) => {
+    if (debugRestartPromiseRef.current) return debugRestartPromiseRef.current;
+    const restart = (async () => {
+      const profile = profilesState.profiles.find((candidate) => candidate.id === profileId);
+      if (!profile) throw new Error("O perfil desta sessão não está mais disponível.");
+      if (!debugSession || !debugAdapter || debugSession.profileId !== profileId) {
+        throw new Error("Nenhuma sessão de debug correspondente está disponível para reiniciar.");
+      }
+      const previousSession = debugSession;
+      const previousAdapter = debugAdapter;
+      setDebugRestartingProfileId(profileId);
+      if (!["stopped", "completed", "failed"].includes(previousSession.status)) {
+        const stopped = await sendDebugCommand(previousAdapter, previousSession.id, "stop");
+        setDebugSession((current) => current?.id === previousSession.id ? stopped : current);
+      }
+      if (profile.saveBeforeRun && activeDocument && activeDocument.content !== activeDocument.savedContent) {
+        await saveDocument();
+      }
+      const started = await startDebugProfile({
+        profile,
+        ...(activeDocument ? { activeDocument } : {}),
+        environments,
+        breakpoints: debugBreakpoints,
+      });
+      setDebugAdapter(started.adapter);
+      setDebugSession(started.session);
+      setOpenProfileTabIds((current) => openProfileExecutionTab(current, profile.id));
+      setPanelVisible(true);
+      setPanelTab(profileExecutionPanelTabId(profile.id));
+    })();
+    debugRestartPromiseRef.current = restart;
+    try {
+      await restart;
+    } finally {
+      if (debugRestartPromiseRef.current === restart) debugRestartPromiseRef.current = undefined;
+      setDebugRestartingProfileId((current) => current === profileId ? undefined : current);
+    }
   };
 
   const runSelectedProfile = async () => {
@@ -5528,6 +5661,7 @@ export function App() {
                             const breakpoint = activeDocument?.path
                               ? debugBreakpoints.find((candidate) => candidate.path === activeDocument.path && candidate.line === line)
                               : undefined;
+                            const currentDebugLine = activeDocument?.path === activeDebugPath && activeDebugLine === line;
                             const decorations = editorDecorationsByLine.get(line) ?? [];
                             const changeDecoration = decorations.find((decoration) => decoration.change);
                             const tooltip = decorations
@@ -5536,11 +5670,12 @@ export function App() {
                               .join("\n");
                             const content = <>
                               <i className={`editor-line-ruler__marker${breakpoint ? " is-breakpoint" : ""}`} />
+                              <i className={`editor-line-ruler__execution-marker${currentDebugLine ? " is-current" : ""}`} />
                               {editorSettings.lineNumbers ? <b>{lineNumber}</b> : null}
                             </>;
                             return changeDecoration ? (
                               <button
-                                className={`editor-line-ruler__line${lineDecorationClassName(decorations)}`}
+                                className={`editor-line-ruler__line${lineDecorationClassName(decorations)}${currentDebugLine ? " is-debug-current" : ""}`}
                                 key={line}
                                 type="button"
                                 title={tooltip || undefined}
@@ -5552,7 +5687,7 @@ export function App() {
                               </button>
                             ) : (
                               <button
-                                className="editor-line-ruler__line"
+                                className={`editor-line-ruler__line${currentDebugLine ? " is-debug-current" : ""}`}
                                 key={line}
                                 type="button"
                                 aria-label={`${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${line}`}
@@ -5562,6 +5697,18 @@ export function App() {
                           })}
                         </pre>
                       </div>
+                    ) : null}
+                    {activeDocument && activeDocument.path === activeDebugPath && activeDebugLine ? (
+                      <div
+                        ref={editorDebugCurrentLineRef}
+                        className="editor-debug-current-line"
+                        aria-hidden="true"
+                        data-debug-line={activeDebugLine}
+                        style={{
+                          "--debug-line-content-top": `${18 + (activeDebugLine - 1) * 21.45}px`,
+                          "--editor-scroll-top": `${(highlightedEditorScrollRef.current ?? editorRef.current)?.scrollTop ?? activeDocument.scrollTop}px`,
+                        } as React.CSSProperties}
+                      />
                     ) : null}
                     {activeSyntaxHighlighter && activeDocument ? (
                       <div
@@ -5786,6 +5933,7 @@ export function App() {
                   const tabDebugSession = tab.debugSession;
                   const debugging = Boolean(tabDebugSession);
                   const debugEnded = Boolean(tabDebugSession && ["stopped", "completed", "failed"].includes(tabDebugSession.status));
+                  const debugRestarting = debugRestartingProfileId === tab.profileId;
                   const executionRunning = tab.execution?.status === "running";
                   return (
                     <div className="execution-panel-view" hidden={panelTab !== tab.tabId} key={tab.profileId}>
@@ -5798,21 +5946,24 @@ export function App() {
                                   className="icon-button small"
                                   type="button"
                                   aria-label={tabDebugSession.status === "paused" ? "Continuar depuração" : "Pausar depuração"}
-                                  disabled={debugEnded || !["running", "paused"].includes(tabDebugSession.status)}
+                                  disabled={debugRestarting || debugEnded || !["running", "paused"].includes(tabDebugSession.status)}
                                   onClick={() => invoke(() => debugCommand(tabDebugSession.status === "paused" ? "resume" : "pause"))}
                                 >{tabDebugSession.status === "paused" ? <Play size={14} /> : <Pause size={14} />}</button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Step over" side="top">
-                                <button className="icon-button small" type="button" aria-label="Step over" disabled={tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepOver"))}><StepForward size={14} /></button>
+                                <button className="icon-button small" type="button" aria-label="Step over" disabled={debugRestarting || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepOver"))}><StepForward size={14} /></button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Step into" side="top">
-                                <button className="icon-button small" type="button" aria-label="Step into" disabled={tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepInto"))}><CornerDownRight size={14} /></button>
+                                <button className="icon-button small" type="button" aria-label="Step into" disabled={debugRestarting || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepInto"))}><CornerDownRight size={14} /></button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Step out" side="top">
-                                <button className="icon-button small" type="button" aria-label="Step out" disabled={tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepOut"))}><CornerUpRight size={14} /></button>
+                                <button className="icon-button small" type="button" aria-label="Step out" disabled={debugRestarting || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepOut"))}><CornerUpRight size={14} /></button>
+                              </ButtonTooltip>
+                              <ButtonTooltip label="Reiniciar depuração" side="top">
+                                <button className="icon-button small" type="button" aria-label="Reiniciar depuração" disabled={debugRestarting} onClick={() => invoke(() => restartDebugSession(tab.profileId))}><RotateCw className={debugRestarting ? "is-spinning" : undefined} size={13} /></button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Parar depuração" side="top">
-                                <button className="icon-button small danger" type="button" aria-label="Parar depuração" disabled={debugEnded} onClick={() => invoke(() => debugCommand("stop"))}><Square size={13} /></button>
+                                <button className="icon-button small danger" type="button" aria-label="Parar depuração" disabled={debugRestarting || debugEnded} onClick={() => invoke(() => debugCommand("stop"))}><Square size={13} /></button>
                               </ButtonTooltip>
                             </>
                           ) : executionRunning ? (
@@ -5822,7 +5973,7 @@ export function App() {
                           ) : null}
                         </div>
                         <span className="execution-panel-toolbar__status">
-                          {tabDebugSession ? `Depuração · ${tabDebugSession.status}` : profileExecutionStatusLabel(tab.execution)}
+                          {tabDebugSession ? `Depuração · ${debugRestarting ? "reiniciando" : tabDebugSession.status}` : profileExecutionStatusLabel(tab.execution)}
                         </span>
                       </div>
                       {tabDebugSession ? (
@@ -5850,7 +6001,18 @@ export function App() {
                               {tabDebugSession.scopes.length ? tabDebugSession.scopes.map((scope) => (
                                 <div key={scope.name}>
                                   <strong>{scope.name}</strong>
-                                  <dl>{scope.variables.map((variable) => <div key={variable.name}><dt>{variable.name}</dt><dd>{variable.value}</dd></div>)}</dl>
+                                  <dl>{scope.variables.map((variable) => {
+                                    const formatted = formattedDebugValue(variable.value, variable.type);
+                                    return (
+                                      <div className="debug-variable" key={variable.name}>
+                                        <dt>
+                                          <span>{variable.name}</span>
+                                          {variable.type ? <small>{variable.type}</small> : null}
+                                        </dt>
+                                        <dd className={`is-${formatted.kind}`}>{formatted.text}</dd>
+                                      </div>
+                                    );
+                                  })}</dl>
                                 </div>
                               )) : <p>Nenhuma variável disponível.</p>}
                             </section>

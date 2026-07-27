@@ -344,6 +344,7 @@ export interface DebugAdapterProvider {
   readonly environmentProviderId?: string;
   readonly extensions?: readonly string[];
   supports(context: DebugAdapterContext): boolean;
+  list?(): Promise<readonly DebugSessionSnapshot[]>;
   launch(request: DebugLaunchRequest): Promise<DebugSessionSnapshot>;
   read(sessionId: string): Promise<DebugSessionSnapshot>;
   setBreakpoints(sessionId: string, breakpoints: readonly DebugBreakpoint[]): Promise<DebugSessionSnapshot>;

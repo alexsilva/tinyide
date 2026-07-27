@@ -122,6 +122,24 @@ function forceStopProcessTree(record) {
   });
 }
 
+function waitForProcessExit(record, timeoutMs) {
+  if (record.status !== "running") return Promise.resolve(true);
+  return Promise.race([
+    new Promise((resolveExit) => record.child.once("close", () => resolveExit(true))),
+    new Promise((resolveTimeout) => setTimeout(() => resolveTimeout(false), timeoutMs)),
+  ]);
+}
+
+async function stopProcessRecord(record, timeoutMs = 1_500) {
+  if (record.status !== "running") return;
+  record.stopRequested = true;
+  if (process.platform === "win32") forceStopProcessTree(record);
+  else signalProcessTree(record, "SIGTERM");
+  if (await waitForProcessExit(record, timeoutMs)) return;
+  forceStopProcessTree(record);
+  await waitForProcessExit(record, timeoutMs);
+}
+
 function workspaceSettingsPath(workspaceRoot) {
   return join(workspaceRoot, ".tinyide", "settings.json");
 }
@@ -211,7 +229,7 @@ export function createExecutionBackend({ workspaceRoot }) {
     return processSnapshot(record);
   }
 
-  return async function executionBackend(request, response, relativePath) {
+  const executionBackend = async function executionBackend(request, response, relativePath) {
     try {
       const workspaceRoot = resolvedWorkspaceRoot();
       if (request.method === "GET" && relativePath === "/context") {
@@ -254,24 +272,12 @@ export function createExecutionBackend({ workspaceRoot }) {
           return;
         }
         if (request.method === "DELETE") {
-          if (record.status === "running" && !record.stopRequested) {
-            record.stopRequested = true;
-            if (process.platform === "win32") {
-              forceStopProcessTree(record);
-            } else {
-              signalProcessTree(record, "SIGTERM");
-              setTimeout(() => {
-                try {
-                  forceStopProcessTree(record);
-                } catch (error) {
-                  record.stderr = appendOutput(
-                    record.stderr,
-                    `Falha ao encerrar a árvore de processos: ${error instanceof Error ? error.message : String(error)}\n`,
-                  );
-                }
-              }, 1500).unref();
-            }
-          }
+          if (record.status === "running" && !record.stopRequested) void stopProcessRecord(record).catch((error) => {
+            record.stderr = appendOutput(
+              record.stderr,
+              `Falha ao encerrar a árvore de processos: ${error instanceof Error ? error.message : String(error)}\n`,
+            );
+          });
           writeJson(response, 202, processSnapshot(record));
           return;
         }
@@ -281,4 +287,10 @@ export function createExecutionBackend({ workspaceRoot }) {
       writeJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
     }
   };
+  executionBackend.dispose = async () => {
+    const running = [...processes.values()].filter((record) => record.status === "running");
+    await Promise.allSettled(running.map((record) => stopProcessRecord(record)));
+    processes.clear();
+  };
+  return executionBackend;
 }

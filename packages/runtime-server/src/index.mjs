@@ -122,6 +122,14 @@ export function createTinyIdeRuntime(options) {
   const webRoot = options.webRoot ? resolve(options.webRoot) : undefined;
   const workspaceSearchRoot = resolve(options.workspaceSearchRoot ?? process.env.TINYIDE_WORKSPACES_ROOT ?? dirname(hostRoot));
   const backendHandlers = new Map();
+  async function disposeBackendHandler(handler) {
+    if (typeof handler?.dispose === "function") await handler.dispose();
+  }
+  async function disposeCachedBackends() {
+    const handlers = [...new Set([...backendHandlers.values()].map((entry) => entry.handler))];
+    backendHandlers.clear();
+    await Promise.allSettled(handlers.map(disposeBackendHandler));
+  }
   let manifestCache = { expiresAt: 0, descriptors: [] };
   function cachedPluginDescriptors() {
     const now = Date.now();
@@ -212,6 +220,10 @@ export function createTinyIdeRuntime(options) {
       const cacheKey = `${pluginId}:${activeWorkspaceRoot}`;
       const cached = backendHandlers.get(cacheKey);
       if (cached?.mtime === backendMtime) return cached.handler;
+      if (cached) {
+        backendHandlers.delete(cacheKey);
+        await disposeBackendHandler(cached.handler);
+      }
       const imported = await import(`${pathToFileURL(backendPath).href}?v=${backendMtime}`);
       if (typeof imported.createBackend !== "function") throw new Error(`Plugin backend must export createBackend(): ${pluginId}`);
       const handler = imported.createBackend({workspaceRoot: activeWorkspaceRoot});
@@ -247,9 +259,12 @@ export function createTinyIdeRuntime(options) {
     }
 
     if (request.method === "POST" && requestUrl.pathname === "/core-api/workspace") {
-      void readJson(request).then((payload) => {
-        activeWorkspaceRoot = resolveWorkspaceSelection(payload);
-        backendHandlers.clear();
+      void readJson(request).then(async (payload) => {
+        const nextWorkspaceRoot = resolveWorkspaceSelection(payload);
+        if (nextWorkspaceRoot !== activeWorkspaceRoot) {
+          await disposeCachedBackends();
+          activeWorkspaceRoot = nextWorkspaceRoot;
+        }
         writeJson(response, 200, {workspaceRoot: activeWorkspaceRoot});
       }).catch((error) => writeJson(
         response,
@@ -260,9 +275,10 @@ export function createTinyIdeRuntime(options) {
     }
 
     if (request.method === "DELETE" && requestUrl.pathname === "/core-api/workspace") {
-      activeWorkspaceRoot = undefined;
-      backendHandlers.clear();
-      writeJson(response, 204, undefined);
+      void disposeCachedBackends().then(() => {
+        activeWorkspaceRoot = undefined;
+        writeJson(response, 204, undefined);
+      }).catch((error) => writeJson(response, 500, {error: error instanceof Error ? error.message : String(error)}));
       return;
     }
 
@@ -348,12 +364,21 @@ export function createTinyIdeRuntime(options) {
     webRoot,
     get workspaceRoot() { return activeWorkspaceRoot; },
     setWorkspaceRoot(path) {
-      activeWorkspaceRoot = path ? resolve(path) : undefined;
-      backendHandlers.clear();
+      const nextWorkspaceRoot = path ? resolve(path) : undefined;
+      if (nextWorkspaceRoot !== activeWorkspaceRoot) {
+        activeWorkspaceRoot = nextWorkspaceRoot;
+        void disposeCachedBackends();
+      }
       return activeWorkspaceRoot;
     },
-    clearBackendCache() { backendHandlers.clear(); },
+    clearBackendCache() { return disposeCachedBackends(); },
     clearManifestCache() { manifestCache = { expiresAt: 0, descriptors: [] }; },
+    async dispose() {
+      await Promise.allSettled([
+        executionBackend.dispose?.(),
+        disposeCachedBackends(),
+      ]);
+    },
   };
 }
 
@@ -376,6 +401,7 @@ export async function startTinyIdeRuntime(options) {
     port: address.port,
     url: `http://127.0.0.1:${address.port}`,
     async close() {
+      await runtime.dispose();
       server.closeAllConnections?.();
       await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
     },

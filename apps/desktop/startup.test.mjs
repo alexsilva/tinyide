@@ -8,8 +8,12 @@ import { describe, expect, it, vi } from "vitest";
 
 const require = createRequire(import.meta.url);
 const {
+  applyLoginShellEnvironment,
+  installGracefulShutdown,
   installSingleInstanceGuard,
   installWindowVisibilityFallback,
+  loginShellEnvironment,
+  parseNullSeparatedEnvironment,
 } = require("./startup.cjs");
 
 function createWindow() {
@@ -58,6 +62,58 @@ function runInstalledLauncher(ozonePlatform) {
 }
 
 describe("desktop startup", () => {
+  it("packages complete plugin source trees required by frontend imports", () => {
+    const rootPackage = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+    expect(rootPackage.build.files).toContain("plugins/*/src/**/*");
+  });
+
+  it("uses package.json as the shared version source for the UI and Debian artifact", () => {
+    const rootPackage = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+    const viteConfig = readFileSync(new URL("../web/vite.config.mjs", import.meta.url), "utf8");
+    const applicationSource = readFileSync(new URL("../web/src/app/App.tsx", import.meta.url), "utf8");
+
+    expect(rootPackage.build.artifactName).toContain("${version}");
+    expect(viteConfig).toContain('readFileSync(join(hostRoot, "package.json"), "utf8")');
+    expect(applicationSource).toContain("import.meta.env.VITE_TINYIDE_APP_VERSION");
+    expect(applicationSource).not.toMatch(/Versão\s+0\.4\.0/);
+  });
+
+  it("parses and applies the login-shell environment used by graphical launches", () => {
+    expect(parseNullSeparatedEnvironment("PATH=/home/dev/.nvm/bin:/usr/bin\0NVM_BIN=/home/dev/.nvm/bin\0invalid\0"))
+      .toEqual({ PATH: "/home/dev/.nvm/bin:/usr/bin", NVM_BIN: "/home/dev/.nvm/bin" });
+
+    const spawnSyncFunction = vi.fn(() => ({
+      status: 0,
+      stdout: "PATH=/home/dev/.nvm/bin:/usr/bin\0NVM_BIN=/home/dev/.nvm/bin\0",
+    }));
+    expect(loginShellEnvironment({ shell: "/bin/bash", spawnSyncFunction })).toEqual({
+      PATH: "/home/dev/.nvm/bin:/usr/bin",
+      NVM_BIN: "/home/dev/.nvm/bin",
+    });
+    expect(spawnSyncFunction).toHaveBeenCalledWith(
+      "/bin/bash",
+      ["-ilc", "env -0"],
+      expect.objectContaining({ encoding: "utf8" }),
+    );
+
+    const targetEnvironment = { PATH: "/usr/bin" };
+    applyLoginShellEnvironment({ targetEnvironment, shell: "/bin/bash", spawnSyncFunction });
+    expect(targetEnvironment).toEqual({
+      PATH: "/home/dev/.nvm/bin:/usr/bin",
+      NVM_BIN: "/home/dev/.nvm/bin",
+    });
+  });
+
+  it("keeps the current environment when login-shell discovery fails", () => {
+    const targetEnvironment = { PATH: "/usr/bin" };
+    const loaded = applyLoginShellEnvironment({
+      targetEnvironment,
+      spawnSyncFunction: vi.fn(() => ({ status: 1, stdout: "" })),
+    });
+    expect(loaded).toEqual({});
+    expect(targetEnvironment).toEqual({ PATH: "/usr/bin" });
+  });
+
   it("exits immediately when another tinyIde instance already owns the lock", () => {
     const application = new EventEmitter();
     application.requestSingleInstanceLock = vi.fn(() => false);
@@ -82,6 +138,26 @@ describe("desktop startup", () => {
     expect(window.restore).toHaveBeenCalledOnce();
     expect(window.show).toHaveBeenCalledOnce();
     expect(window.focus).toHaveBeenCalledOnce();
+  });
+
+  it("waits for runtime cleanup before exiting the desktop process", async () => {
+    const application = new EventEmitter();
+    application.exit = vi.fn();
+    let releaseCleanup;
+    const cleanup = vi.fn(() => new Promise((resolve) => { releaseCleanup = resolve; }));
+    const shutdown = installGracefulShutdown(application, cleanup);
+    const event = { preventDefault: vi.fn() };
+
+    application.emit("before-quit", event);
+    application.emit("before-quit", event);
+    await Promise.resolve();
+    expect(event.preventDefault).toHaveBeenCalledTimes(2);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(application.exit).not.toHaveBeenCalled();
+
+    releaseCleanup();
+    await shutdown();
+    expect(application.exit).toHaveBeenCalledWith(0);
   });
 
   it("uses x11 when the installed launcher has no ozone environment override", () => {

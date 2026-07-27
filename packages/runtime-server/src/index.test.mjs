@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -36,6 +36,33 @@ async function fixture(options = {}) {
 }
 
 describe("runtime server hardening", () => {
+  it("terminates active execution process trees when the runtime closes", async () => {
+    const { runtime, root, workspaceRoot } = await fixture();
+    const pidPath = join(root, "child.pid");
+    const started = await fetch(`${runtime.url}/core-api/execution/processes`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        executable: process.execPath,
+        arguments: ["-e", `require('fs').writeFileSync(${JSON.stringify(pidPath)}, String(process.pid)); setInterval(() => {}, 1000)`],
+        workingDirectory: workspaceRoot,
+      }),
+    });
+    expect(started.status).toBe(201);
+    let childPid;
+    for (let attempt = 0; attempt < 50 && !childPid; attempt += 1) {
+      try { childPid = Number(await readFile(pidPath, "utf8")); } catch {}
+      if (!childPid) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(childPid).toBeGreaterThan(0);
+
+    await runtime.close();
+    const resource = resources.find((item) => item.runtime === runtime);
+    if (resource) resource.runtime = undefined;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(() => process.kill(childPid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+  });
+
   it("sets browser security headers and caches hashed assets immutably", async () => {
     const { runtime } = await fixture();
     const html = await fetch(runtime.url);
@@ -232,6 +259,56 @@ describe("runtime server hardening", () => {
     const second = await fetch(`${runtime.url}/plugin-api/sample/ping`).then((response) => response.json());
     expect(first).toMatchObject({ path: "/ping", requests: 1 });
     expect(second).toMatchObject({ path: "/ping", requests: 2 });
+  });
+
+  it("preserves plugin processes when reload restores the same workspace", async () => {
+    const { runtime, root, pluginsRoot, workspaceRoot } = await fixture();
+    const pluginRoot = join(pluginsRoot, "persistent");
+    const pidPath = join(root, "plugin-child.pid");
+    await mkdir(pluginRoot);
+    await writeFile(join(pluginRoot, "plugin.json"), JSON.stringify({
+      id: "persistent",
+      name: "Persistent",
+      version: "1.0.0",
+      entrypoints: { backend: "backend.mjs" },
+    }));
+    await writeFile(join(pluginRoot, "backend.mjs"), `
+      import { spawn } from "node:child_process";
+      import { writeFileSync } from "node:fs";
+      export function createBackend() {
+        const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+          detached: false,
+          stdio: "ignore",
+        });
+        writeFileSync(${JSON.stringify(pidPath)}, String(child.pid));
+        const handler = (_request, response) => response.end("ok");
+        handler.dispose = async () => {
+          if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+          await new Promise((resolve) => child.once("close", resolve));
+        };
+        return handler;
+      }
+    `);
+    runtime.clearManifestCache();
+
+    const activated = await fetch(`${runtime.url}/plugin-api/persistent/status`);
+    expect(activated.status).toBe(200);
+    const childPid = Number(await readFile(pidPath, "utf8"));
+    expect(childPid).toBeGreaterThan(0);
+
+    const restored = await fetch(`${runtime.url}/core-api/workspace`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "workspace", path: workspaceRoot }),
+    });
+    expect(restored.status).toBe(200);
+    expect(() => process.kill(childPid, 0)).not.toThrow();
+
+    await runtime.close();
+    const resource = resources.find((item) => item.runtime === runtime);
+    if (resource) resource.runtime = undefined;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(() => process.kill(childPid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
   });
 
   it("blocks plugin backends that escape their plugin directory", async () => {

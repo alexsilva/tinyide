@@ -2311,6 +2311,7 @@ export function App() {
   const [debugSession, setDebugSession] = useState<DebugSessionSnapshot>();
   const [debugAdapter, setDebugAdapter] = useState<DebugAdapterProvider>();
   const [debugRestartingProfileId, setDebugRestartingProfileId] = useState<string>();
+  const [restartingProfileId, setRestartingProfileId] = useState<string>();
   const [debugInspectorWidth, setDebugInspectorWidth] = useState<number>(DEFAULT_DEBUG_PANEL_LAYOUT.inspectorWidth);
   const [debugOutputWrap, setDebugOutputWrap] = useState<boolean>(DEFAULT_DEBUG_PANEL_LAYOUT.outputWrap);
   const [debugOutputFollowTail, setDebugOutputFollowTail] = useState<boolean>(DEFAULT_DEBUG_PANEL_LAYOUT.outputFollowTail);
@@ -2369,6 +2370,7 @@ export function App() {
   const openProfileTabIdsRef = useRef(openProfileTabIds);
   openProfileTabIdsRef.current = openProfileTabIds;
   const profileRunCancellationRef = useRef(new Map<string, { cancelled: boolean }>());
+  const profileRunPromiseRef = useRef(new Map<string, Promise<void>>());
   const debugRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
   const debugLayoutRef = useRef<HTMLDivElement | null>(null);
   const debugOutputRef = useRef<HTMLDivElement | null>(null);
@@ -3071,7 +3073,9 @@ export function App() {
     setDebugSession(undefined);
     setDebugAdapter(undefined);
     setDebugRestartingProfileId(undefined);
+    setRestartingProfileId(undefined);
     profileRunCancellationRef.current.clear();
+    profileRunPromiseRef.current.clear();
     debugRestartPromiseRef.current = undefined;
     void Promise.all([
       listHostProcesses(),
@@ -4274,9 +4278,9 @@ export function App() {
     }
   };
 
-  const runProfile = async (profile: ExecutionProfile) => {
+  const executeProfile = async (profile: ExecutionProfile, replaceRunning = false) => {
     if (!profile.steps.length) throw new Error("O perfil não possui etapas.");
-    if (profileExecutionsRef.current[profile.id]?.status === "running") {
+    if (!replaceRunning && profileExecutionsRef.current[profile.id]?.status === "running") {
       throw new Error(`O perfil '${profile.name}' já está em execução.`);
     }
     if (profile.saveBeforeRun && activeDocument && activeDocument.content !== activeDocument.savedContent) {
@@ -4386,6 +4390,20 @@ export function App() {
         return { ...current, [profile.id]: rest };
       });
     }
+  };
+
+  const runProfile = (profile: ExecutionProfile, replaceRunning = false): Promise<void> => {
+    const existingRun = profileRunPromiseRef.current.get(profile.id);
+    if (existingRun && !replaceRunning) {
+      return Promise.reject(new Error(`O perfil '${profile.name}' já está em execução.`));
+    }
+    const run = executeProfile(profile, replaceRunning);
+    profileRunPromiseRef.current.set(profile.id, run);
+    return run.finally(() => {
+      if (profileRunPromiseRef.current.get(profile.id) === run) {
+        profileRunPromiseRef.current.delete(profile.id);
+      }
+    });
   };
 
   const runSelectedProfile = async () => {
@@ -4654,6 +4672,24 @@ export function App() {
     if (cancellation) cancellation.cancelled = true;
     const processId = profileExecutionsRef.current[profileId]?.processId;
     if (processId) await stopHostProcess(processId);
+  };
+
+  const restartProfileExecution = async (profile: ExecutionProfile) => {
+    if (restartingProfileId === profile.id) return;
+    setRestartingProfileId(profile.id);
+    let restartedRun: Promise<void> | undefined;
+    try {
+      const existingRun = profileRunPromiseRef.current.get(profile.id);
+      const wasRunning = profileExecutionsRef.current[profile.id]?.status === "running";
+      if (wasRunning) await stopProfileExecution(profile.id);
+      if (existingRun) {
+        await existingRun.catch(() => undefined);
+      }
+      restartedRun = runProfile(profile, wasRunning && !existingRun);
+    } finally {
+      setRestartingProfileId((current) => current === profile.id ? undefined : current);
+    }
+    await restartedRun;
   };
 
   const closeProfileOutputTab = async (tabId: string) => {
@@ -6088,6 +6124,7 @@ export function App() {
                   const debugEnded = Boolean(tabDebugSession && ["stopped", "completed", "failed"].includes(tabDebugSession.status));
                   const debugRestarting = debugRestartingProfileId === tab.profileId;
                   const executionRunning = tab.execution?.status === "running";
+                  const executionRestarting = restartingProfileId === tab.profileId;
                   const outputOffsets = tabDebugSession
                     ? debugOutputOffsets[tabDebugSession.id] ?? EMPTY_DEBUG_OUTPUT_OFFSETS
                     : EMPTY_DEBUG_OUTPUT_OFFSETS;
@@ -6132,7 +6169,7 @@ export function App() {
                                   className="icon-button small"
                                   type="button"
                                   aria-label="Executar perfil nesta aba"
-                                  disabled={executionRunning}
+                                  disabled={executionRunning || executionRestarting}
                                   onClick={() => invoke(() => runProfile(tab.profile!))}
                                 ><Play size={14} /></button>
                               </ButtonTooltip>
@@ -6141,16 +6178,16 @@ export function App() {
                                   className="icon-button small"
                                   type="button"
                                   aria-label="Reexecutar perfil nesta aba"
-                                  disabled={executionRunning || !tab.execution}
-                                  onClick={() => invoke(() => runProfile(tab.profile!))}
-                                ><RotateCw size={13} /></button>
+                                  disabled={executionRestarting || !tab.execution}
+                                  onClick={() => invoke(() => restartProfileExecution(tab.profile!))}
+                                ><RotateCw className={executionRestarting ? "is-spinning" : undefined} size={13} /></button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Parar execução" side="top">
                                 <button
                                   className="icon-button small danger"
                                   type="button"
                                   aria-label="Parar execução"
-                                  disabled={!executionRunning}
+                                  disabled={!executionRunning || executionRestarting}
                                   onClick={() => invoke(() => stopProfileExecution(tab.profileId))}
                                 ><Square size={13} /></button>
                               </ButtonTooltip>
@@ -6341,7 +6378,7 @@ export function App() {
               </div>
               <div className="about-content">
                 <img className="about-logo" src="/icon.png" alt="Ícone do tinyIde" />
-                <span>Versão 0.4.0</span>
+                <span>Versão {import.meta.env.VITE_TINYIDE_APP_VERSION}</span>
                 <p>O núcleo permanece um editor de texto básico. Recursos de IDE são fornecidos por plugins independentes.</p>
               </div>
             </Dialog.Content>

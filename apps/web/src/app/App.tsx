@@ -2299,6 +2299,7 @@ export function App() {
   const [executableOptions, setExecutableOptions] = useState<readonly ExecutionProfileExecutableOption[]>([]);
   const [profilePresets, setProfilePresets] = useState<readonly ExecutionProfilePresetContribution[]>([]);
   const [busy, setBusy] = useState(false);
+  const [pageReloading, setPageReloading] = useState(false);
   const [activeProcessId, setActiveProcessId] = useState<string>();
   const [resumedProcessId, setResumedProcessId] = useState<string>();
   const [profileExecutions, setProfileExecutions] = useState<Readonly<Record<string, ProfileExecutionState>>>({});
@@ -5270,7 +5271,20 @@ export function App() {
                 onClick={() => invoke(startSelectedDebugProfile)}
               ><Bug size={15} /></button>
             </ButtonTooltip>
-            <button className="icon-button small" type="button" aria-label="Recarregar página" title="Recarregar página" onClick={() => location.reload()}><RotateCw size={14} /></button>
+          </div>
+          <div className="titlebar-corner">
+            <button
+              className="icon-button small titlebar-reload-button"
+              type="button"
+              aria-label="Recarregar página"
+              aria-busy={pageReloading}
+              title="Recarregar página"
+              disabled={pageReloading}
+              onClick={() => {
+                setPageReloading(true);
+                window.setTimeout(() => location.reload(), 450);
+              }}
+            ><RotateCw className={pageReloading ? "is-spinning" : undefined} size={14} /></button>
           </div>
         </header>
 

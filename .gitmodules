@@ -1,21 +1,21 @@
 [submodule "plugins/python"]
 	path = plugins/python
-	url = ./.repos/tinyide-python
+	url = git@github.com:alexsilva/tinyide.python.git
 [submodule "plugins/python-venv"]
 	path = plugins/python-venv
-	url = ./.repos/tinyide-python-venv
+	url = git@github.com:alexsilva/tinyide.python-venv.git
 [submodule "plugins/terminal"]
 	path = plugins/terminal
-	url = ./.repos/tinyide-terminal
+	url = git@github.com:alexsilva/tinyide.terminal.git
 [submodule "plugins/git"]
 	path = plugins/git
-	url = ./.repos/tinyide-git
+	url = git@github.com:alexsilva/tinyide.git.vcs.git
 [submodule "plugins/javascript"]
 	path = plugins/javascript
-	url = ./.repos/tinyide-javascript
+	url = git@github.com:alexsilva/tinyide.javascript.git
 [submodule "plugins/node-runtime"]
 	path = plugins/node-runtime
-	url = ./.repos/tinyide-node-runtime
+	url = git@github.com:alexsilva/tinyide.node-runtime.git
 [submodule "plugins/docker"]
 	path = plugins/docker
-	url = ./.repos/tinyide-docker
+	url = git@github.com:alexsilva/tinyide.docker.git

@@ -2294,6 +2294,9 @@ export function App() {
   const selectedProfile = profilesState.profiles.find((profile) => profile.id === profilesState.selectedId);
   const selectedProfileExecution = selectedProfile ? profileExecutions[selectedProfile.id] : undefined;
   const selectedProfileRunning = selectedProfileExecution?.status === "running";
+  const outputPanelStatusLabel = selectedProfile
+    ? profileExecutionStatusLabel(selectedProfileExecution)
+    : "Não executado";
   const visibleOutput = selectedProfile
     ? profileExecutionOutput(selectedProfile, selectedProfileExecution)
     : output;
@@ -5339,8 +5342,18 @@ export function App() {
                 <div className="resize-handle resize-handle--panel" role="separator" aria-label="Redimensionar painel inferior" onPointerDown={beginPanelResize} onDoubleClick={() => setPanelHeight(DEFAULT_LAYOUT.panelHeight)} />
                 <div className="panel-heading">
                   <div className="panel-tabs">
-                    <button className={`panel-tab${panelTab === "output" ? " active" : ""}`} type="button" onClick={() => setPanelTab("output")}>
-                      SAÍDA{selectedProfile ? ` · ${profileExecutionStatusLabel(selectedProfileExecution)}` : ""}
+                    <button
+                      aria-label={`Saída: ${outputPanelStatusLabel}`}
+                      className={`panel-tab${panelTab === "output" ? " active" : ""}`}
+                      title={`Saída: ${outputPanelStatusLabel}`}
+                      type="button"
+                      onClick={() => setPanelTab("output")}
+                    >
+                      SAÍDA
+                      <span
+                        aria-hidden="true"
+                        className={`panel-tab__execution-dot${selectedProfileRunning ? " is-running" : ""}`}
+                      />
                     </button>
                     <button className={`panel-tab${panelTab === "problems" ? " active" : ""}`} type="button" onClick={() => setPanelTab("problems")}>PROBLEMAS <span>{diagnostics.length}</span></button>
                     {workbenchPanels.map((panel) => (

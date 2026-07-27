@@ -152,6 +152,8 @@
 .panel-tab { border: 0; border-bottom: 2px solid transparent; background: transparent; color: #9da6b4; padding: 0 8px; font-size: 10px; letter-spacing: .07em; cursor: pointer; }
 .panel-tab.active { border-bottom-color: var(--accent); color: #eef2f8; }
 .panel-tab span { margin-left: 4px; }
+.panel-tab__execution-dot { display: inline-block; width: 7px; height: 7px; margin-left: 6px!important; border-radius: 50%; background: #68717f; box-shadow: 0 0 0 1px #11161d; vertical-align: middle; }
+.panel-tab__execution-dot.is-running { background: #58c77a; box-shadow: 0 0 0 1px #153521; }
 .panel-tab-group { display: flex; align-items: stretch; border-bottom: 2px solid transparent; }
 .panel-tab-group.active { border-bottom-color: var(--accent); }
 .panel-tab-group.active .panel-tab { color: #eef2f8; }

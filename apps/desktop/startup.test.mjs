@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 
 const require = createRequire(import.meta.url);
 const {
+  installSingleInstanceGuard,
   installWindowVisibilityFallback,
 } = require("./startup.cjs");
 
@@ -15,8 +16,11 @@ function createWindow() {
   const window = new EventEmitter();
   window.webContents = new EventEmitter();
   window.isDestroyed = vi.fn(() => false);
+  window.isMinimized = vi.fn(() => false);
   window.isVisible = vi.fn(() => false);
+  window.restore = vi.fn();
   window.show = vi.fn();
+  window.focus = vi.fn();
   return window;
 }
 
@@ -54,6 +58,32 @@ function runInstalledLauncher(ozonePlatform) {
 }
 
 describe("desktop startup", () => {
+  it("exits immediately when another tinyIde instance already owns the lock", () => {
+    const application = new EventEmitter();
+    application.requestSingleInstanceLock = vi.fn(() => false);
+    application.quit = vi.fn();
+
+    expect(installSingleInstanceGuard(application, () => undefined)).toBe(false);
+    expect(application.quit).toHaveBeenCalledOnce();
+    expect(application.listenerCount("second-instance")).toBe(0);
+  });
+
+  it("restores and focuses the existing window when a second instance starts", () => {
+    const application = new EventEmitter();
+    application.requestSingleInstanceLock = vi.fn(() => true);
+    application.quit = vi.fn();
+    const window = createWindow();
+    window.isMinimized.mockReturnValue(true);
+
+    expect(installSingleInstanceGuard(application, () => window)).toBe(true);
+    application.emit("second-instance");
+
+    expect(application.quit).not.toHaveBeenCalled();
+    expect(window.restore).toHaveBeenCalledOnce();
+    expect(window.show).toHaveBeenCalledOnce();
+    expect(window.focus).toHaveBeenCalledOnce();
+  });
+
   it("uses x11 when the installed launcher has no ozone environment override", () => {
     expect(runInstalledLauncher(undefined)).toEqual([
       "--ozone-platform=x11",

@@ -1,5 +1,26 @@
 const DEFAULT_WINDOW_SHOW_TIMEOUT_MS = 3_000;
 
+function focusExistingWindow(window) {
+  if (!window || window.isDestroyed()) return false;
+  if (window.isMinimized()) window.restore();
+  if (!window.isVisible()) window.show();
+  window.focus();
+  return true;
+}
+
+function installSingleInstanceGuard(application, getWindow) {
+  const isPrimaryInstance = application.requestSingleInstanceLock();
+  if (!isPrimaryInstance) {
+    application.quit();
+    return false;
+  }
+
+  application.on("second-instance", () => {
+    focusExistingWindow(getWindow());
+  });
+  return true;
+}
+
 function installWindowVisibilityFallback(window, {
   timeoutMs = DEFAULT_WINDOW_SHOW_TIMEOUT_MS,
   waitForRendererReady = false,
@@ -34,5 +55,7 @@ function installWindowVisibilityFallback(window, {
 
 module.exports = {
   DEFAULT_WINDOW_SHOW_TIMEOUT_MS,
+  focusExistingWindow,
+  installSingleInstanceGuard,
   installWindowVisibilityFallback,
 };

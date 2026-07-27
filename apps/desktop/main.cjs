@@ -5,7 +5,7 @@ const { mkdir, readFile, readdir, rm, stat, writeFile } = require("node:fs/promi
 const { basename, dirname, join, resolve } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { allowedExternalUrl, safeWorkspacePath: resolveSafeWorkspacePath, sameOriginUrl } = require("./security.cjs");
-const { installWindowVisibilityFallback } = require("./startup.cjs");
+const { installSingleInstanceGuard, installWindowVisibilityFallback } = require("./startup.cjs");
 const { readDesktopState, removeDesktopState, writeDesktopState } = require("./state-store.cjs");
 
 let runtime;
@@ -217,22 +217,26 @@ function createWindow(url) {
   return window;
 }
 
-app.whenReady().then(async () => {
-  installDesktopFileSystemHandlers();
-  runtime = await startRuntime();
-  mainWindow = createWindow(runtime.url);
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow(runtime.url);
+const isPrimaryInstance = installSingleInstanceGuard(app, () => mainWindow);
+
+if (isPrimaryInstance) {
+  app.whenReady().then(async () => {
+    installDesktopFileSystemHandlers();
+    runtime = await startRuntime();
+    mainWindow = createWindow(runtime.url);
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow(runtime.url);
+    });
+  }).catch((error) => {
+    console.error(error);
+    app.exit(1);
   });
-}).catch((error) => {
-  console.error(error);
-  app.exit(1);
-});
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") app.quit();
+  });
 
-app.on("before-quit", () => {
-  if (runtime) void runtime.close().catch(() => undefined);
-});
+  app.on("before-quit", () => {
+    if (runtime) void runtime.close().catch(() => undefined);
+  });
+}

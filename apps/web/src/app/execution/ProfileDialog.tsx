@@ -139,9 +139,10 @@ export function ProfileDialog({
   };
 
   const removeProfile = (id: string) => {
-    setDrafts((current) => current.filter((profile) => profile.id !== id));
+    const nextDrafts = drafts.filter((profile) => profile.id !== id);
+    setDrafts(nextDrafts);
     setParameterDrafts((current) => Object.fromEntries(Object.entries(current).filter(([profileId]) => profileId !== id)));
-    if (editingId === id) setEditingId(undefined);
+    if (editingId === id) setEditingId(nextDrafts[0]?.id);
     setRemovalId(undefined);
   };
 
@@ -446,9 +447,6 @@ export function ProfileDialog({
                       />
                       Continuar após falha
                     </label>
-                  </section>
-
-                  <div className="dialog-footer">
                     <label className="check-row">
                       <input
                         type="checkbox"
@@ -457,19 +455,7 @@ export function ProfileDialog({
                       />
                       Salvar antes de executar
                     </label>
-                    <div className="dialog-actions">
-                      <Dialog.Close asChild>
-                        <button className="button secondary" type="button">Cancelar</button>
-                      </Dialog.Close>
-                      <button
-                        className="button primary"
-                        type="button"
-                        onClick={saveProfiles}
-                      >
-                        <Save size={15} /> Salvar perfis
-                      </button>
-                    </div>
-                  </div>
+                  </section>
                 </>
               ) : (
                 <div className="empty-panel">
@@ -478,6 +464,14 @@ export function ProfileDialog({
                 </div>
               )}
             </div>
+          </div>
+          <div className="profile-dialog__footer">
+            <Dialog.Close asChild>
+              <button className="button secondary" type="button">Cancelar</button>
+            </Dialog.Close>
+            <button className="button primary" type="button" onClick={saveProfiles}>
+              <Save size={15} /> Salvar alterações
+            </button>
           </div>
           {removalProfile ? (
             <div className="profile-removal-backdrop" role="presentation">
@@ -499,4 +493,3 @@ export function ProfileDialog({
     </Dialog.Root>
   );
 }
-

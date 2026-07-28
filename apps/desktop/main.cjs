@@ -4,6 +4,7 @@ const { existsSync, statSync } = require("node:fs");
 const { mkdir, readFile, readdir, rm, stat, writeFile } = require("node:fs/promises");
 const { basename, dirname, join, resolve } = require("node:path");
 const { pathToFileURL } = require("node:url");
+const { openInSystemFileManager } = require("./file-manager.cjs");
 const { allowedExternalUrl, safeWorkspacePath: resolveSafeWorkspacePath, sameOriginUrl } = require("./security.cjs");
 const { applyLoginShellEnvironment, installGracefulShutdown, installSingleInstanceGuard, installWindowVisibilityFallback } = require("./startup.cjs");
 const { readDesktopState, removeDesktopState, writeDesktopState } = require("./state-store.cjs");
@@ -160,10 +161,7 @@ function installDesktopFileSystemHandlers() {
   ipcMain.handle("tinyide:workspace:open-in-file-manager", async (_event, rootPath, workspacePath) => {
     const target = await safeRegisteredWorkspacePath(rootPath, workspacePath);
     const targetInfo = await stat(target);
-    const directory = targetInfo.isDirectory() ? target : dirname(target);
-    const failure = await shell.openPath(directory);
-    if (failure) throw new Error(failure);
-    return true;
+    return openInSystemFileManager(shell, target, targetInfo);
   });
 }
 

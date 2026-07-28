@@ -3,6 +3,7 @@ import {
   listDirectory,
   inspectBrowserFile,
   copyWorkspaceEntry,
+  copyWorkspaceEntries,
   moveWorkspaceEntry,
   readFileDocument,
   renameWorkspaceEntry,
@@ -427,7 +428,7 @@ describe("browser filesystem", () => {
     expect(nestedRemoveEntry).toHaveBeenCalledWith("nested.py", { recursive: false });
   });
 
-  it("copies files and directories without overwriting existing workspace entries", async () => {
+  it("copies batches of files and directories without overwriting existing workspace entries", async () => {
     const sourceFile = fileHandle("main.py", "print('ok')");
     const sourceDirectory = directoryHandle("assets", [fileHandle("logo.txt", "logo")]);
     const copiedFiles = new Map<string, BrowserFileHandle>();
@@ -469,13 +470,16 @@ describe("browser filesystem", () => {
     };
     const root = directoryHandle("root", [sourceFile, sourceDirectory, target]);
 
-    await expect(copyWorkspaceEntry(root, "main.py", "target")).resolves.toBe("target/main.py");
+    await expect(copyWorkspaceEntries(root, ["main.py", "assets"], "target")).resolves.toEqual([
+      "target/main.py",
+      "target/assets",
+    ]);
     await expect(copyWorkspaceEntry(root, "main.py", "target")).resolves.toBe("target/main copia.py");
-    await expect(copyWorkspaceEntry(root, "assets", "target")).resolves.toBe("target/assets");
     expect(copiedFiles.has("main.py")).toBe(true);
     expect(copiedFiles.has("main copia.py")).toBe(true);
     expect(copiedDirectories.has("assets")).toBe(true);
-    await expect(copyWorkspaceEntry(root, "assets", "assets/nested")).rejects.toThrow("dentro dela mesma");
+    await expect(copyWorkspaceEntries(root, ["main.py", "assets"], "assets/nested"))
+      .rejects.toThrow("dentro dela mesma");
   });
 
   it("closes the stream even when writing fails", async () => {

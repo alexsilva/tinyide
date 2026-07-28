@@ -278,6 +278,25 @@ export async function copyWorkspaceEntry(
   return targetDirectoryPath ? `${targetDirectoryPath}/${targetName}` : targetName;
 }
 
+export async function copyWorkspaceEntries(
+  workspaceHandle: BrowserDirectoryHandle,
+  sourcePaths: readonly string[],
+  targetDirectoryPath: string,
+): Promise<readonly string[]> {
+  const paths = [...new Set(sourcePaths)].filter(Boolean);
+  for (const sourcePath of paths) {
+    if (targetDirectoryPath === sourcePath || targetDirectoryPath.startsWith(`${sourcePath}/`)) {
+      throw new Error("Não é possível copiar uma pasta para dentro dela mesma.");
+    }
+  }
+
+  const copiedPaths: string[] = [];
+  for (const sourcePath of paths) {
+    copiedPaths.push(await copyWorkspaceEntry(workspaceHandle, sourcePath, targetDirectoryPath));
+  }
+  return copiedPaths;
+}
+
 export async function renameWorkspaceEntry(
   workspaceHandle: BrowserDirectoryHandle,
   path: string,

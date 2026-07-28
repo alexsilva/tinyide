@@ -133,7 +133,7 @@ import type {
 } from "@tinyide/plugin-api";
 import {
   browserFileSystemAccessError,
-  copyWorkspaceEntry,
+  copyWorkspaceEntries,
   isBrowserFileSystemAccessDenied,
   listDirectory,
   moveWorkspaceEntry,
@@ -148,6 +148,15 @@ import {
   type OpenDocument,
   type WorkspaceEntry,
 } from "../browser-filesystem";
+
+type ExplorerClipboardEntry = Pick<WorkspaceEntry, "path" | "name" | "kind">;
+
+function explorerPasteLabel(entries: readonly ExplorerClipboardEntry[]): string {
+  if (entries.length === 1) {
+    return `Colar ${entries[0]?.kind === "directory" ? "pasta" : "arquivo"}`;
+  }
+  return `Colar ${entries.length} itens`;
+}
 
 export function editorToolbarDocumentSnapshot(document: OpenDocument): TextEditorDocumentSnapshot {
   return {
@@ -597,7 +606,7 @@ export function App() {
   const [explorerRenameName, setExplorerRenameName] = useState("");
   const [explorerRenameError, setExplorerRenameError] = useState<string>();
   const [explorerPendingDeletion, setExplorerPendingDeletion] = useState<readonly WorkspaceEntry[]>();
-  const [explorerClipboard, setExplorerClipboard] = useState<Pick<WorkspaceEntry, "path" | "name" | "kind"> | undefined>(undefined);
+  const [explorerClipboard, setExplorerClipboard] = useState<readonly ExplorerClipboardEntry[] | undefined>(undefined);
   const [highlightedExplorerPath, setHighlightedExplorerPath] = useState<string>();
   const [selectedExplorerPath, setSelectedExplorerPath] = useState<string>();
   const [selectedExplorerPaths, setSelectedExplorerPaths] = useState<ReadonlySet<string>>(new Set());
@@ -618,7 +627,7 @@ export function App() {
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const explorerHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const explorerHistoryRef = useRef<ExplorerHistoryState>(createExplorerHistoryState());
-  const explorerClipboardRef = useRef<Pick<WorkspaceEntry, "path" | "name" | "kind"> | undefined>(undefined);
+  const explorerClipboardRef = useRef<readonly ExplorerClipboardEntry[] | undefined>(undefined);
   explorerClipboardRef.current = explorerClipboard;
   const browserResolverRef = useRef<((path: string | undefined) => void) | undefined>(undefined);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1944,7 +1953,7 @@ export function App() {
       },
       ...(explorerClipboard ? [{
         id: "core.root.paste",
-        label: `Colar ${explorerClipboard.kind === "directory" ? "pasta" : "arquivo"}`,
+        label: explorerPasteLabel(explorerClipboard),
         command: "core.root.paste",
         group: "clipboard",
         order: 120,
@@ -2022,14 +2031,16 @@ export function App() {
         order: 100,
         icon: "copy" as const,
       }] : []),
-      ...(!isBulkSelection ? [{
+      ...[{
         id: "core.copyEntry",
-        label: entry.kind === "directory" ? "Copiar pasta" : "Copiar arquivo",
+        label: isBulkSelection
+          ? `Copiar ${selectedEntries.length} itens`
+          : entry.kind === "directory" ? "Copiar pasta" : "Copiar arquivo",
         command: "core.resource.copyEntry",
         group: "clipboard",
         order: 90,
         icon: "copy" as const,
-      }] : []),
+      }],
       ...(!isBulkSelection ? [{
         id: "core.copyAbsolutePath",
         label: "Copiar caminho absoluto",
@@ -2041,7 +2052,7 @@ export function App() {
       }] : []),
       ...(!isBulkSelection && explorerClipboard ? [{
         id: "core.resource.paste",
-        label: `Colar ${explorerClipboard.kind === "directory" ? "pasta" : "arquivo"}`,
+        label: explorerPasteLabel(explorerClipboard),
         command: "core.resource.paste",
         group: "clipboard",
         order: 120,
@@ -2889,20 +2900,29 @@ export function App() {
     setSelectedExplorerPaths(new Set());
   };
 
-  const copyExplorerEntry = (entry: WorkspaceEntry) => {
-    setExplorerClipboard({ path: entry.path, name: entry.name, kind: entry.kind });
-    setSelectedExplorerPath(entry.path);
-    setSelectedExplorerPaths(new Set([entry.path]));
+  const copyExplorerEntries = (sourceEntries: readonly WorkspaceEntry[]) => {
+    const clipboard = topLevelWorkspacePaths(sourceEntries.map((entry) => entry.path))
+      .map((path) => sourceEntries.find((entry) => entry.path === path))
+      .filter((entry): entry is WorkspaceEntry => Boolean(entry))
+      .map(({ path, name, kind }) => ({ path, name, kind }));
+    if (clipboard.length === 0) return;
+    explorerClipboardRef.current = clipboard;
+    setExplorerClipboard(clipboard);
   };
 
-  const pasteExplorerEntry = async (targetDirectoryPath: string) => {
-    const source = explorerClipboardRef.current;
-    if (!source || !workspaceHandle) return;
-    const nextPath = await copyWorkspaceEntry(workspaceHandle, source.path, targetDirectoryPath);
+  const pasteExplorerEntries = async (targetDirectoryPath: string) => {
+    const sources = explorerClipboardRef.current;
+    if (!sources?.length || !workspaceHandle) return;
+    const nextPaths = await copyWorkspaceEntries(
+      workspaceHandle,
+      topLevelWorkspacePaths(sources.map((source) => source.path)),
+      targetDirectoryPath,
+    );
     const nextExpanded = new Set(expanded);
     if (targetDirectoryPath) nextExpanded.add(targetDirectoryPath);
     setExpanded(nextExpanded);
-    setSelectedExplorerPath(nextPath);
+    setSelectedExplorerPath(nextPaths.at(-1));
+    setSelectedExplorerPaths(new Set(nextPaths));
     await refreshExplorer(nextExpanded);
   };
 
@@ -2913,11 +2933,16 @@ export function App() {
       if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
         || (target instanceof HTMLElement && target.isContentEditable)) return;
       const selectedPath = selectedExplorerPath;
-      if (event.key.toLocaleLowerCase() === "c" && selectedPath && selectedExplorerPaths.size === 1) {
-        const entry = findWorkspaceEntry(entries, selectedPath);
-        if (!entry) return;
+      if (event.key.toLocaleLowerCase() === "c") {
+        const paths = selectedExplorerPaths.size > 0
+          ? topLevelWorkspacePaths(selectedExplorerPaths)
+          : selectedPath ? [selectedPath] : [];
+        const selectedEntries = paths
+          .map((path) => findWorkspaceEntry(entries, path))
+          .filter((entry): entry is WorkspaceEntry => Boolean(entry));
+        if (selectedEntries.length === 0) return;
         event.preventDefault();
-        copyExplorerEntry(entry);
+        copyExplorerEntries(selectedEntries);
         return;
       }
       if (event.key.toLocaleLowerCase() !== "v" || !explorerClipboardRef.current) return;
@@ -2926,7 +2951,7 @@ export function App() {
         ? selected.kind === "directory" ? selected.path : workspacePathParent(selected.path)
         : "";
       event.preventDefault();
-      void pasteExplorerEntry(targetDirectoryPath).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+      void pasteExplorerEntries(targetDirectoryPath).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -3330,7 +3355,7 @@ export function App() {
         return;
       }
       if (item.command === "core.root.paste") {
-        await pasteExplorerEntry("");
+        await pasteExplorerEntries("");
         return;
       }
       if (!item.command) throw new Error(`A ação '${item.id}' não possui executor.`);
@@ -3371,7 +3396,13 @@ export function App() {
         return;
       }
       if (item.command === "core.resource.copyEntry") {
-        copyExplorerEntry(entry);
+        const paths = selectedExplorerPaths.has(entry.path) ? selectedExplorerPaths : new Set([entry.path]);
+        const selectedEntries = topLevelWorkspacePaths(paths)
+          .map((path) => findWorkspaceEntry(entries, path))
+          .filter((candidate): candidate is WorkspaceEntry => Boolean(candidate));
+        copyExplorerEntries(selectedEntries);
+        setSelectedExplorerPath(entry.path);
+        setSelectedExplorerPaths(new Set(selectedEntries.map((candidate) => candidate.path)));
         return;
       }
       if (item.command === "core.resource.copyAbsolutePath") {
@@ -3384,7 +3415,7 @@ export function App() {
         return;
       }
       if (item.command === "core.resource.paste") {
-        await pasteExplorerEntry(entry.kind === "directory" ? entry.path : workspacePathParent(entry.path));
+        await pasteExplorerEntries(entry.kind === "directory" ? entry.path : workspacePathParent(entry.path));
         return;
       }
       if (item.command?.startsWith("core.resource.newFile")) {

@@ -41,6 +41,7 @@ import type {
 } from "@tinyide/plugin-api";
 import { AppPluginHost } from "./plugin-host";
 import { getActiveHostWorkspaceRoot } from "./host-workspace-state";
+import { createOutputFollowControl } from "./output-follow";
 
 const PLATFORM_VERSION = "0.4.0";
 const STORAGE_KEY = "tinyide.react.plugins.v1";
@@ -110,6 +111,10 @@ class AppWorkbenchApi implements WorkbenchApi {
       if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
       await this.#binding.openWorkspaceResource(request);
     },
+  };
+
+  readonly output = {
+    createFollowControl: createOutputFollowControl,
   };
 
   bind(binding: WorkbenchBinding): Disposable {

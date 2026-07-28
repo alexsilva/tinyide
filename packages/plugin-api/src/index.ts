@@ -751,11 +751,31 @@ export interface WorkbenchWorkspaceApi {
   openResource(request: WorkbenchWorkspaceResourceOpenRequest): Promise<void>;
 }
 
+export interface WorkbenchOutputFollowOptions {
+  readonly label?: string;
+  readonly checked?: boolean;
+  readonly className?: string;
+  follow(): void;
+}
+
+export interface WorkbenchOutputFollowControl extends Disposable {
+  readonly element: HTMLLabelElement;
+  readonly input: HTMLInputElement;
+  readonly following: boolean;
+  setFollowing(value: boolean): void;
+  notify(): void;
+}
+
+export interface WorkbenchOutputApi {
+  createFollowControl(options: WorkbenchOutputFollowOptions): WorkbenchOutputFollowControl;
+}
+
 export interface WorkbenchApi {
   readonly dialogs: WorkbenchDialogApi;
   readonly editor: WorkbenchTextEditorApi;
   readonly text: WorkbenchTextApi;
   readonly workspace: WorkbenchWorkspaceApi;
+  readonly output: WorkbenchOutputApi;
   openSidebar(id: string): void;
   openToolWindow(id: string, viewId?: string): void;
 }

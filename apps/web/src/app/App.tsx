@@ -61,6 +61,7 @@ import {
 } from "react";
 import { formatCommandLineArguments, parseCommandLineArguments } from "@tinyide/core";
 import { createWorkbenchTabApi } from "./workbench-tabs";
+import { scrollOutputToEnd } from "./output-follow";
 import {
   TEXT_EDITOR_DOCUMENT_CHANGED_EVENT,
   TEXT_EDITOR_DOCUMENT_SAVED_EVENT,
@@ -2382,6 +2383,23 @@ function EnvironmentPackageManager({
   );
 }
 
+function FollowedExecutionOutput({
+  text,
+  following,
+}: {
+  readonly text: string;
+  readonly following: boolean;
+}) {
+  const outputRef = useRef<HTMLPreElement>(null);
+
+  useEffect(() => {
+    if (!following) return;
+    window.requestAnimationFrame(() => scrollOutputToEnd(outputRef.current));
+  }, [text, following]);
+
+  return <pre ref={outputRef} className="execution-panel-output">{text}</pre>;
+}
+
 export function App() {
   const initialSession = useMemo(() => readSession(), []);
   const [platformSnapshot, setPlatformSnapshot] = useState(() => platform.snapshot());
@@ -2405,6 +2423,13 @@ export function App() {
   const [draggingActivityButtonKey, setDraggingActivityButtonKey] = useState<string>();
   const [toolWindowViewRequest, setToolWindowViewRequest] = useState<WorkbenchToolWindowViewRequest>();
   const toolWindowViewRequestSequenceRef = useRef(0);
+  // A região inferior mostra apenas um painel horizontal por vez: abrir a saída de
+  // execução/debug oculta a tool window ativa (e vice-versa).
+  const revealExecutionPanel = useCallback((tabId?: string) => {
+    setToolWindowVisible(false);
+    if (tabId) setPanelTab(tabId);
+    setPanelVisible(true);
+  }, []);
   const [workspaceHandle, setWorkspaceHandle] = useState<BrowserDirectoryHandle>();
   const [workspaceName, setWorkspaceName] = useState(initialSession.workspaceName);
   const [workspaceRoot, setWorkspaceRoot] = useState<string | undefined>(initialSession.workspaceRoot);
@@ -2438,6 +2463,7 @@ export function App() {
   const [activeProcessId, setActiveProcessId] = useState<string>();
   const [resumedProcessId, setResumedProcessId] = useState<string>();
   const [profileExecutions, setProfileExecutions] = useState<Readonly<Record<string, ProfileExecutionState>>>({});
+  const [profileOutputFollowing, setProfileOutputFollowing] = useState<Readonly<Record<string, boolean>>>({});
   const [openProfileTabIds, setOpenProfileTabIds] = useState<readonly string[]>([]);
   const [closingProfileTabIds, setClosingProfileTabIds] = useState<ReadonlySet<string>>(new Set());
   const [resumedProfileProcesses, setResumedProfileProcesses] = useState<readonly ResumedProfileProcess[]>([]);
@@ -3333,11 +3359,9 @@ export function App() {
           ? restoredProfiles.states[latestRunningProfile.profileId]?.startedAt ?? 0
           : 0;
         if (restoredDebugSession && restoredDebugSession.startedAt >= latestRunningProfileStartedAt) {
-          setPanelVisible(true);
-          setPanelTab(profileExecutionPanelTabId(restoredDebugSession.profileId, "debug"));
+          revealExecutionPanel(profileExecutionPanelTabId(restoredDebugSession.profileId, "debug"));
         } else if (latestRunningProfile) {
-          setPanelVisible(true);
-          setPanelTab(profileExecutionPanelTabId(latestRunningProfile.profileId, "run"));
+          revealExecutionPanel(profileExecutionPanelTabId(latestRunningProfile.profileId, "run"));
         }
         const running = processes
           .filter((process) => process.status === "running" && process.presentation?.kind !== "profile")
@@ -3354,7 +3378,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [restorationComplete, workspaceRoot]);
+  }, [restorationComplete, workspaceRoot, revealExecutionPanel]);
 
   useEffect(() => {
     if (!resumedProfileProcesses.length) return;
@@ -4566,9 +4590,8 @@ export function App() {
     setDebugSession(started.session);
     const tabId = profileExecutionPanelTabId(selectedProfile.id, "debug");
     setOpenProfileTabIds((current) => openProfileExecutionTab(current, selectedProfile.id, "debug"));
-    setPanelVisible(true);
     setPanelHeight((current) => Math.max(current, 420));
-    setPanelTab(tabId);
+    revealExecutionPanel(tabId);
   };
 
   const debugCommand = async (command: "pause" | "resume" | "stepOver" | "stepInto" | "stepOut" | "stop") => {
@@ -4604,8 +4627,7 @@ export function App() {
       setDebugSession(started.session);
       const tabId = profileExecutionPanelTabId(profile.id, "debug");
       setOpenProfileTabIds((current) => openProfileExecutionTab(current, profile.id, "debug"));
-      setPanelVisible(true);
-      setPanelTab(tabId);
+      revealExecutionPanel(tabId);
     })();
     debugRestartPromiseRef.current = restart;
     try {
@@ -4640,9 +4662,7 @@ export function App() {
     }));
     const tabId = profileExecutionPanelTabId(profile.id, "run");
     setOpenProfileTabIds((current) => openProfileExecutionTab(current, profile.id, "run"));
-    setToolWindowVisible(false);
-    setPanelVisible(true);
-    setPanelTab(tabId);
+    revealExecutionPanel(tabId);
     try {
       const result = await runExecutionProfile({
         profile,
@@ -4786,9 +4806,7 @@ export function App() {
     const tabId = profileExecutionPanelTabId(executionId, "run");
     setOpenProfileTabIds((current) => openProfileExecutionTab(current, executionId, "run"));
     setBusy(true);
-    setToolWindowVisible(false);
-    setPanelVisible(true);
-    setPanelTab(tabId);
+    revealExecutionPanel(tabId);
     try {
       const result = await runScript({
         contribution,
@@ -5600,9 +5618,7 @@ export function App() {
       setPanelVisible(false);
       return;
     }
-    setToolWindowVisible(false);
-    setPanelTab(targetTabId);
-    setPanelVisible(true);
+    revealExecutionPanel(targetTabId);
   };
 
   const closeToolWindow = useCallback(() => setToolWindowVisible(false), []);
@@ -6677,6 +6693,7 @@ export function App() {
                   const debugRestarting = debugRestartingProfileId === tab.profileId;
                   const executionRunning = tab.execution?.status === "running";
                   const executionRestarting = restartingProfileId === tab.profileId;
+                  const outputFollowing = profileOutputFollowing[tab.tabId] ?? true;
                   const outputOffsets = tabDebugSession
                     ? debugOutputOffsets[tabDebugSession.id] ?? EMPTY_DEBUG_OUTPUT_OFFSETS
                     : EMPTY_DEBUG_OUTPUT_OFFSETS;
@@ -6753,6 +6770,19 @@ export function App() {
                         <span className="execution-panel-toolbar__status">
                           {tabDebugSession ? `Depuração · ${debugRestarting ? "reiniciando" : tabDebugSession.status}` : profileExecutionStatusLabel(tab.execution)}
                         </span>
+                        {!tabDebugSession ? (
+                          <label className="workbench-output-follow execution-panel-toolbar__follow">
+                            <input
+                              type="checkbox"
+                              checked={outputFollowing}
+                              onChange={(event) => setProfileOutputFollowing((current) => ({
+                                ...current,
+                                [tab.tabId]: event.target.checked,
+                              }))}
+                            />
+                            <span>Seguir saída</span>
+                          </label>
+                        ) : null}
                       </div>
                       {tabDebugSession ? (
                         <div
@@ -6780,15 +6810,18 @@ export function App() {
                                   persistDebugPanelLayout({ outputWrap: next });
                                 }}
                               >Quebrar linhas</button>
-                              <button
-                                type="button"
-                                className={debugOutputFollowTail ? "is-active" : undefined}
-                                onClick={() => {
-                                  const next = !debugOutputFollowTail;
-                                  setDebugOutputFollowTail(next);
-                                  persistDebugPanelLayout({ outputFollowTail: next });
-                                }}
-                              >Seguir saída</button>
+                              <label className="workbench-output-follow">
+                                <input
+                                  type="checkbox"
+                                  checked={debugOutputFollowTail}
+                                  onChange={(event) => {
+                                    const next = event.target.checked;
+                                    setDebugOutputFollowTail(next);
+                                    persistDebugPanelLayout({ outputFollowTail: next });
+                                  }}
+                                />
+                                <span>Seguir saída</span>
+                              </label>
                               <button
                                 type="button"
                                 onClick={() => setDebugOutputOffsets((current) => ({
@@ -6866,7 +6899,10 @@ export function App() {
                           </aside>
                         </div>
                       ) : (
-                        <pre className="execution-panel-output">{profileExecutionOutput({ name: tab.name }, tab.execution).join("\n")}</pre>
+                        <FollowedExecutionOutput
+                          text={profileExecutionOutput({ name: tab.name }, tab.execution).join("\n")}
+                          following={outputFollowing}
+                        />
                       )}
                     </div>
                   );

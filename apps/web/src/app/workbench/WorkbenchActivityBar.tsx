@@ -102,14 +102,14 @@ export function WorkbenchActivityBar({
         if (item.key === "builtin:explorer") {
           return renderFixed(item.key, (
             <IconButton label="Explorador" active={activeSidebarId === "explorer"} onClick={() => onBuiltinSidebarActivate("explorer")}>
-              <Files size={20} />
+              <Files size={16} />
             </IconButton>
           ));
         }
         if (item.key === "builtin:plugins") {
           return renderFixed(item.key, (
             <IconButton label="Plugins" active={activeSidebarId === "plugins"} onClick={() => onBuiltinSidebarActivate("plugins")}>
-              <Plug size={20} />
+              <Plug size={16} />
             </IconButton>
           ));
         }
@@ -127,7 +127,7 @@ export function WorkbenchActivityBar({
               active={executionActive}
               onClick={onExecutionsActivate}
             >
-              <Play size={20} />
+              <Play size={16} />
               <span
                 aria-hidden="true"
                 className={`execution-activity__badge${runningExecutionCount ? " is-running" : ""}`}
@@ -138,7 +138,7 @@ export function WorkbenchActivityBar({
         if (item.key === "builtin:problems") {
           return renderFixed(item.key, (
             <IconButton label={`Problemas: ${diagnosticsCount}`} active={problemsVisible} onClick={onProblemsActivate}>
-              <CircleAlert size={20} />
+              <CircleAlert size={16} />
               <span className="right-activity-bar__badge" aria-hidden="true">{diagnosticsCount}</span>
             </IconButton>
           ));

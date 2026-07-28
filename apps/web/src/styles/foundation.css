@@ -95,7 +95,7 @@ button { color: inherit; }
 .titlebar-actions, .editor-actions, .toolbar-row, .plugin-actions, .dialog-actions { display: flex; align-items: center; gap: 6px; }
 .titlebar-plugin-actions { display:flex; align-items:center; min-width:0; }
 .titlebar-actions select { height: 27px; min-width: 170px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2); color: var(--text); font-size: 11px; }
-.titlebar-corner { display: flex; flex: 0 0 auto; align-items: center; justify-content: center; align-self: stretch; width: 48px; margin: 0 -8px 0 8px; border-left: 1px solid var(--border); }
+.titlebar-corner { display: flex; flex: 0 0 auto; align-items: center; justify-content: center; align-self: stretch; width: 36px; margin: 0 -8px 0 8px; border-left: 1px solid var(--border); }
 
 .button, .icon-button {
   display: inline-flex;

@@ -838,6 +838,8 @@ export type WorkbenchProfileExecutionStatus = "running" | "completed" | "failed"
 export interface WorkbenchProfileExecutionSnapshot {
   readonly profileId: string;
   readonly profileName: string;
+  /** Profile used for this run, including provider-owned transient arguments. */
+  readonly profile?: ExecutionProfile;
   readonly status: WorkbenchProfileExecutionStatus;
   readonly output: readonly string[];
   readonly processId?: string;
@@ -952,6 +954,17 @@ export interface WorkbenchExecutionViewMountContext extends WorkbenchPanelMountC
   readonly target: WorkbenchExecutionViewTarget;
 }
 
+export type WorkbenchExecutionViewToolbarActionIcon = "rerun" | "run" | "stop" | "refresh";
+
+export interface WorkbenchExecutionViewToolbarAction {
+  readonly id: string;
+  readonly label: string;
+  readonly icon?: WorkbenchExecutionViewToolbarActionIcon;
+  readonly danger?: boolean;
+  readonly disabled?: boolean;
+  run(target: WorkbenchExecutionViewTarget): void | Promise<void>;
+}
+
 /**
  * Substitui a saída textual da aba de execução por uma visão própria do plugin.
  * O host mantém a barra de ações da aba e o estado da execução continua
@@ -962,6 +975,9 @@ export interface WorkbenchExecutionViewProvider {
   readonly pluginId: string;
   readonly priority?: number;
   canRender(target: WorkbenchExecutionViewTarget): boolean;
+  toolbarActions?(
+    target: WorkbenchExecutionViewTarget,
+  ): readonly WorkbenchExecutionViewToolbarAction[];
   mount(
     context: WorkbenchExecutionViewMountContext,
   ): void | Disposable | Promise<void | Disposable>;

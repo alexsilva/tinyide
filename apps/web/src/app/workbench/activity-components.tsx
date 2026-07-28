@@ -288,9 +288,8 @@ export function WorkbenchActivityIconView({ icon }: { readonly icon: WorkbenchAc
   if (icon === "git" || icon === "source-control") return <GitBrandIcon />;
   if (icon === "nodejs") return <NodeBrandIcon />;
   if (icon === "python") return <PythonBrandIcon />;
-  if (icon === "files") return <Files size={20} />;
-  if (icon === "history") return <History size={20} />;
-  if (icon === "terminal") return <Terminal size={20} />;
-  return <Box size={20} />;
+  if (icon === "files") return <Files size={16} />;
+  if (icon === "history") return <History size={16} />;
+  if (icon === "terminal") return <Terminal size={16} />;
+  return <Box size={16} />;
 }
-

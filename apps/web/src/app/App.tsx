@@ -115,6 +115,7 @@ import type {
   WorkbenchTabApi,
   WorkbenchPanelHook,
   WorkbenchResourceEditorProvider,
+  WorkbenchExecutionViewToolbarAction,
   WorkbenchExecutionViewTarget,
   WorkbenchSidebarContribution,
   WorkbenchSidebarHook,
@@ -674,6 +675,19 @@ export function App() {
       : {}),
     executions: Object.values(profileExecutionsRef.current).map((execution) => ({
       ...execution,
+      ...(execution.profile ? { profile: {
+        ...execution.profile,
+        environment: { ...execution.profile.environment },
+        steps: execution.profile.steps.map((step) => ({
+          ...step,
+          ...(step.arguments ? { arguments: [...step.arguments] } : {}),
+          parameters: [...step.parameters],
+          ...(step.target ? { target: { ...step.target } } : {}),
+          ...(step.environmentVariables
+            ? { environmentVariables: { ...step.environmentVariables } }
+            : {}),
+        })),
+      } } : {}),
       output: [...execution.output],
     })),
     ...(debugSessionRef.current ? { debugSession: debugSessionRef.current } : {}),
@@ -759,8 +773,9 @@ export function App() {
   const profileOutputTabs = openProfileTabIds.flatMap((tabId) => {
     const tab = profileExecutionPanelTab(tabId);
     if (!tab) return [];
-    const profile = profilesState.profiles.find((candidate) => candidate.id === tab.profileId);
+    const configuredProfile = profilesState.profiles.find((candidate) => candidate.id === tab.profileId);
     const execution = tab.mode === "run" ? profileExecutions[tab.profileId] : undefined;
+    const profile = configuredProfile ?? execution?.profile;
     const tabDebugSession = tab.mode === "debug" && debugSession?.profileId === tab.profileId
       ? debugSession
       : undefined;
@@ -788,6 +803,19 @@ export function App() {
     tab.execution?.status === "running"
     || Boolean(tab.debugSession && !["stopped", "completed", "failed"].includes(tab.debugSession.status))
   )).length;
+  const executionViewToolbarIcon = (action: WorkbenchExecutionViewToolbarAction) => {
+    switch (action.icon) {
+      case "run":
+        return <Play size={14} />;
+      case "stop":
+        return <Square size={13} />;
+      case "refresh":
+        return <RotateCw size={13} />;
+      case "rerun":
+      default:
+        return <RefreshCw size={13} />;
+    }
+  };
   const activeExecutionTab = profileExecutionPanelTab(panelTab);
   const executionPanelActive = panelVisible
     && Boolean(activeExecutionTab && openProfileTabIds.includes(panelTab));
@@ -2864,6 +2892,7 @@ export function App() {
       [profile.id]: {
         profileId: profile.id,
         profileName: profile.name,
+        profile,
         status: "running",
         output: [],
         startedAt,
@@ -2885,6 +2914,7 @@ export function App() {
               ...(current[profile.id] ?? {
                 profileId: profile.id,
                 profileName: profile.name,
+                profile,
                 status: "running" as const,
                 output: [],
                 startedAt,
@@ -2905,6 +2935,7 @@ export function App() {
               ...(current[profile.id] ?? {
                 profileId: profile.id,
                 profileName: profile.name,
+                profile,
                 status: "running" as const,
                 output: [],
                 startedAt,
@@ -2922,9 +2953,11 @@ export function App() {
           ...(current[profile.id] ?? {
             profileId: profile.id,
             profileName: profile.name,
+            profile,
             output: [],
             startedAt,
           }),
+          profile: current[profile.id]?.profile ?? profile,
           status: result === "stopped" ? "stopped" : "completed",
           finishedAt: Date.now(),
         },
@@ -2937,9 +2970,11 @@ export function App() {
           ...(current[profile.id] ?? {
             profileId: profile.id,
             profileName: profile.name,
+            profile,
             output: [],
             startedAt,
           }),
+          profile: current[profile.id]?.profile ?? profile,
           status: "failed",
           error: message,
           finishedAt: Date.now(),
@@ -4459,7 +4494,7 @@ export function App() {
         <div
           className="workbench"
           style={{
-            gridTemplateColumns: `48px ${leftDockWidth ? `${leftDockWidth}px 5px` : "0 0"} minmax(0, 1fr) ${rightDockWidth ? `5px ${rightDockWidth}px` : "0 0"} 48px`,
+            gridTemplateColumns: `36px ${leftDockWidth ? `${leftDockWidth}px 5px` : "0 0"} minmax(0, 1fr) ${rightDockWidth ? `5px ${rightDockWidth}px` : "0 0"} 36px`,
           }}
         >
           <aside className="activity-bar">
@@ -4949,6 +4984,17 @@ export function App() {
                               <button className="icon-button small danger" type="button" aria-label="Parar execução" onClick={() => invoke(() => stopProfileExecution(tab.profileId))}><Square size={13} /></button>
                             </ButtonTooltip>
                           ) : null}
+                          {tab.viewProvider?.toolbarActions?.(tab.viewTarget).map((action) => (
+                            <ButtonTooltip label={action.label} side="top" key={action.id}>
+                              <button
+                                className={`icon-button small${action.danger ? " danger" : ""}`}
+                                type="button"
+                                aria-label={action.label}
+                                disabled={action.disabled}
+                                onClick={() => invoke(() => action.run(tab.viewTarget))}
+                              >{executionViewToolbarIcon(action)}</button>
+                            </ButtonTooltip>
+                          ))}
                         </div>
                         {!tabDebugSession && !tab.viewProvider ? (
                           <label className="workbench-output-follow execution-panel-toolbar__follow">

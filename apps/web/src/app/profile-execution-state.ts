@@ -1,3 +1,4 @@
+import type { ExecutionProfile } from "@tinyide/plugin-api";
 import { hostProcessOutputLines, type HostProcessSnapshot } from "./runtime";
 
 export type ProfileExecutionStatus = "running" | "completed" | "failed" | "stopped";
@@ -5,6 +6,7 @@ export type ProfileExecutionStatus = "running" | "completed" | "failed" | "stopp
 export interface ProfileExecutionState {
   readonly profileId: string;
   readonly profileName: string;
+  readonly profile?: ExecutionProfile;
   readonly status: ProfileExecutionStatus;
   readonly output: readonly string[];
   readonly processId?: string;

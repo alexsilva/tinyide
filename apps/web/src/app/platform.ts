@@ -40,7 +40,6 @@ import type {
   Disposable,
 } from "@tinyide/plugin-api";
 import { AppPluginHost } from "./plugin-host";
-import { getActiveHostWorkspaceRoot } from "./host-workspace-state";
 import { createOutputFollowControl } from "./output-follow";
 
 const PLATFORM_VERSION = "0.4.0";
@@ -155,9 +154,6 @@ export function resolvePluginIconUrl(manifest: PluginManifest, manifestUrl: stri
 function pluginBackend(pluginId: string): PluginBackendApi {
   return {
     async request<Response>(path: string, options: PluginBackendRequestOptions = {}): Promise<Response> {
-      if (!getActiveHostWorkspaceRoot()) {
-        throw new Error("Abra um workspace antes de usar este plugin.");
-      }
       const suffix = path.startsWith("/") ? path : `/${path}`;
       const pathname = suffix.split(/[?#]/, 1)[0] ?? "";
       if (suffix.startsWith("//") || pathname.split("/").includes("..")) {

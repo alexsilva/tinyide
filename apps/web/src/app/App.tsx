@@ -61,6 +61,7 @@ import {
 } from "react";
 import { formatCommandLineArguments, parseCommandLineArguments } from "@tinyide/core";
 import { createWorkbenchTabApi } from "./workbench-tabs";
+import { WorkbenchDialogHost } from "./workbench-dialog-host";
 import { scrollOutputToEnd } from "./output-follow";
 import {
   TEXT_EDITOR_DOCUMENT_CHANGED_EVENT,
@@ -191,6 +192,7 @@ import {
 import {
   DEFAULT_LAYOUT,
   deserializeEntries,
+  readPersistedSession,
   readReactSnapshot,
   readSession,
   restoreWorkspaceDocuments,
@@ -2019,48 +2021,6 @@ function WorkbenchToolWindowHost({
   );
 }
 
-function WorkbenchDialogHost({
-  provider,
-  onClose,
-}: {
-  readonly provider: WorkbenchDialogContribution;
-  readonly onClose: () => void;
-}) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    let disposed = false;
-    let mountedDisposable: { dispose(): void } | void;
-    try {
-      const mounted = provider.mount({ container, close: onClose });
-      if (mounted && typeof (mounted as PromiseLike<unknown>).then === "function") {
-        void Promise.resolve(mounted)
-          .then((disposable) => {
-            if (disposed) disposable?.dispose();
-            else mountedDisposable = disposable;
-          })
-          .catch((cause) => {
-            if (!disposed) container.textContent = cause instanceof Error ? cause.message : String(cause);
-          });
-      } else {
-        mountedDisposable = mounted as void | { dispose(): void };
-      }
-    } catch (cause) {
-      container.textContent = cause instanceof Error ? cause.message : String(cause);
-    }
-
-    return () => {
-      disposed = true;
-      mountedDisposable?.dispose();
-      container.replaceChildren();
-    };
-  }, [provider, onClose]);
-
-  return <div className="plugin-dialog-host" ref={containerRef} data-dialog-id={provider.id} />;
-}
-
 function WorkbenchTitlebarHost({
   provider,
   state,
@@ -2513,6 +2473,7 @@ export function App() {
   const [draggingExplorerPath, setDraggingExplorerPath] = useState<string>();
   const [dropTargetExplorerPath, setDropTargetExplorerPath] = useState<string>();
   const [explorerHistory, setExplorerHistory] = useState<ExplorerHistoryState>(createExplorerHistoryState);
+  const [explorerFilterOpen, setExplorerFilterOpen] = useState(false);
   const [explorerFilterQuery, setExplorerFilterQuery] = useState("");
   const [explorerFilterResult, setExplorerFilterResult] = useState<ExplorerFilterResultState>();
   const explorerFilterInputRef = useRef<HTMLInputElement>(null);
@@ -3189,10 +3150,29 @@ export function App() {
   useEffect(() => {
     platform.initialize()
       .then(async () => {
+        const persistedSession = await readPersistedSession();
+        setSidebarView(persistedSession.sidebarView);
+        setSidebarVisible(persistedSession.sidebarVisible);
+        setSidebarViewsBySide(persistedSession.sidebarViewsBySide);
+        setVerticalPanelWidths({
+          left: persistedSession.leftVerticalPanelWidth,
+          right: persistedSession.rightVerticalPanelWidth,
+        });
+        setPanelVisible(persistedSession.panelVisible);
+        setPanelHeight(persistedSession.panelHeight);
+        setPanelTab(persistedSession.panelTab);
+        setProblemsVisible(persistedSession.problemsVisible);
+        setToolWindowVisible(persistedSession.toolWindowVisible);
+        setToolWindowHeight(persistedSession.toolWindowHeight);
+        setActiveToolWindowId(persistedSession.activeToolWindowId);
+        setActivityButtonPlacements(persistedSession.activityButtonPlacements);
+        setExpanded(new Set(persistedSession.expandedDirectories));
+        setExplorerShowHidden(persistedSession.explorerShowHidden);
+
         const snapshot = await readReactSnapshot();
         let restoredDocuments: readonly OpenDocument[] = [];
-        let restoredWorkspaceName = snapshot?.workspaceName ?? initialSession.workspaceName;
-        let restoredWorkspaceRoot = snapshot?.workspaceRoot ?? initialSession.workspaceRoot;
+        let restoredWorkspaceName = snapshot?.workspaceName ?? persistedSession.workspaceName;
+        let restoredWorkspaceRoot = snapshot?.workspaceRoot ?? persistedSession.workspaceRoot;
         let restoredWorkspaceHandle = isDesktopHost() ? undefined : snapshot?.workspaceHandle;
         if (isDesktopHost()) {
           if (restoredWorkspaceRoot) {
@@ -3215,7 +3195,7 @@ export function App() {
             await loadLocalWorkspaceSettings(
               restoredWorkspaceName,
               hostWorkspace.workspaceRoot,
-              initialSession.selectedEnvironmentId,
+              persistedSession.selectedEnvironmentId,
             );
           } catch (cause) {
             restoredWorkspaceRoot = undefined;
@@ -3241,7 +3221,7 @@ export function App() {
           if (permission === "granted" || permission === undefined) {
             try {
               const rootEntries = await listDirectory(restoredWorkspaceHandle);
-              setEntries(await hydrateExpandedEntries(rootEntries, new Set(initialSession.expandedDirectories)));
+              setEntries(await hydrateExpandedEntries(rootEntries, new Set(persistedSession.expandedDirectories)));
               setWorkspaceAccess("ready");
               restoredDocuments = await restoreWorkspaceDocuments(
                 snapshot?.documents ?? [],
@@ -3272,9 +3252,9 @@ export function App() {
           setOutput([...snapshot.output]);
         }
         setActiveDocumentId(
-          initialSession.activeDocumentId
-            && restoredDocuments.some((document) => document.id === initialSession.activeDocumentId)
-            ? initialSession.activeDocumentId
+          persistedSession.activeDocumentId
+            && restoredDocuments.some((document) => document.id === persistedSession.activeDocumentId)
+            ? persistedSession.activeDocumentId
             : restoredDocuments[0]?.id,
         );
         const loadedEnvironments = restoredWorkspaceRoot ? await loadEnvironments() : [];
@@ -3456,6 +3436,7 @@ export function App() {
   }, [resumedProcessId]);
 
   useEffect(() => {
+    if (!restorationComplete) return;
     writeSession({
       sidebarView,
       sidebarVisible,
@@ -3478,7 +3459,7 @@ export function App() {
       activityButtonPlacements,
       sidebarViewsBySide,
     });
-  }, [sidebarView, sidebarVisible, sidebarViewsBySide, verticalPanelWidths, panelVisible, panelHeight, panelTab, problemsVisible, toolWindowVisible, toolWindowHeight, activeToolWindowId, workspaceName, workspaceRoot, activeDocumentId, expanded, explorerShowHidden, activityButtonPlacements]);
+  }, [restorationComplete, sidebarView, sidebarVisible, sidebarViewsBySide, verticalPanelWidths, panelVisible, panelHeight, panelTab, problemsVisible, toolWindowVisible, toolWindowHeight, activeToolWindowId, workspaceName, workspaceRoot, activeDocumentId, expanded, explorerShowHidden, activityButtonPlacements]);
 
   useEffect(() => {
     if (!restoredRef.current) return;
@@ -4246,12 +4227,18 @@ export function App() {
   const explorerFilterActive = Boolean(explorerFilterResult);
 
   useLayoutEffect(() => {
-    if (!explorerFilterQuery) return;
+    if (!explorerFilterOpen) return;
     const input = explorerFilterInputRef.current;
     if (!input) return;
     input.focus({ preventScroll: true });
     input.setSelectionRange(input.value.length, input.value.length);
-  }, [explorerFilterQuery]);
+  }, [explorerFilterOpen, explorerFilterQuery]);
+
+  useEffect(() => {
+    if (explorerFilterProvider && workspaceHandle) return;
+    setExplorerFilterOpen(false);
+    setExplorerFilterQuery("");
+  }, [explorerFilterProvider, workspaceHandle]);
 
   useEffect(() => {
     const query = explorerFilterQuery.trim();
@@ -5713,6 +5700,14 @@ export function App() {
                       <button
                         className="icon-button small"
                         type="button"
+                        aria-label="Buscar arquivos no Explorer"
+                        aria-pressed={explorerFilterOpen}
+                        disabled={!explorerFilterProvider || !workspaceHandle}
+                        onClick={() => setExplorerFilterOpen(true)}
+                      ><Search size={15} /></button>
+                      <button
+                        className="icon-button small"
+                        type="button"
                         aria-label="Localizar arquivo aberto no Explorer"
                         disabled={!activeDocument?.path || !workspaceHandle}
                         onClick={() => invoke(revealActiveDocumentInExplorer)}
@@ -5801,13 +5796,15 @@ export function App() {
                     const target = event.target as HTMLElement;
                     const isTextControl = target.matches("input, textarea, [contenteditable='true']");
                     if (isTextControl || event.ctrlKey || event.metaKey || event.altKey) return;
-                    if (event.key === "Escape" && explorerFilterQuery) {
+                    if (event.key === "Escape" && explorerFilterOpen) {
                       event.preventDefault();
+                      setExplorerFilterOpen(false);
                       setExplorerFilterQuery("");
                       return;
                     }
                     if (event.key.length !== 1 || event.key.trim() === "") return;
                     event.preventDefault();
+                    setExplorerFilterOpen(true);
                     setExplorerFilterQuery((current) => `${current}${event.key}`);
                   }}
                   onDragOver={(event) => {
@@ -5846,7 +5843,7 @@ export function App() {
                     }
                   }}
                 >
-                  {explorerFilterProvider && workspaceHandle && explorerFilterQuery ? (
+                  {explorerFilterProvider && workspaceHandle && explorerFilterOpen ? (
                     <div className="explorer-filter" data-explorer-filter={explorerFilterProvider.id}>
                       <Search className="explorer-filter__icon" size={13} />
                       <input
@@ -5860,6 +5857,7 @@ export function App() {
                         onKeyDown={(event) => {
                           if (event.key === "Escape") {
                             event.preventDefault();
+                            setExplorerFilterOpen(false);
                             setExplorerFilterQuery("");
                           }
                         }}
@@ -5867,8 +5865,11 @@ export function App() {
                       <button
                         className="icon-button small"
                         type="button"
-                        aria-label="Limpar filtro do Explorer"
-                        onClick={() => setExplorerFilterQuery("")}
+                        aria-label="Fechar busca do Explorer"
+                        onClick={() => {
+                          setExplorerFilterOpen(false);
+                          setExplorerFilterQuery("");
+                        }}
                       ><X size={12} /></button>
                     </div>
                   ) : null}

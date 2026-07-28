@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  readPersistedSession,
   readSession,
   restoreWorkspaceDocuments,
+  writeSession,
   workspaceDocumentsForSnapshot,
 } from "./persistence";
 import type {
@@ -155,6 +157,48 @@ describe("layout persistence", () => {
     expect(readSession().activityButtonPlacements).toEqual({
       "toolWindow:docker": { side: "right", order: 2 },
     });
+  });
+
+  it("restores the desktop session independently from the runtime origin", async () => {
+    vi.stubGlobal("localStorage", localStorageWith({
+      activityButtonPlacements: {
+        "toolWindow:git": { side: "left", order: 1 },
+      },
+    }));
+    const readState = vi.fn(async () => ({
+      activityButtonPlacements: {
+        "toolWindow:git": { side: "right", order: 7 },
+      },
+      sidebarViewsBySide: { right: "git.changes" },
+      sidebarView: "git.changes",
+    }));
+    vi.stubGlobal("window", { tinyideDesktop: { readState } });
+
+    await expect(readPersistedSession()).resolves.toMatchObject({
+      activityButtonPlacements: {
+        "toolWindow:git": { side: "right", order: 7 },
+      },
+      sidebarViewsBySide: { right: "git.changes" },
+    });
+    expect(readState).toHaveBeenCalledWith("ui-session");
+  });
+
+  it("writes the visual session to both browser and stable desktop storage", async () => {
+    const storage = localStorageWith();
+    vi.stubGlobal("localStorage", storage);
+    const writeState = vi.fn(async () => true);
+    vi.stubGlobal("window", { tinyideDesktop: { writeState } });
+    const session = {
+      ...readSession(),
+      activityButtonPlacements: {
+        "toolWindow:docker": { side: "right" as const, order: 4 },
+      },
+    };
+
+    writeSession(session);
+    await vi.waitFor(() => expect(writeState).toHaveBeenCalledWith("ui-session", session));
+    expect(JSON.parse(storage.getItem("tinyide.react.session.v2") ?? "null"))
+      .toMatchObject(session);
   });
 
   it("restores every open vertical panel", () => {

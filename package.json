@@ -63,6 +63,7 @@
       "packages/runtime-server/**/*",
       "!packages/runtime-server/**/*.test.*",
       "plugins/*/plugin.json",
+      "plugins/*/icon.*",
       "plugins/*/dist/**/*",
       "plugins/*/src/**/*",
       "package.json"

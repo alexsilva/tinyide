@@ -3,6 +3,7 @@ import { parseVersion } from "./version";
 
 const PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 const PLUGIN_CATEGORIES = new Set(["language", "tool"]);
+const PLUGIN_ICON_PATTERN = /^(?!\/)(?![a-z][a-z0-9+.-]*:)(?!.*(?:^|\/)\.\.(?:\/|$))[^?#]+\.(?:svg|png|webp)$/i;
 
 export class InvalidPluginManifestError extends Error {
   override readonly name = "InvalidPluginManifestError";
@@ -40,6 +41,17 @@ export function validatePluginManifest(value: unknown): PluginManifest {
   if (!PLUGIN_CATEGORIES.has(category)) {
     throw new InvalidPluginManifestError(
       "Manifest field 'category' must be either 'language' or 'tool'.",
+    );
+  }
+
+  if (value.icon !== undefined && (
+    typeof value.icon !== "string"
+    || !PLUGIN_ICON_PATTERN.test(value.icon.trim())
+    || value.icon.includes("\\")
+    || value.icon.includes("\0")
+  )) {
+    throw new InvalidPluginManifestError(
+      "Manifest field 'icon' must be a relative SVG, PNG or WebP asset path.",
     );
   }
 

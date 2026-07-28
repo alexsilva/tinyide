@@ -241,4 +241,31 @@ describe("workspace document persistence", () => {
       legacyWorkspaceDocument({ id: "owned.py", path: "owned.py" }),
     ], "/workspace/current")).toEqual([]);
   });
+
+  it("restores cached workspace text without calling a stale persisted file handle", async () => {
+    const getFile = vi.fn(async () => {
+      throw new DOMException(
+        "The request is not allowed by the user agent or the platform in the current context.",
+        "NotAllowedError",
+      );
+    });
+    const staleHandle: BrowserFileHandle = {
+      kind: "file",
+      name: "main.py",
+      getFile,
+      async createWritable() { throw new Error("unused"); },
+    };
+
+    const restored = await restoreWorkspaceDocuments([
+      document({ handle: staleHandle }),
+    ], "/workspace/current");
+
+    expect(getFile).not.toHaveBeenCalled();
+    expect(restored[0]).toMatchObject({
+      id: "src/main.py",
+      path: "src/main.py",
+      content: "print('ok')",
+    });
+    expect(restored[0]?.handle).toBeUndefined();
+  });
 });

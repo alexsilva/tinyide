@@ -140,6 +140,13 @@ function pluginSourceUrl(manifest: PluginManifest, manifestUrl: string): string 
   return sourceUrl.href;
 }
 
+export function resolvePluginIconUrl(manifest: PluginManifest, manifestUrl: string): string | undefined {
+  if (!manifest.icon) return undefined;
+  const baseUrl = new URL(manifestUrl, window.location.href);
+  const iconUrl = new URL(manifest.icon, baseUrl);
+  return iconUrl.origin === baseUrl.origin ? iconUrl.href : undefined;
+}
+
 function pluginBackend(pluginId: string): PluginBackendApi {
   return {
     async request<Response>(path: string, options: PluginBackendRequestOptions = {}): Promise<Response> {
@@ -261,6 +268,12 @@ export class TinyIdePlatform {
       plugins: this.plugins.list(),
       catalog: [...this.#catalog],
     };
+  }
+
+  pluginIconUrl(id: string): string | undefined {
+    const plugin = this.plugins.list().find((entry) => entry.manifest.id === id);
+    const manifestUrl = this.#manifestUrls.get(id);
+    return plugin && manifestUrl ? resolvePluginIconUrl(plugin.manifest, manifestUrl) : undefined;
   }
 
   subscribe(listener: SnapshotListener): () => void {

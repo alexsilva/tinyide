@@ -60,6 +60,7 @@ import {
   useState,
 } from "react";
 import { formatCommandLineArguments, parseCommandLineArguments } from "@tinyide/core";
+import { createWorkbenchTabApi } from "./workbench-tabs";
 import {
   TEXT_EDITOR_DOCUMENT_CHANGED_EVENT,
   TEXT_EDITOR_DOCUMENT_SAVED_EVENT,
@@ -96,7 +97,6 @@ import type {
   WorkbenchPanelContribution,
   WorkbenchPanelHookContribution,
   WorkbenchTabApi,
-  WorkbenchTabContribution,
   WorkbenchPanelHook,
   WorkbenchResourceEditorProvider,
   WorkbenchSidebarContribution,
@@ -114,6 +114,8 @@ import type {
   WorkspaceResourcesChangedEvent,
 } from "@tinyide/plugin-api";
 import {
+  browserFileSystemAccessError,
+  isBrowserFileSystemAccessDenied,
   listDirectory,
   moveWorkspaceEntry,
   readFileDocument,
@@ -178,7 +180,7 @@ import {
   type ExplorerHistoryState,
 } from "./explorer-history";
 import { reconcileOpenDocumentsAfterWorkspaceChange } from "./workspace-resource-reconciliation";
-import { platform } from "./platform";
+import { platform, resolvePluginIconUrl } from "./platform";
 import {
   moveActivityButton,
   orderedActivityButtons,
@@ -223,7 +225,7 @@ import {
   textEditorLineDecorationProviders,
   workbenchResourceDescriptor,
 } from "./runtime";
-import { restoreActiveDebugSession } from "./debug-session-state";
+import { restoreActiveDebugSession, workspaceRelativeDebugPath } from "./debug-session-state";
 import {
   DEFAULT_DEBUG_PANEL_LAYOUT,
   EMPTY_DEBUG_OUTPUT_OFFSETS,
@@ -446,87 +448,6 @@ function expandWorkbenchToolWindowContribution(
   }];
 }
 
-function createWorkbenchTabApi(container: HTMLElement): WorkbenchTabApi & { dispose(): void } {
-  const strip = document.createElement("div");
-  strip.className = "workbench-tab-strip";
-  container.append(strip);
-  const tabs = new Map<string, { contribution: WorkbenchTabContribution; element: HTMLDivElement }>();
-  let activeId: string | undefined;
-
-  const renderSelection = () => {
-    for (const [id, record] of tabs) {
-      const active = id === activeId;
-      record.element.classList.toggle("is-active", active);
-      record.element.querySelector("button[role='tab']")?.setAttribute("aria-selected", String(active));
-    }
-  };
-
-  const select = (id: string) => {
-    const record = tabs.get(id);
-    if (!record) return;
-    activeId = id;
-    renderSelection();
-    record.contribution.onSelect();
-  };
-
-  return {
-    register(contribution) {
-      if (tabs.has(contribution.id)) throw new Error(`Aba já registrada: ${contribution.id}`);
-      const group = document.createElement("div");
-      group.className = "workbench-tab-group";
-      group.classList.toggle("is-end", contribution.placement === "end");
-      const button = document.createElement("button");
-      button.type = "button";
-      button.role = "tab";
-      button.className = "workbench-tab";
-      button.textContent = contribution.label;
-      button.addEventListener("click", () => select(contribution.id));
-      group.append(button);
-      if (contribution.closable) {
-        const closeButton = document.createElement("button");
-        closeButton.type = "button";
-        closeButton.className = "workbench-tab-close";
-        closeButton.setAttribute("aria-label", `Fechar ${contribution.label}`);
-        closeButton.textContent = "×";
-        closeButton.addEventListener("click", (event) => {
-          event.stopPropagation();
-          void contribution.onClose?.();
-        });
-        group.append(closeButton);
-      }
-      tabs.set(contribution.id, { contribution, element: group });
-      const ordered = [...tabs.entries()].sort(([, left], [, right]) =>
-        Number(left.contribution.placement === "end") - Number(right.contribution.placement === "end")
-        ||
-        (left.contribution.order ?? 0) - (right.contribution.order ?? 0)
-        || left.contribution.label.localeCompare(right.contribution.label));
-      for (const [, record] of ordered) record.element.classList.remove("is-end-start");
-      ordered.find(([, record]) => record.contribution.placement === "end")?.[1].element.classList.add("is-end-start");
-      strip.replaceChildren(...ordered.map(([, record]) => record.element));
-      if (!activeId) select(contribution.id);
-      else renderSelection();
-      return {
-        dispose() {
-          const wasActive = activeId === contribution.id;
-          tabs.delete(contribution.id);
-          group.remove();
-          if (wasActive) {
-            activeId = tabs.keys().next().value;
-            if (activeId) select(activeId);
-          }
-        },
-      };
-    },
-    select,
-    activeId: () => activeId,
-    dispose() {
-      tabs.clear();
-      activeId = undefined;
-      strip.remove();
-    },
-  };
-}
-
 interface ActiveWorkbenchDialog {
   readonly token: symbol;
   readonly contribution: WorkbenchDialogContribution;
@@ -669,6 +590,25 @@ function IconButton({
         </Tooltip.Content>
       </Tooltip.Portal>
     </Tooltip.Root>
+  );
+}
+
+function PluginCardIcon({
+  name,
+  src,
+  fallback,
+}: {
+  readonly name: string;
+  readonly src: string | undefined;
+  readonly fallback: React.ReactNode;
+}) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <span className="plugin-card-icon" title={name}>
+      {src && !failed
+        ? <img src={src} alt="" aria-hidden="true" onError={() => setFailed(true)} />
+        : fallback}
+    </span>
   );
 }
 
@@ -842,14 +782,6 @@ function ButtonTooltip({
       </Tooltip.Portal>
     </Tooltip.Root>
   );
-}
-
-function workspaceRelativeDebugPath(path: string | undefined, root: string | undefined): string | undefined {
-  if (!path) return undefined;
-  const normalized = path.replaceAll("\\", "/");
-  const normalizedRoot = root?.replaceAll("\\", "/").replace(/\/$/, "");
-  if (normalizedRoot && normalized.startsWith(`${normalizedRoot}/`)) return normalized.slice(normalizedRoot.length + 1);
-  return normalized.replace(/^\.\//, "");
 }
 
 function formattedDebugValue(value: string, type?: string): { text: string; kind: string } {
@@ -2771,24 +2703,16 @@ export function App() {
     ?? "left"
   );
   const problemsDockSide = activitySideFor("builtin:problems");
-  const executionDockSide = activitySideFor("builtin:executions");
-  const bottomRegionDockSide = executionPanelActive
-    ? executionDockSide
-    : undefined;
-  const leftDockWidth = bottomRegionDockSide === "left"
+  const leftDockWidth = problemsVisible && problemsDockSide === "left"
     ? Math.min(640, Math.max(220, verticalPanelWidths.left))
-    : problemsVisible && problemsDockSide === "left"
-      ? Math.min(640, Math.max(220, verticalPanelWidths.left))
-      : sidebarViewsBySide.left
-        ? sidebarWidthForView(verticalPanelWidths.left, sidebarViewsBySide.left)
-        : 0;
-  const rightDockWidth = bottomRegionDockSide === "right"
+    : sidebarViewsBySide.left
+      ? sidebarWidthForView(verticalPanelWidths.left, sidebarViewsBySide.left)
+      : 0;
+  const rightDockWidth = problemsVisible && problemsDockSide === "right"
     ? Math.min(640, Math.max(220, verticalPanelWidths.right))
-    : problemsVisible && problemsDockSide === "right"
-      ? Math.min(640, Math.max(220, verticalPanelWidths.right))
-      : sidebarViewsBySide.right
-        ? sidebarWidthForView(verticalPanelWidths.right, sidebarViewsBySide.right)
-        : 0;
+    : sidebarViewsBySide.right
+      ? sidebarWidthForView(verticalPanelWidths.right, sidebarViewsBySide.right)
+      : 0;
   const bottomPanelAvailable = profileOutputTabs.length > 0
     || Boolean(debugSession)
     || workbenchPanels.some((panel) => panel.id === panelTab);
@@ -3281,16 +3205,29 @@ export function App() {
         setWorkspaceName(restoredWorkspaceName);
         setWorkspaceHandle(restoredWorkspaceHandle);
         if (restoredWorkspaceHandle && restoredWorkspaceRoot) {
-          const permission = await restoredWorkspaceHandle.queryPermission?.({ mode: "readwrite" });
+          let permission: PermissionState | undefined;
+          try {
+            permission = await restoredWorkspaceHandle.queryPermission?.({ mode: "readwrite" });
+          } catch (cause) {
+            if (!isBrowserFileSystemAccessDenied(cause)) throw cause;
+            permission = "prompt";
+          }
           if (permission === "granted" || permission === undefined) {
-            const rootEntries = await listDirectory(restoredWorkspaceHandle);
-            setEntries(await hydrateExpandedEntries(rootEntries, new Set(initialSession.expandedDirectories)));
-            setWorkspaceAccess("ready");
-            restoredDocuments = await restoreWorkspaceDocuments(
-              snapshot?.documents ?? [],
-              restoredWorkspaceRoot,
-              restoredWorkspaceHandle,
-            );
+            try {
+              const rootEntries = await listDirectory(restoredWorkspaceHandle);
+              setEntries(await hydrateExpandedEntries(rootEntries, new Set(initialSession.expandedDirectories)));
+              setWorkspaceAccess("ready");
+              restoredDocuments = await restoreWorkspaceDocuments(
+                snapshot?.documents ?? [],
+                restoredWorkspaceRoot,
+                restoredWorkspaceHandle,
+              );
+            } catch (cause) {
+              if (!isBrowserFileSystemAccessDenied(cause)) throw cause;
+              setEntries(snapshot ? deserializeEntries(snapshot.workspaceEntries) : []);
+              setWorkspaceAccess("permission-required");
+              restoredDocuments = await restoreWorkspaceDocuments(snapshot?.documents ?? [], restoredWorkspaceRoot);
+            }
           } else {
             setEntries(snapshot ? deserializeEntries(snapshot.workspaceEntries) : []);
             setWorkspaceAccess("permission-required");
@@ -3599,18 +3536,24 @@ export function App() {
 
   const reconnectWorkspace = async () => {
     if (!workspaceHandle) throw new Error("Nenhum workspace anterior disponível para reconexão.");
-    const permission = await workspaceHandle.requestPermission?.({ mode: "readwrite" });
-    if (permission !== undefined && permission !== "granted") {
-      throw new Error("Acesso ao workspace não foi concedido.");
+    try {
+      const permission = await workspaceHandle.requestPermission?.({ mode: "readwrite" });
+      if (permission !== undefined && permission !== "granted") {
+        throw new Error("Acesso ao workspace não foi concedido.");
+      }
+      const rootEntries = await listDirectory(workspaceHandle);
+      const hostWorkspace = await setHostWorkspace(workspaceHandle.name, workspaceRoot);
+      const localSettings = await loadLocalWorkspaceSettings(workspaceHandle.name, hostWorkspace.workspaceRoot);
+      setEntries(await hydrateExpandedEntries(rootEntries, expanded));
+      setWorkspaceName(workspaceHandle.name);
+      setWorkspaceRoot(hostWorkspace.workspaceRoot);
+      setWorkspaceAccess("ready");
+      await refreshEnvironments(localSettings.environment?.selectedId, hostWorkspace.workspaceRoot);
+    } catch (cause) {
+      if (!isBrowserFileSystemAccessDenied(cause)) throw cause;
+      setWorkspaceAccess("missing");
+      throw browserFileSystemAccessError();
     }
-    const rootEntries = await listDirectory(workspaceHandle);
-    const hostWorkspace = await setHostWorkspace(workspaceHandle.name, workspaceRoot);
-    const localSettings = await loadLocalWorkspaceSettings(workspaceHandle.name, hostWorkspace.workspaceRoot);
-    setEntries(await hydrateExpandedEntries(rootEntries, expanded));
-    setWorkspaceName(workspaceHandle.name);
-    setWorkspaceRoot(hostWorkspace.workspaceRoot);
-    setWorkspaceAccess("ready");
-    await refreshEnvironments(localSettings.environment?.selectedId, hostWorkspace.workspaceRoot);
   };
 
   const openSingleFile = async () => {
@@ -3623,10 +3566,18 @@ export function App() {
   };
 
   const openWorkspaceFilePath = async (path: string, fileHandle?: BrowserFileHandle) => {
-    const handle = fileHandle
-      ?? (workspaceHandle ? await resolveFileHandle(workspaceHandle, path) : undefined);
-    if (!handle) throw new Error("Restaure o acesso ao workspace antes de abrir este arquivo.");
-    const document = await readFileDocument(handle, path, workspaceRoot);
+    let document: OpenDocument;
+    try {
+      const handle = workspaceHandle
+        ? await resolveFileHandle(workspaceHandle, path)
+        : fileHandle;
+      if (!handle) throw new Error("Restaure o acesso ao workspace antes de abrir este arquivo.");
+      document = await readFileDocument(handle, path, workspaceRoot);
+    } catch (cause) {
+      if (!isBrowserFileSystemAccessDenied(cause)) throw cause;
+      setWorkspaceAccess("permission-required");
+      throw browserFileSystemAccessError();
+    }
     setDocuments((current) => {
       const index = current.findIndex((item) => item.id === document.id);
       return index === -1 ? [...current, document] : current.map((item) => item.id === document.id ? document : item);
@@ -3677,30 +3628,22 @@ export function App() {
   const revealDebugLocation = async (path: string | undefined, line: number | undefined) => {
     const relativePath = workspaceRelativeDebugPath(path, workspaceRoot);
     if (!relativePath) return;
-    const opened = documents.find((document) => document.path === relativePath);
-    if (opened) {
-      setActiveDocumentId(opened.id);
-    } else {
-      const entry = findWorkspaceEntry(entries, relativePath);
-      if (!entry || entry.kind !== "file") return;
-      await openEntry(entry);
-    }
-    if (!line) return;
-    scrollEditorToLine(line);
+    await openWorkspaceResourceRef.current({
+      path: relativePath,
+      ...(line && line > 0 ? { line } : {}),
+      reveal: true,
+    });
   };
 
   useEffect(() => {
     if (!activeDebugPath || !activeDebugLine || debugSession?.status !== "paused") return;
     let cancelled = false;
     void (async () => {
-      const opened = documents.find((document) => document.path === activeDebugPath);
-      if (!opened) {
-        const entry = findWorkspaceEntry(entries, activeDebugPath);
-        if (!entry || entry.kind !== "file") return;
-        await openEntry(entry);
-      } else {
-        setActiveDocumentId(opened.id);
-      }
+      await openWorkspaceResourceRef.current({
+        path: activeDebugPath,
+        line: activeDebugLine,
+        reveal: true,
+      });
       if (cancelled) return;
       const targetScrollTop = Math.max(0, 18 + (activeDebugLine - 1) * 21.45 - 120);
       window.requestAnimationFrame(() => {
@@ -5399,22 +5342,6 @@ export function App() {
 
   const beginPanelResize = (event: React.PointerEvent<HTMLDivElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
-    if (executionPanelActive) {
-      const startX = event.clientX;
-      const startWidth = verticalPanelWidths[executionDockSide];
-      const move = (pointerEvent: PointerEvent) => setVerticalPanelWidths((current) => ({
-        ...current,
-        [executionDockSide]: Math.min(640, Math.max(220, startWidth
-          + (executionDockSide === "left" ? pointerEvent.clientX - startX : startX - pointerEvent.clientX))),
-      }));
-      const finish = () => {
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", finish);
-      };
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", finish);
-      return;
-    }
     const startY = event.clientY;
     const startHeight = panelHeight;
     const move = (pointerEvent: PointerEvent) => setPanelHeight(Math.min(640, Math.max(96, startHeight + startY - pointerEvent.clientY)));
@@ -5495,7 +5422,7 @@ export function App() {
 
   const closeDockConflicts = (
     side: ActivityBarSide,
-    keep: "sidebar" | "problems" | "toolWindow" | "execution",
+    keep: "sidebar" | "problems" | "toolWindow",
   ) => {
     if (keep !== "sidebar" && sidebarViewsBySide[side]) {
       const next = closeSidebarForSide(sidebarViewsBySide, side);
@@ -5505,7 +5432,6 @@ export function App() {
       if (remaining) setSidebarView(remaining);
     }
     if (keep !== "problems" && problemsVisible && problemsDockSide === side) setProblemsVisible(false);
-    if (keep !== "execution" && executionPanelActive && executionDockSide === side) setPanelVisible(false);
   };
 
   const openVerticalSidebar = (view: string, side: ActivityBarSide) => {
@@ -5568,7 +5494,6 @@ export function App() {
         setSidebarView(movingSidebarView);
       }
     } else if (key === "builtin:problems" && problemsVisible) closeDockConflicts(side, "problems");
-    else if (key === "builtin:executions" && executionPanelActive) closeDockConflicts(side, "execution");
     setActivityButtonPlacements((current) => (
       moveActivityButton(activityLayoutItems, current, key, side, targetKey, placeAfter)
     ));
@@ -5675,7 +5600,6 @@ export function App() {
       setPanelVisible(false);
       return;
     }
-    closeDockConflicts(executionDockSide, "execution");
     setToolWindowVisible(false);
     setPanelTab(targetTabId);
     setPanelVisible(true);
@@ -5982,7 +5906,19 @@ export function App() {
                       </span>
                     </div>
                   ) : null}
-                  {entries.length || (explorerCreation && explorerCreationParentPath === "") ? (
+                  {workspaceAccess !== "ready" ? (
+                    <div className="empty-sidebar">
+                      <p>{workspaceAccess === "permission-required"
+                        ? "O acesso ao workspace precisa ser restaurado."
+                        : "O workspace salvo não está mais disponível."}</p>
+                      {workspaceAccess === "permission-required" && workspaceHandle
+                        ? <button className="button primary compact" type="button" onClick={() => invoke(reconnectWorkspace)}>Reconectar pasta</button>
+                        : null}
+                      {workspaceAccess === "missing"
+                        ? <button className="button primary compact" type="button" onClick={() => invoke(openFolder)}>Reabrir pasta</button>
+                        : null}
+                    </div>
+                  ) : entries.length || (explorerCreation && explorerCreationParentPath === "") ? (
                     <EntryTree
                       entries={entries}
                       parentPath=""
@@ -6022,17 +5958,7 @@ export function App() {
                     />
                   ) : (
                     <div className="empty-sidebar">
-                      <p>{workspaceAccess === "permission-required"
-                        ? "O acesso ao workspace precisa ser restaurado."
-                        : workspaceAccess === "missing"
-                          ? "O workspace salvo não está mais disponível."
-                          : "Nenhum arquivo ou pasta aberto."}</p>
-                      {workspaceAccess === "permission-required" && workspaceHandle
-                        ? <button className="button primary compact" type="button" onClick={() => invoke(reconnectWorkspace)}>Reconectar pasta</button>
-                        : null}
-                      {workspaceAccess === "missing"
-                        ? <button className="button primary compact" type="button" onClick={() => invoke(openFolder)}>Reabrir pasta</button>
-                        : null}
+                      <p>Nenhum arquivo ou pasta aberto.</p>
                     </div>
                   )}
                 </div>
@@ -6049,7 +5975,14 @@ export function App() {
                     return (
                       <article className="plugin-card" key={plugin.manifest.id}>
                         <button className="card-delete" type="button" aria-label={`Remover ${plugin.manifest.name}`} title={`Remover ${plugin.manifest.name}`} onClick={() => setPluginRemovalId(plugin.manifest.id)}><X size={14} /></button>
-                        <div className="plugin-card-heading"><Package size={16} /><strong>{plugin.manifest.name}</strong></div>
+                        <div className="plugin-card-heading">
+                          <PluginCardIcon
+                            name={plugin.manifest.name}
+                            src={platform.pluginIconUrl(plugin.manifest.id)}
+                            fallback={<Package size={18} />}
+                          />
+                          <strong>{plugin.manifest.name}</strong>
+                        </div>
                         <p>{plugin.manifest.description}</p>
                         <small>{plugin.manifest.id} · {plugin.manifest.version}</small>
                         <div className="plugin-actions">
@@ -6072,7 +6005,14 @@ export function App() {
                   })}
                   {platformSnapshot.catalog.filter((entry) => !installedIds.has(entry.manifest.id)).map((entry) => (
                     <article className="plugin-card available" key={entry.manifest.id}>
-                      <div className="plugin-card-heading"><Box size={16} /><strong>{entry.manifest.name}</strong></div>
+                      <div className="plugin-card-heading">
+                        <PluginCardIcon
+                          name={entry.manifest.name}
+                          src={resolvePluginIconUrl(entry.manifest, entry.manifestUrl)}
+                          fallback={<Box size={18} />}
+                        />
+                        <strong>{entry.manifest.name}</strong>
+                      </div>
                       <p>{entry.manifest.description}</p>
                       <button className="button primary compact full" type="button" onClick={() => invoke(() => platform.install(entry.manifestUrl))}>Instalar</button>
                     </article>
@@ -6678,17 +6618,10 @@ export function App() {
             {rightActivityItems.map((item) => renderActivityLayoutItem(item, "right"))}
           </aside>
 
-          <div
-            className={`workbench-bottom-region${bottomRegionDockSide ? ` workbench-bottom-region--side workbench-bottom-region--${bottomRegionDockSide}` : ""}`}
-            {...(bottomRegionDockSide
-              ? { style: { gridColumn: bottomRegionDockSide === "left" ? 2 : 6 } }
-              : {})}
-          >
+          <div className="workbench-bottom-region">
             {panelVisible && bottomPanelAvailable ? (
-              <section className={`output-panel${executionPanelActive ? ` output-panel--side output-panel--${executionDockSide}` : ""}${panelVisible ? "" : " output-panel--hidden"}`} style={executionPanelActive ? undefined : { height: panelHeight }}>
-                <div className={`resize-handle ${executionPanelActive
-                  ? executionDockSide === "left" ? "resize-handle--sidebar" : "resize-handle--problems"
-                  : "resize-handle--panel"}`} role="separator" aria-label="Redimensionar painel inferior" onPointerDown={beginPanelResize} onDoubleClick={() => setPanelHeight(DEFAULT_LAYOUT.panelHeight)} />
+              <section className={`output-panel${panelVisible ? "" : " output-panel--hidden"}`} style={{ height: panelHeight }}>
+                <div className="resize-handle resize-handle--panel" role="separator" aria-label="Redimensionar painel inferior" onPointerDown={beginPanelResize} onDoubleClick={() => setPanelHeight(DEFAULT_LAYOUT.panelHeight)} />
                 <div className="panel-heading">
                   <div className="panel-tabs">
                     {profileOutputTabs.map((tab) => {

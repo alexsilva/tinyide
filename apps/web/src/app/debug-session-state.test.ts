@@ -1,6 +1,6 @@
 import type { DebugAdapterProvider, DebugSessionSnapshot } from "@tinyide/plugin-api";
 import { describe, expect, it, vi } from "vitest";
-import { restoreActiveDebugSession } from "./debug-session-state";
+import { restoreActiveDebugSession, workspaceRelativeDebugPath } from "./debug-session-state";
 
 function session(id: string, startedAt: number, status: DebugSessionSnapshot["status"] = "paused"): DebugSessionSnapshot {
   return {
@@ -64,5 +64,20 @@ describe("debug session restoration", () => {
 
     expect(restored.current?.session.id).toBe("current");
     expect(restored.errors.map((error) => error.message)).toEqual(["offline"]);
+  });
+});
+
+describe("debug source paths", () => {
+  it("resolves source files inside the workspace", () => {
+    expect(workspaceRelativeDebugPath(
+      "/workspace/project/src/service.py",
+      "/workspace/project",
+    )).toBe("src/service.py");
+    expect(workspaceRelativeDebugPath("./src/service.py", "/workspace/project")).toBe("src/service.py");
+  });
+
+  it("does not expose sources outside the workspace", () => {
+    expect(workspaceRelativeDebugPath("/usr/lib/python3.12/pathlib.py", "/workspace/project")).toBeUndefined();
+    expect(workspaceRelativeDebugPath("<string>", "/workspace/project")).toBeUndefined();
   });
 });

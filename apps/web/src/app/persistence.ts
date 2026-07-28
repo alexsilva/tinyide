@@ -9,7 +9,11 @@ import type {
   OpenDocument,
   WorkspaceEntry,
 } from "../browser-filesystem";
-import { readFileDocument, resolveFileHandle } from "../browser-filesystem";
+import {
+  isBrowserFileSystemAccessDenied,
+  readFileDocument,
+  resolveFileHandle,
+} from "../browser-filesystem";
 import {
   isActivityButtonPlacement,
   type ActivityButtonPlacements,
@@ -263,36 +267,41 @@ export async function restoreWorkspaceDocuments(
     if (document.workspaceRoot && document.workspaceRoot !== workspaceRoot) return undefined;
     if (!document.workspaceRoot && !workspaceHandle) return undefined;
 
-    let handle = document.handle;
     if (workspaceHandle) {
       try {
-        handle = await resolveFileHandle(workspaceHandle, document.path);
-      } catch {
+        const handle = await resolveFileHandle(workspaceHandle, document.path);
+        const reopened = await readFileDocument(handle, document.path, workspaceRoot);
+        return reopened.kind === "text"
+          ? {
+              ...reopened,
+              content: document.content,
+              savedContent: document.savedContent,
+              selectionStart: document.selectionStart,
+              selectionEnd: document.selectionEnd,
+              scrollTop: document.scrollTop,
+              scrollLeft: document.scrollLeft,
+            }
+          : reopened;
+      } catch (cause) {
+        if (isBrowserFileSystemAccessDenied(cause)) throw cause;
         return undefined;
       }
     }
 
-    if (handle) {
-      const reopened = await readFileDocument(handle as BrowserFileHandle, document.path, workspaceRoot);
-      return reopened.kind === "text"
-        ? {
-            ...reopened,
-            content: document.content,
-            savedContent: document.savedContent,
-            selectionStart: document.selectionStart,
-            selectionEnd: document.selectionEnd,
-            scrollTop: document.scrollTop,
-            scrollLeft: document.scrollLeft,
-          }
-        : reopened;
-    }
-
     return {
-      ...document,
+      id: document.id,
+      name: document.name,
+      path: document.path,
       workspaceRoot,
       kind: document.kind ?? "text",
       mediaType: document.mediaType ?? "text/plain",
       size: document.size ?? new Blob([document.content]).size,
+      content: document.content,
+      savedContent: document.savedContent,
+      selectionStart: document.selectionStart,
+      selectionEnd: document.selectionEnd,
+      scrollTop: document.scrollTop,
+      scrollLeft: document.scrollLeft,
     };
   }));
   return restored.filter((document): document is OpenDocument => Boolean(document));
@@ -318,7 +327,6 @@ export async function writeReactSnapshot(input: {
       name: document.name,
       ...(document.path ? { path: document.path } : {}),
       ...(document.workspaceRoot ? { workspaceRoot: document.workspaceRoot } : {}),
-      ...(document.handle ? { handle: document.handle } : {}),
       kind: document.kind,
       mediaType: document.mediaType,
       size: document.size,
@@ -342,21 +350,9 @@ export async function writeReactSnapshot(input: {
     await writeApplicationSnapshot(snapshotWithHandles);
     return;
   } catch (error) {
-    console.warn("Não foi possível persistir todos os handles; tentando preservar o workspace.", error);
-  }
-
-  const snapshotWithoutDocumentHandles = {
-    ...snapshotWithHandles,
-    documents: base.documents.map(({ handle: _handle, ...document }) => document),
-  };
-
-  try {
-    await writeApplicationSnapshot(snapshotWithoutDocumentHandles);
-    return;
-  } catch (error) {
     console.warn("Não foi possível persistir o handle do workspace; salvando apenas dados serializáveis.", error);
   }
 
-  const { workspaceHandle: _workspaceHandle, ...serializableSnapshot } = snapshotWithoutDocumentHandles;
+  const { workspaceHandle: _workspaceHandle, ...serializableSnapshot } = snapshotWithHandles;
   await writeApplicationSnapshot(serializableSnapshot);
 }

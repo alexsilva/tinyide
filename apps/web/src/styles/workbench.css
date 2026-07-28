@@ -14,7 +14,6 @@
 .workbench { display: grid; grid-template-columns: 48px auto 5px minmax(0, 1fr) 0 0 48px; grid-template-rows: minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
 .activity-bar { grid-column: 1; grid-row: 1 / 3; display: flex; flex-direction: column; align-items: center; gap: 0; border-right: 1px solid var(--border); background: #12151b; padding: 0; }
 .workbench-bottom-region { grid-column: 2 / 7; grid-row: 2; min-width: 0; min-height: 0; overflow: hidden; }
-.workbench-bottom-region--side { grid-row: 1; height: 100%; }
 .workbench-bottom-region > .output-panel,
 .workbench-bottom-region > .tool-window-panel { width: 100%; }
 .activity-bar .icon-button { position: relative; width: 48px; height: 48px; min-height: 48px; border-color: transparent; border-radius: 0; background: transparent; color: #9aa4b5; }
@@ -152,6 +151,9 @@
 .plugin-card { position: relative; display: grid; align-self: start; gap: 5px; min-height: 0; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); }
 .plugin-card.available { border-style: dashed; }
 .plugin-card-heading { display: flex; align-items: center; gap: 7px; }
+.plugin-card-icon { display: grid; flex: 0 0 28px; width: 28px; height: 28px; place-items: center; overflow: hidden; border-radius: 5px; }
+.plugin-card-icon img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.plugin-card-icon svg { color: var(--muted); }
 .plugin-card p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .plugin-card small { color: #737d8d; font-size: 10px; }
 .plugin-actions { justify-content: flex-end; }
@@ -192,9 +194,6 @@
 .architecture-note strong { color: var(--success); }
 
 .output-panel { position: relative; height: 190px; border-top: 1px solid var(--border); background: #0e1116; overflow: hidden; }
-.output-panel--side { height: 100%; border-top: 0; }
-.output-panel--left { border-right: 1px solid var(--border); }
-.output-panel--right { border-left: 1px solid var(--border); }
 .output-panel--hidden { display: none; }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; height: 30px; padding: 0 6px 0 8px; border-bottom: 1px solid #252b36; }
 .panel-tabs { display: flex; min-width: 0; height: 100%; flex: 1 1 auto; align-items: stretch; overflow-x: auto; overflow-y: hidden; }

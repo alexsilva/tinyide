@@ -441,6 +441,10 @@
 .workbench-tab-group.is-active { border-bottom-color: #6d91df; background: #191e27; }
 .workbench-tab { min-width: 0; flex: 1; overflow: hidden; border: 0; padding: 0 8px; background: transparent; color: #929baa; font: 10px/1 system-ui, sans-serif; letter-spacing: .06em; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .workbench-tab-group.is-active .workbench-tab { color: #f0f3f8; }
+.workbench-tab-status { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; padding: 0 2px; }
+.workbench-tab-status:empty { display: none; }
+.workbench-tab-strip-actions { display: flex; flex: 0 0 auto; align-items: stretch; }
+.workbench-tab-strip-action { display: flex; align-items: stretch; }
 .workbench-tab-close { display: grid; width: 22px; place-items: center; border: 0; background: transparent; color: #778191; cursor: pointer; }
 .workbench-tab-close:hover { background: #252b36; color: #f0f3f8; }
 

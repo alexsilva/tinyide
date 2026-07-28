@@ -32,6 +32,14 @@ describe("validatePluginManifest", () => {
     expect(() => validatePluginManifest({ ...valid(), engines: {} })).toThrow("engines.tinyide");
   });
 
+  it("accepts safe relative plugin icons and rejects external or escaping paths", () => {
+    expect(validatePluginManifest({...valid(), icon: "./icon.svg"}).icon).toBe("./icon.svg");
+    expect(() => validatePluginManifest({...valid(), icon: "https://example.test/icon.svg"})).toThrow("relative SVG");
+    expect(() => validatePluginManifest({...valid(), icon: "../icon.svg"})).toThrow("relative SVG");
+    expect(() => validatePluginManifest({...valid(), icon: "/icon.png"})).toThrow("relative SVG");
+    expect(() => validatePluginManifest({...valid(), icon: "./icon.ico"})).toThrow("relative SVG");
+  });
+
   it("uses a specific error type", () => {
     expect(() => validatePluginManifest(undefined)).toThrow(InvalidPluginManifestError);
   });

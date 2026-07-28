@@ -16,6 +16,27 @@ function asError(cause: unknown): Error {
   return cause instanceof Error ? cause : new Error(String(cause));
 }
 
+export function workspaceRelativeDebugPath(
+  path: string | undefined,
+  workspaceRoot: string | undefined,
+): string | undefined {
+  if (!path) return undefined;
+  const normalized = path.replaceAll("\\", "/").trim();
+  if (!normalized || normalized.startsWith("<")) return undefined;
+
+  const normalizedRoot = workspaceRoot?.replaceAll("\\", "/").replace(/\/$/, "");
+  if (normalizedRoot) {
+    const comparePath = normalized.toLocaleLowerCase();
+    const compareRoot = normalizedRoot.toLocaleLowerCase();
+    if (comparePath.startsWith(`${compareRoot}/`)) {
+      return normalized.slice(normalizedRoot.length + 1);
+    }
+    if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) return undefined;
+  }
+
+  return normalized.replace(/^\.\//, "");
+}
+
 export async function restoreActiveDebugSession(
   adapters: readonly DebugAdapterProvider[],
 ): Promise<DebugSessionRestoration> {

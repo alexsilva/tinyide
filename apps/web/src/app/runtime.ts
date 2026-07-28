@@ -472,7 +472,21 @@ export async function sendDebugCommand(
   sessionId: string,
   command: DebugAdapterCommand,
 ): Promise<DebugSessionSnapshot> {
-  return adapter.command(sessionId, command);
+  let snapshot = await adapter.command(sessionId, command);
+  if (!["stepOver", "stepInto", "stepOut"].includes(command)) return snapshot;
+  if (snapshot.status === "paused" || ["stopped", "completed", "failed"].includes(snapshot.status)) {
+    return snapshot;
+  }
+
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+    snapshot = await adapter.read(sessionId);
+    if (snapshot.status === "paused" || ["stopped", "completed", "failed"].includes(snapshot.status)) {
+      return snapshot;
+    }
+  }
+  return snapshot;
 }
 
 export async function runScript(input: {

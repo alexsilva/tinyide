@@ -52,6 +52,21 @@ export interface OpenDocument {
   readonly scrollLeft: number;
 }
 
+export function isBrowserFileSystemAccessDenied(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const name = error.name.toLocaleLowerCase();
+  const message = error.message.toLocaleLowerCase();
+  return name === "notallowederror"
+    || name === "securityerror"
+    || message.includes("request is not allowed by the user agent")
+    || message.includes("not allowed by the user agent or the platform")
+    || message.includes("permission denied");
+}
+
+export function browserFileSystemAccessError(): Error {
+  return new Error("O acesso ao workspace expirou. Reconecte ou reabra a pasta para continuar.");
+}
+
 const IMAGE_MEDIA_TYPES = new Map<string, string>([
   [".avif", "image/avif"],
   [".bmp", "image/bmp"],

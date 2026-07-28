@@ -46,6 +46,8 @@ export type PluginCategory = "language" | "tool";
 export interface PluginManifest {
   readonly id: string;
   readonly name: string;
+  /** Caminho relativo ao manifesto para a identidade visual do plugin. */
+  readonly icon?: string;
   readonly description?: string;
   readonly version: string;
   readonly publisher: string;
@@ -562,10 +564,20 @@ export interface WorkbenchTabContribution {
   readonly placement?: "start" | "end";
   onSelect(): void;
   onClose?(): void | Promise<void>;
+  /** Renders custom content inside the tab, after the label and before the close button. */
+  mountStatus?(container: HTMLElement): void | Disposable;
+}
+
+/** Action rendered by the host after the last tab of a tab strip. */
+export interface WorkbenchTabStripActionContribution {
+  readonly id: string;
+  readonly order?: number;
+  mount(container: HTMLElement): void | Disposable;
 }
 
 export interface WorkbenchTabApi {
   register(tab: WorkbenchTabContribution): Disposable;
+  registerAction(action: WorkbenchTabStripActionContribution): Disposable;
   select(id: string): void;
   activeId(): string | undefined;
 }

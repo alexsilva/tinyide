@@ -1,4 +1,3 @@
-import type { ExecutionProfile } from "@tinyide/plugin-api";
 import { hostProcessOutputLines, type HostProcessSnapshot } from "./runtime";
 
 export type ProfileExecutionStatus = "running" | "completed" | "failed" | "stopped";
@@ -95,10 +94,8 @@ export function nextPanelTabAfterClosingProfile(
 
 function linesForProfileProcess(
   process: HostProcessSnapshot,
-  includeProfileHeading: boolean,
 ): readonly string[] {
-  const lines = hostProcessOutputLines(process);
-  return includeProfileHeading ? lines : lines.slice(1);
+  return hostProcessOutputLines(process);
 }
 
 function statusForProcess(process: HostProcessSnapshot): ProfileExecutionStatus {
@@ -115,13 +112,8 @@ export function profileExecutionStatusLabel(state: ProfileExecutionState | undef
   return "Falhou";
 }
 
-export function profileExecutionOutput(
-  profile: Pick<ExecutionProfile, "name">,
-  state: ProfileExecutionState | undefined,
-): readonly string[] {
-  return state?.output.length
-    ? state.output
-    : [`[perfil] ${profile.name}`, "[não executado]"];
+export function profileExecutionOutput(state: ProfileExecutionState | undefined): readonly string[] {
+  return state?.output.length ? state.output : ["[não executado]"];
 }
 
 export function resumedProfileProcessOutput(
@@ -130,7 +122,7 @@ export function resumedProfileProcessOutput(
 ): readonly string[] {
   return [
     ...resumed.precedingOutput,
-    ...linesForProfileProcess(process, resumed.precedingOutput.length === 0),
+    ...linesForProfileProcess(process),
   ];
 }
 
@@ -160,7 +152,7 @@ export function restoreProfileExecutions(
     const latest = ordered.at(-1)!;
     const output: string[] = [];
     for (const process of ordered) {
-      output.push(...linesForProfileProcess(process, output.length === 0));
+      output.push(...linesForProfileProcess(process));
     }
     states[profileId] = {
       profileId,
@@ -177,7 +169,7 @@ export function restoreProfileExecutions(
     if (latest.status === "running") {
       const precedingOutput: string[] = [];
       for (const process of ordered.slice(0, -1)) {
-        precedingOutput.push(...linesForProfileProcess(process, precedingOutput.length === 0));
+        precedingOutput.push(...linesForProfileProcess(process));
       }
       running.push({ profileId, processId: latest.id, precedingOutput });
     }

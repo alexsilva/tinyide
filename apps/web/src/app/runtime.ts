@@ -23,6 +23,8 @@ import type {
   ScriptExecutionContribution,
   TextEditorLineDecorationProvider,
   TextDiagnostic,
+  WorkbenchExecutionViewProvider,
+  WorkbenchExecutionViewTarget,
   WorkbenchResourceDescriptor,
   WorkbenchResourceEditorProvider,
 } from "@tinyide/plugin-api";
@@ -166,6 +168,22 @@ export function resourceEditorProviderFor(
     .find((provider) => {
       try {
         return provider.canOpen(resource);
+      } catch {
+        return false;
+      }
+    });
+}
+
+export function executionViewProviderFor(
+  target: WorkbenchExecutionViewTarget,
+): WorkbenchExecutionViewProvider | undefined {
+  return platform.capabilities
+    .getAll<WorkbenchExecutionViewProvider>("workbench.executionView")
+    .slice()
+    .sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0) || left.id.localeCompare(right.id))
+    .find((provider) => {
+      try {
+        return provider.canRender(target);
       } catch {
         return false;
       }
@@ -381,7 +399,7 @@ export async function runExecutionProfile(input: {
     ...(environment?.path ? { environmentPath: environment.path } : {}),
   });
 
-  const completedOutput: string[] = [`[perfil] ${profile.name}`];
+  const completedOutput: string[] = [];
   callbacks.onOutput(completedOutput);
   for (const step of resolvedSteps) {
     if (callbacks.shouldStop?.()) {
@@ -408,7 +426,7 @@ export async function runExecutionProfile(input: {
         runId,
         stepId: step.id,
         stepName: step.name,
-        outputPrefix: [`[perfil] ${profile.name}`, ...heading],
+        outputPrefix: heading,
       },
     });
     callbacks.onProcessStarted(process.id);
@@ -420,7 +438,7 @@ export async function runExecutionProfile(input: {
       process = await readHostProcess(process.id);
       callbacks.onOutput([
         ...completedOutput,
-        ...hostProcessOutputLines(process).slice(1),
+        ...hostProcessOutputLines(process),
       ]);
       if (callbacks.shouldStop?.() && process.status === "running") {
         await stopHostProcess(process.id);

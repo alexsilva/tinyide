@@ -3,11 +3,14 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  WorkbenchExecutionViewProvider,
+  WorkbenchExecutionViewTarget,
   WorkbenchSidebarContribution,
   WorkbenchStateApi,
   WorkbenchToolWindowContribution,
 } from "@tinyide/plugin-api";
 import {
+  ExecutionViewHost,
   WorkbenchSidebarHost,
   WorkbenchToolWindowHost,
 } from "./workbench-plugin-hosts";
@@ -105,6 +108,36 @@ describe("workbench plugin hosts", () => {
     expect(host?.querySelector("span")).toBe(marker);
     act(() => root?.unmount());
     root = undefined;
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an execution tab view mounted while the same profile tab stays open", () => {
+    const dispose = vi.fn();
+    const mount = vi.fn(({ container }: { container: HTMLElement }) => {
+      const marker = document.createElement("span");
+      marker.textContent = "árvore de testes";
+      container.append(marker);
+      return { dispose };
+    });
+    const provider = {
+      id: "pytest-execution-view",
+      pluginId: "tinyide.pytest",
+      canRender: () => true,
+      mount,
+    } as unknown as WorkbenchExecutionViewProvider;
+    const target: WorkbenchExecutionViewTarget = { profileId: "pytest", profileName: "Pytest", mode: "run" };
+
+    render(<ExecutionViewHost provider={provider} target={target} state={state} />);
+    const marker = host?.querySelector("span");
+    // Nova identidade do target a cada render do App não deve remontar a visão.
+    render(<ExecutionViewHost provider={provider} target={{ ...target }} state={state} />);
+
+    expect(mount).toHaveBeenCalledTimes(1);
+    expect(host?.querySelector("span")).toBe(marker);
+    expect(host?.querySelector("[data-execution-view-provider='pytest-execution-view']")).not.toBeNull();
+
+    render(<ExecutionViewHost provider={provider} target={{ ...target, profileId: "outro" }} state={state} />);
+    expect(mount).toHaveBeenCalledTimes(2);
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 });

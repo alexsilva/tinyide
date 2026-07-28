@@ -31,6 +31,14 @@ describe("execution panel layout", () => {
     expect(openers).toHaveLength(1);
   });
 
+  it("lets a plugin own the run tab body without duplicating the follow control", () => {
+    // A aba de execução é compartilhada por todos os perfis; um plugin (pytest)
+    // substitui apenas o corpo da aba de execução do seu próprio perfil.
+    expect(appSource).toContain("viewProvider: tabDebugSession ? undefined : executionViewProviderFor(viewTarget)");
+    expect(appSource).toContain("<ExecutionViewHost");
+    expect(appSource).toContain("{!tabDebugSession && !tab.viewProvider ? (");
+  });
+
   it("keeps follow output in the existing execution toolbar without an extra row", () => {
     expect(appSource).toContain('className="workbench-output-follow execution-panel-toolbar__follow"');
     expect(appSource).not.toContain('className="execution-text-output__toolbar"');

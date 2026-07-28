@@ -111,6 +111,7 @@ export interface PluginExtensionApi {
   registerDebugAdapterProvider(provider: DebugAdapterProvider): Disposable;
   registerScriptExecution(contribution: ScriptExecutionContribution): Disposable;
   registerResourceContextMenuProvider(provider: ResourceContextMenuProvider): Disposable;
+  registerTextEditorContextMenuProvider(provider: TextEditorContextMenuProvider): Disposable;
   registerInteractiveSessionHook(provider: InteractiveSessionHookProvider): Disposable;
   registerInteractiveSessionProvider(provider: InteractiveSessionProvider): Disposable;
   getInteractiveSessionHooks(): readonly InteractiveSessionHookProvider[];
@@ -123,6 +124,7 @@ export interface PluginExtensionApi {
   registerWorkbenchEditorToolbarProvider(provider: WorkbenchEditorToolbarProvider): Disposable;
   registerTextEditorLineDecorationProvider(provider: TextEditorLineDecorationProvider): Disposable;
   registerWorkbenchResourceEditorProvider(provider: WorkbenchResourceEditorProvider): Disposable;
+  registerWorkbenchExecutionViewProvider(provider: WorkbenchExecutionViewProvider): Disposable;
 }
 
 export interface PluginModule {
@@ -194,6 +196,8 @@ export interface ExecutionProfileStep {
   readonly target?: ExecutionProfileTargetSelection;
   readonly command: string;
   readonly parameters: readonly string[];
+  /** Optional authoring hint shown when the parameter list is empty. */
+  readonly parametersPlaceholder?: string;
   readonly workingDirectory?: string;
   readonly environmentVariables?: Readonly<Record<string, string>>;
   readonly continueOnError?: boolean;
@@ -424,6 +428,8 @@ export interface ResourceContext {
   readonly kind: "file" | "directory";
   readonly name: string;
   readonly path: string;
+  /** Open editor document associated with this resource, when available. */
+  readonly documentId?: string;
   readonly workspaceName?: string;
   readonly workspaceRoot?: string;
   /** True when the file is currently modified in an open editor buffer. */
@@ -511,6 +517,26 @@ export interface ResourceContextMenuProvider {
 }
 
 export const RESOURCE_CONTEXT_MENU_CAPABILITY = "resource.contextMenu";
+
+export interface TextEditorContextMenuContext {
+  readonly document: TextEditorDocumentSnapshot;
+  readonly selectionStart: number;
+  readonly selectionEnd: number;
+  /** One-based cursor line. */
+  readonly line: number;
+  /** One-based cursor column. */
+  readonly column: number;
+}
+
+export interface TextEditorContextMenuProvider {
+  readonly id: string;
+  readonly pluginId: string;
+  provideItems(
+    context: TextEditorContextMenuContext,
+  ): Promise<readonly ResourceContextMenuItem[]> | readonly ResourceContextMenuItem[];
+}
+
+export const TEXT_EDITOR_CONTEXT_MENU_CAPABILITY = "textEditor.contextMenu";
 
 export type PluginSettingValue = boolean | string | number;
 
@@ -910,6 +936,38 @@ export interface WorkbenchResourceEditorProvider {
 }
 
 export const WORKBENCH_RESOURCE_EDITOR_CAPABILITY = "workbench.resourceEditor";
+
+export type WorkbenchExecutionViewMode = "run" | "debug";
+
+/** Aba de execução aberta no painel inferior compartilhado pelos perfis. */
+export interface WorkbenchExecutionViewTarget {
+  readonly profileId: string;
+  readonly profileName: string;
+  readonly mode: WorkbenchExecutionViewMode;
+  /** Perfil ainda presente na configuração; ausente para execuções órfãs. */
+  readonly profile?: ExecutionProfile;
+}
+
+export interface WorkbenchExecutionViewMountContext extends WorkbenchPanelMountContext {
+  readonly target: WorkbenchExecutionViewTarget;
+}
+
+/**
+ * Substitui a saída textual da aba de execução por uma visão própria do plugin.
+ * O host mantém a barra de ações da aba e o estado da execução continua
+ * disponível por `workbench.execution`.
+ */
+export interface WorkbenchExecutionViewProvider {
+  readonly id: string;
+  readonly pluginId: string;
+  readonly priority?: number;
+  canRender(target: WorkbenchExecutionViewTarget): boolean;
+  mount(
+    context: WorkbenchExecutionViewMountContext,
+  ): void | Disposable | Promise<void | Disposable>;
+}
+
+export const WORKBENCH_EXECUTION_VIEW_CAPABILITY = "workbench.executionView";
 
 export type TextEditorLineDecorationKind =
   | "added"

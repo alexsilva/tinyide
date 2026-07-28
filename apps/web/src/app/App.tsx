@@ -62,6 +62,7 @@ import {
 import { formatCommandLineArguments, parseCommandLineArguments } from "@tinyide/core";
 import { WorkbenchDialogHost } from "./workbench-dialog-host";
 import {
+  ExecutionViewHost,
   readOpenDocumentBlob,
   ResourceEditorHost,
   WorkbenchPanelHost,
@@ -96,6 +97,8 @@ import type {
   ResourceDecoration,
   ResourceContextMenuItem,
   ResourceContextMenuProvider,
+  TextEditorContextMenuContext,
+  TextEditorContextMenuProvider,
   TextEditorDocumentChangedEvent,
   TextEditorDocumentSnapshot,
   TextEditorDocumentSavedEvent,
@@ -112,6 +115,7 @@ import type {
   WorkbenchTabApi,
   WorkbenchPanelHook,
   WorkbenchResourceEditorProvider,
+  WorkbenchExecutionViewTarget,
   WorkbenchSidebarContribution,
   WorkbenchSidebarHook,
   WorkbenchStateApi,
@@ -233,6 +237,7 @@ import {
   resourceIconFor,
   resourceDecorationProviders,
   resourceEditorProviderFor,
+  executionViewProviderFor,
   scriptExecutionFor,
   setHostWorkspace,
   stopHostProcess,
@@ -327,7 +332,8 @@ type StoredProfiles = WorkspaceExecutionProfiles;
 type ContextMenuTarget =
   | { readonly kind: "root" }
   | { readonly kind: "entry"; readonly entry: WorkspaceEntry }
-  | { readonly kind: "document"; readonly document: OpenDocument };
+  | { readonly kind: "document"; readonly document: OpenDocument }
+  | { readonly kind: "editor"; readonly context: TextEditorContextMenuContext };
 
 interface ContextMenuState {
   readonly target: ContextMenuTarget;
@@ -759,14 +765,23 @@ export function App() {
       ? debugSession
       : undefined;
     if (!profile && !execution && !tabDebugSession) return [];
+    const name = profile?.name ?? execution?.profileName ?? tabDebugSession?.profileName ?? tab.profileId;
+    const viewTarget: WorkbenchExecutionViewTarget = {
+      profileId: tab.profileId,
+      profileName: name,
+      mode: tab.mode,
+      ...(profile ? { profile } : {}),
+    };
     return [{
       profileId: tab.profileId,
       mode: tab.mode,
       tabId,
-      name: profile?.name ?? execution?.profileName ?? tabDebugSession?.profileName ?? tab.profileId,
+      name,
       profile,
       execution,
       debugSession: tabDebugSession,
+      viewTarget,
+      viewProvider: tabDebugSession ? undefined : executionViewProviderFor(viewTarget),
     }];
   });
   const runningProfileOutputCount = profileOutputTabs.filter((tab) => (
@@ -1831,16 +1846,20 @@ export function App() {
     return () => { cancelled = true; };
   }, [activeDebugPath, activeDebugLine, debugSession?.status]);
 
-  const resourceContext = (entry: WorkspaceEntry): ResourceContext => ({
-    kind: entry.kind,
-    name: entry.name,
-    path: entry.path,
-    ...(workspaceName !== "Sem workspace" ? { workspaceName } : {}),
-    ...(workspaceRoot ? { workspaceRoot } : {}),
-    ...(entry.kind === "file" ? {
-      isDirty: documents.some((document) => document.path === entry.path && document.kind === "text" && document.content !== document.savedContent),
-    } : {}),
-  });
+  const resourceContext = (entry: WorkspaceEntry): ResourceContext => {
+    const document = entry.kind === "file"
+      ? documents.find((candidate) => candidate.path === entry.path)
+      : undefined;
+    return {
+      kind: entry.kind,
+      name: entry.name,
+      path: entry.path,
+      ...(document ? { documentId: document.id } : {}),
+      ...(workspaceName !== "Sem workspace" ? { workspaceName } : {}),
+      ...(workspaceRoot ? { workspaceRoot } : {}),
+      ...(document?.kind === "text" ? { isDirty: document.content !== document.savedContent } : {}),
+    };
+  };
 
   const rootResourceContext = (): ResourceContext => ({
     kind: "directory",
@@ -1947,8 +1966,10 @@ export function App() {
     kind: "file",
     name: document.name,
     path: document.path ?? document.name,
+    documentId: document.id,
     ...(workspaceName !== "Sem workspace" ? { workspaceName } : {}),
     ...(workspaceRoot ? { workspaceRoot } : {}),
+    ...(document.kind === "text" ? { isDirty: document.content !== document.savedContent } : {}),
   });
 
   const openDocumentMenu = async (document: OpenDocument, x: number, y: number) => {
@@ -2024,6 +2045,29 @@ export function App() {
       .sort((left, right) => (groupOrder.get(left.group ?? "") ?? 1000) - (groupOrder.get(right.group ?? "") ?? 1000)
         || (left.order ?? 0) - (right.order ?? 0));
     setContextMenu({ target: { kind: "document", document }, x, y, items });
+  };
+
+  const openEditorMenu = async (document: OpenDocument, textarea: HTMLTextAreaElement, x: number, y: number) => {
+    const selectionStart = textarea.selectionStart;
+    const selectionEnd = textarea.selectionEnd;
+    const beforeCursor = textarea.value.slice(0, selectionStart);
+    const lineStart = beforeCursor.lastIndexOf("\n") + 1;
+    const context: TextEditorContextMenuContext = {
+      document: {
+        ...editorToolbarDocumentSnapshot(document),
+        content: textarea.value,
+      },
+      selectionStart,
+      selectionEnd,
+      line: beforeCursor.split("\n").length,
+      column: selectionStart - lineStart + 1,
+    };
+    const providers = platform.capabilities.getAll<TextEditorContextMenuProvider>("textEditor.contextMenu");
+    const items = (await Promise.all(providers.map((provider) => provider.provideItems(context))))
+      .flat()
+      .filter((item) => item.enabled !== false)
+      .sort((left, right) => (left.order ?? 0) - (right.order ?? 0));
+    if (items.length) setContextMenu({ target: { kind: "editor", context }, x, y, items });
   };
 
   const toggleEntry = async (entry: WorkspaceEntry) => {
@@ -2821,7 +2865,7 @@ export function App() {
         profileId: profile.id,
         profileName: profile.name,
         status: "running",
-        output: [`[perfil] ${profile.name}`],
+        output: [],
         startedAt,
       },
     }));
@@ -2842,7 +2886,7 @@ export function App() {
                 profileId: profile.id,
                 profileName: profile.name,
                 status: "running" as const,
-                output: [`[perfil] ${profile.name}`],
+                output: [],
                 startedAt,
               }),
               status: "running",
@@ -2862,7 +2906,7 @@ export function App() {
                 profileId: profile.id,
                 profileName: profile.name,
                 status: "running" as const,
-                output: [`[perfil] ${profile.name}`],
+                output: [],
                 startedAt,
               }),
               status: "running",
@@ -2878,7 +2922,7 @@ export function App() {
           ...(current[profile.id] ?? {
             profileId: profile.id,
             profileName: profile.name,
-            output: [`[perfil] ${profile.name}`],
+            output: [],
             startedAt,
           }),
           status: result === "stopped" ? "stopped" : "completed",
@@ -2893,7 +2937,7 @@ export function App() {
           ...(current[profile.id] ?? {
             profileId: profile.id,
             profileName: profile.name,
-            output: [`[perfil] ${profile.name}`],
+            output: [],
             startedAt,
           }),
           status: "failed",
@@ -3083,6 +3127,11 @@ export function App() {
 
   const executeContextMenuItem = async (item: ResourceContextMenuItem, target: ContextMenuTarget) => {
     setContextMenu(undefined);
+    if (target.kind === "editor") {
+      if (!item.command) throw new Error(`A ação '${item.id}' não possui executor.`);
+      await platform.commands.execute(item.command, target.context);
+      return;
+    }
     if (target.kind === "root") {
       if (item.command?.startsWith("core.resource.newFile")) {
         await startExplorerCreation("file", "", decodedNewFileOption(item.command));
@@ -4613,6 +4662,12 @@ export function App() {
                             onChange={(event) => updateDocument(event.currentTarget)}
                             onKeyDown={handleEditorKeyDown}
                             onSelect={(event) => captureEditorState(event.currentTarget, highlightedEditorScrollRef.current ?? event.currentTarget)}
+                            onContextMenu={(event) => {
+                              if (!activeDocument) return;
+                              event.preventDefault();
+                              captureEditorState(event.currentTarget, highlightedEditorScrollRef.current ?? event.currentTarget);
+                              invoke(() => openEditorMenu(activeDocument, event.currentTarget, event.clientX, event.clientY));
+                            }}
                           />
                         </div>
                       </div>
@@ -4625,6 +4680,12 @@ export function App() {
                         onChange={(event) => updateDocument(event.currentTarget)}
                         onKeyDown={handleEditorKeyDown}
                         onSelect={(event) => captureEditorState(event.currentTarget)}
+                        onContextMenu={(event) => {
+                          if (!activeDocument) return;
+                          event.preventDefault();
+                          captureEditorState(event.currentTarget);
+                          invoke(() => openEditorMenu(activeDocument, event.currentTarget, event.clientX, event.clientY));
+                        }}
                         onScroll={(event) => {
                           syncEditorLineRuler(event.currentTarget.scrollTop);
                           captureEditorState(event.currentTarget);
@@ -4889,10 +4950,7 @@ export function App() {
                             </ButtonTooltip>
                           ) : null}
                         </div>
-                        <span className="execution-panel-toolbar__status">
-                          {tabDebugSession ? `Depuração · ${debugRestarting ? "reiniciando" : tabDebugSession.status}` : profileExecutionStatusLabel(tab.execution)}
-                        </span>
-                        {!tabDebugSession ? (
+                        {!tabDebugSession && !tab.viewProvider ? (
                           <label className="workbench-output-follow execution-panel-toolbar__follow">
                             <input
                               type="checkbox"
@@ -5020,9 +5078,15 @@ export function App() {
                             </section>
                           </aside>
                         </div>
+                      ) : tab.viewProvider ? (
+                        <ExecutionViewHost
+                          provider={tab.viewProvider}
+                          target={tab.viewTarget}
+                          state={workbenchState}
+                        />
                       ) : (
                         <FollowedExecutionOutput
-                          text={profileExecutionOutput({ name: tab.name }, tab.execution).join("\n")}
+                          text={profileExecutionOutput(tab.execution).join("\n")}
                           following={outputFollowing}
                         />
                       )}
@@ -5352,7 +5416,9 @@ export function App() {
                 ? workspaceName
                 : contextMenu.target.kind === "entry"
                   ? contextMenu.target.entry.name
-                  : contextMenu.target.document.name}`}
+                  : contextMenu.target.kind === "document"
+                    ? contextMenu.target.document.name
+                    : contextMenu.target.context.document.name}`}
               style={{ left: contextMenu.x, top: contextMenu.y }}
             >
               {contextMenu.items.map((item, index) => {

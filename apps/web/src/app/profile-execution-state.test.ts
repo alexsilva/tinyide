@@ -34,7 +34,7 @@ function processSnapshot(input: Partial<HostProcessSnapshot> & {
       ...(input.runId ? { runId: input.runId } : {}),
       stepId: input.id,
       stepName: input.id,
-      outputPrefix: [`[perfil] ${input.profileName}`, `[etapa] ${input.id}`],
+      outputPrefix: [`[etapa] ${input.id}`],
     },
     stdout: input.stdout ?? "",
     stderr: input.stderr ?? "",
@@ -136,7 +136,9 @@ describe("profile execution state", () => {
 
     expect(output.join("\n")).toContain("build-ok");
     expect(output.join("\n")).toContain("request-ok");
-    expect(output.filter((line) => line === "[perfil] Node")).toHaveLength(1);
+    expect(output).not.toContain("[perfil] Node");
+    expect(output).toContain("[etapa] build");
+    expect(output).toContain("[etapa] serve");
   });
 
   it("restores only the newest execution of a profile", () => {
@@ -170,9 +172,12 @@ describe("profile execution state", () => {
 
   it("exposes the selected profile status without borrowing another profile output", () => {
     expect(profileExecutionStatusLabel(undefined)).toBe("Não executado");
-    expect(profileExecutionOutput({ name: "Python" }, undefined)).toEqual([
-      "[perfil] Python",
-      "[não executado]",
-    ]);
+    expect(profileExecutionOutput(undefined)).toEqual(["[não executado]"]);
+    expect(profileExecutionOutput({
+      profileId: "python",
+      profileName: "Python",
+      status: "completed",
+      output: ["[etapa] Executar", "ok"],
+    })).toEqual(["[etapa] Executar", "ok"]);
   });
 });

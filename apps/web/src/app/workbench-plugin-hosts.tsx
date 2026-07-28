@@ -6,6 +6,8 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type {
+  WorkbenchExecutionViewProvider,
+  WorkbenchExecutionViewTarget,
   WorkbenchPanelContribution,
   WorkbenchResourceEditorProvider,
   WorkbenchSidebarContribution,
@@ -119,6 +121,50 @@ export function WorkbenchPanelHost({
   }, [provider, state]);
 
   return <div className="plugin-panel-host" ref={containerRef} data-panel-id={provider.id} />;
+}
+
+export function ExecutionViewHost({
+  provider,
+  target,
+  state,
+}: {
+  readonly provider: WorkbenchExecutionViewProvider;
+  readonly target: WorkbenchExecutionViewTarget;
+  readonly state: WorkbenchStateApi;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const targetRef = useRef(target);
+  targetRef.current = target;
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    let disposed = false;
+    let mountedDisposable: void | Disposable;
+    try {
+      mountResult(
+        provider.mount({ container, state, target: targetRef.current }),
+        container,
+        () => disposed,
+        (value) => { mountedDisposable = value; },
+      );
+    } catch (cause) {
+      container.textContent = cause instanceof Error ? cause.message : String(cause);
+    }
+    return () => {
+      disposed = true;
+      mountedDisposable?.dispose();
+      container.replaceChildren();
+    };
+  }, [provider, state, target.profileId, target.mode]);
+
+  return (
+    <div
+      className="execution-panel-plugin-view"
+      ref={containerRef}
+      data-execution-view-provider={provider.id}
+    />
+  );
 }
 
 export function WorkbenchToolWindowHost({

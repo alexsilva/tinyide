@@ -391,7 +391,7 @@ export function ProfileDialog({
                       <textarea
                         rows={5}
                         value={parameterDrafts[editing.id] ?? formatCommandLineArguments(step.parameters)}
-                        placeholder="Ex.: --port 8000 --verbose"
+                        placeholder={step.parametersPlaceholder ?? "Ex.: --port 8000 --verbose"}
                         onChange={(event) => {
                           setParameterDrafts((current) => ({ ...current, [editing.id]: event.target.value }));
                           setParameterError(undefined);

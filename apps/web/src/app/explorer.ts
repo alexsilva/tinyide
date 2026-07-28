@@ -209,6 +209,15 @@ export function workspacePathBelongsToResource(path: string | undefined, resourc
   return Boolean(path && (path === resourcePath || path.startsWith(`${resourcePath}/`)));
 }
 
+/** Removes selected descendants when their ancestor directory is also selected. */
+export function topLevelWorkspacePaths(paths: Iterable<string>): readonly string[] {
+  return [...new Set(paths)]
+    .filter(Boolean)
+    .sort((left, right) => left.length - right.length)
+    .filter((path, index, ordered) => !ordered.slice(0, index)
+      .some((ancestor) => path === ancestor || path.startsWith(`${ancestor}/`)));
+}
+
 export function remapOpenDocumentResource(
   document: OpenDocument,
   previousPath: string,

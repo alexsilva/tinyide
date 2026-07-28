@@ -183,6 +183,7 @@ import {
   workspacePathName,
   workspacePathParent,
   workspacePathContainsHiddenSegment,
+  topLevelWorkspacePaths,
 } from "./explorer";
 import {
   ensureFileCreationExtension,
@@ -347,6 +348,7 @@ interface ContextMenuState {
 }
 
 const EXPLORER_FILTER_DEBOUNCE_MS = 40;
+const MAX_SYNTAX_HIGHLIGHT_SOURCE_LENGTH = 100_000;
 
 interface ExplorerFilterResultState {
   readonly query: string;
@@ -474,6 +476,19 @@ async function hydrateExpandedEntries(
   }));
 }
 
+/** Expands only the folders needed to reveal one resource, without rescanning other open branches. */
+async function hydrateExplorerPath(
+  entries: readonly WorkspaceEntry[],
+  path: string,
+): Promise<readonly WorkspaceEntry[]> {
+  const ancestors = new Set(explorerAncestorDirectoryPaths(path));
+  return Promise.all(entries.map(async (entry) => {
+    if (entry.kind !== "directory" || !entry.handle || !ancestors.has(entry.path)) return entry;
+    const children = await listDirectory(entry.handle as BrowserDirectoryHandle, entry.path);
+    return { ...entry, children: await hydrateExplorerPath(children, path) };
+  }));
+}
+
 export function App() {
   const initialSession = useMemo(() => readSession(), []);
   const [platformSnapshot, setPlatformSnapshot] = useState(() => platform.snapshot());
@@ -581,12 +596,13 @@ export function App() {
   const [explorerRenamePath, setExplorerRenamePath] = useState<string>();
   const [explorerRenameName, setExplorerRenameName] = useState("");
   const [explorerRenameError, setExplorerRenameError] = useState<string>();
-  const [explorerPendingDeletion, setExplorerPendingDeletion] = useState<WorkspaceEntry>();
+  const [explorerPendingDeletion, setExplorerPendingDeletion] = useState<readonly WorkspaceEntry[]>();
   const [explorerClipboard, setExplorerClipboard] = useState<Pick<WorkspaceEntry, "path" | "name" | "kind"> | undefined>(undefined);
   const [highlightedExplorerPath, setHighlightedExplorerPath] = useState<string>();
   const [selectedExplorerPath, setSelectedExplorerPath] = useState<string>();
+  const [selectedExplorerPaths, setSelectedExplorerPaths] = useState<ReadonlySet<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState>();
-  const [draggingExplorerPath, setDraggingExplorerPath] = useState<string>();
+  const [draggingExplorerPaths, setDraggingExplorerPaths] = useState<ReadonlySet<string>>(new Set());
   const [dropTargetExplorerPath, setDropTargetExplorerPath] = useState<string>();
   const [explorerHistory, setExplorerHistory] = useState<ExplorerHistoryState>(createExplorerHistoryState);
   const [explorerFilterOpen, setExplorerFilterOpen] = useState(false);
@@ -713,6 +729,7 @@ export function App() {
   const activeLanguageProvider = activeResourceEditorProvider ? undefined : languageProviderFor(activeDocument);
   const activeSyntaxHighlighter = useMemo(() => {
     if (activeResourceEditorProvider || !activeDocument || activeDocument.kind !== "text") return undefined;
+    if (activeDocument.content.length > MAX_SYNTAX_HIGHLIGHT_SOURCE_LENGTH) return undefined;
     return resolveSyntaxHighlighter({
       fileName: activeDocument.name,
       mediaType: activeDocument.mediaType,
@@ -1835,7 +1852,7 @@ export function App() {
       const nextExpanded = new Set([...expanded, ...explorerAncestorDirectoryPaths(path)]);
       if (workspacePathContainsHiddenSegment(path)) setExplorerShowHidden(true);
       setExpanded(nextExpanded);
-      await refreshExplorer(nextExpanded);
+      setEntries(await hydrateExplorerPath(entries, path));
       setSelectedExplorerPath(path);
     }
     if (request.line && request.line > 0) scrollEditorToLine(request.line);
@@ -1954,6 +1971,10 @@ export function App() {
   };
 
   const openResourceMenu = async (entry: WorkspaceEntry, x: number, y: number) => {
+    const selectedEntries = topLevelWorkspacePaths(
+      selectedExplorerPaths.has(entry.path) ? selectedExplorerPaths : [entry.path],
+    ).map((path) => findWorkspaceEntry(entries, path)).filter((candidate): candidate is WorkspaceEntry => Boolean(candidate));
+    const isBulkSelection = selectedEntries.length > 1;
     const fileCreationOptions = entry.kind === "directory"
       ? await resolveWorkspaceFileCreationOptions(entry.path)
       : [];
@@ -1964,7 +1985,7 @@ export function App() {
         command: "core.resource.open",
         group: "navigation",
         order: 0,
-        icon: entry.kind === "file" ? "file" : "folder",
+        icon: entry.kind === "file" ? "file" as const : "folder" as const,
       },
       ...(workspaceRoot ? [{
         id: "core.openInFileManager",
@@ -1985,40 +2006,40 @@ export function App() {
           icon: "folder" as const,
         },
       ] : []),
-      {
+      ...(!isBulkSelection ? [{
         id: "core.rename",
         label: "Renomear",
         command: "core.resource.rename",
         group: "file",
         order: 0,
-        icon: entry.kind === "directory" ? "folder" : "file",
-      },
-      {
+        icon: entry.kind === "directory" ? "folder" as const : "file" as const,
+      }] : []),
+      ...(!isBulkSelection ? [{
         id: "core.copyPath",
         label: "Copiar caminho",
         command: "core.resource.copyPath",
         group: "clipboard",
         order: 100,
-        icon: "copy",
-      },
-      {
+        icon: "copy" as const,
+      }] : []),
+      ...(!isBulkSelection ? [{
         id: "core.copyEntry",
         label: entry.kind === "directory" ? "Copiar pasta" : "Copiar arquivo",
         command: "core.resource.copyEntry",
         group: "clipboard",
         order: 90,
-        icon: "copy",
-      },
-      {
+        icon: "copy" as const,
+      }] : []),
+      ...(!isBulkSelection ? [{
         id: "core.copyAbsolutePath",
         label: "Copiar caminho absoluto",
         command: "core.resource.copyAbsolutePath",
         group: "clipboard",
         order: 110,
-        icon: "copy",
+        icon: "copy" as const,
         enabled: Boolean(workspaceAbsolutePath(workspaceRoot, entry.path)),
-      },
-      ...(explorerClipboard ? [{
+      }] : []),
+      ...(!isBulkSelection && explorerClipboard ? [{
         id: "core.resource.paste",
         label: `Colar ${explorerClipboard.kind === "directory" ? "pasta" : "arquivo"}`,
         command: "core.resource.paste",
@@ -2028,11 +2049,13 @@ export function App() {
       }] : []),
       {
         id: "core.delete",
-        label: entry.kind === "directory" ? "Excluir pasta" : "Excluir arquivo",
+        label: isBulkSelection
+          ? `Excluir ${selectedEntries.length} itens`
+          : entry.kind === "directory" ? "Excluir pasta" : "Excluir arquivo",
         command: "core.resource.delete",
         group: "destructive",
         order: 1000,
-        icon: "close",
+        icon: "close" as const,
       },
     ];
     const resource = resourceContext(entry);
@@ -2659,6 +2682,7 @@ export function App() {
 
   const startExplorerRename = (entry: WorkspaceEntry) => {
     setSelectedExplorerPath(entry.path);
+    setSelectedExplorerPaths(new Set([entry.path]));
     setExplorerRenamePath(entry.path);
     setExplorerRenameName(entry.name);
     setExplorerRenameError(undefined);
@@ -2803,6 +2827,11 @@ export function App() {
     setEntries(await listDirectory(workspaceHandle));
   };
 
+  const deleteExplorerEntries = async (entriesToDelete: readonly WorkspaceEntry[]) => {
+    for (const entry of entriesToDelete) await deleteWorkspaceEntry(entry);
+    setSelectedExplorerPaths(new Set());
+  };
+
   const moveExplorerEntry = async (sourcePath: string, targetDirectoryPath: string) => {
     if (!workspaceHandle) throw new Error("Restaure o acesso ao workspace antes de mover recursos.");
     const sourceEntry = findWorkspaceEntry(entries, sourcePath);
@@ -2839,8 +2868,9 @@ export function App() {
     setDocuments(nextDocuments);
     setActiveDocumentId((current) => current ? replaceWorkspacePathPrefix(current, sourcePath, nextPath) : current);
     setSelectedExplorerPath(nextPath);
+    setSelectedExplorerPaths(new Set([nextPath]));
     setExpanded(nextExpanded);
-    setDraggingExplorerPath(undefined);
+    setDraggingExplorerPaths(new Set());
     setDropTargetExplorerPath(undefined);
     await refreshExplorer(nextExpanded);
     updateExplorerHistory(recordExplorerHistory(explorerHistoryRef.current, {
@@ -2852,9 +2882,17 @@ export function App() {
     }));
   };
 
+  const moveExplorerEntries = async (sourcePaths: readonly string[], targetDirectoryPath: string) => {
+    const paths = topLevelWorkspacePaths(sourcePaths)
+      .filter((path) => path !== targetDirectoryPath && !targetDirectoryPath.startsWith(`${path}/`));
+    for (const path of paths) await moveExplorerEntry(path, targetDirectoryPath);
+    setSelectedExplorerPaths(new Set());
+  };
+
   const copyExplorerEntry = (entry: WorkspaceEntry) => {
     setExplorerClipboard({ path: entry.path, name: entry.name, kind: entry.kind });
     setSelectedExplorerPath(entry.path);
+    setSelectedExplorerPaths(new Set([entry.path]));
   };
 
   const pasteExplorerEntry = async (targetDirectoryPath: string) => {
@@ -2875,7 +2913,7 @@ export function App() {
       if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
         || (target instanceof HTMLElement && target.isContentEditable)) return;
       const selectedPath = selectedExplorerPath;
-      if (event.key.toLocaleLowerCase() === "c" && selectedPath) {
+      if (event.key.toLocaleLowerCase() === "c" && selectedPath && selectedExplorerPaths.size === 1) {
         const entry = findWorkspaceEntry(entries, selectedPath);
         if (!entry) return;
         event.preventDefault();
@@ -2892,7 +2930,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [entries, selectedExplorerPath, workspaceHandle, expanded]);
+  }, [entries, selectedExplorerPath, selectedExplorerPaths, workspaceHandle, expanded]);
 
   const toggleBreakpoint = (path: string, line: number) => {
     const exists = debugBreakpoints.some((breakpoint) => breakpoint.path === path && breakpoint.line === line);
@@ -3362,7 +3400,11 @@ export function App() {
         return;
       }
       if (item.command === "core.resource.delete") {
-        setExplorerPendingDeletion(entry);
+        const paths = selectedExplorerPaths.has(entry.path) ? selectedExplorerPaths : new Set([entry.path]);
+        const selectedEntries = topLevelWorkspacePaths(paths)
+          .map((path) => findWorkspaceEntry(entries, path))
+          .filter((candidate): candidate is WorkspaceEntry => Boolean(candidate));
+        setExplorerPendingDeletion(selectedEntries);
         return;
       }
       if (!item.command) throw new Error(`A ação '${item.id}' não possui executor.`);
@@ -3650,7 +3692,10 @@ export function App() {
             ? (direction > 0 ? 0 : visibleEntries.length - 1)
             : Math.min(visibleEntries.length - 1, Math.max(0, selectedIndex + direction));
           const next = visibleEntries[nextIndex];
-          if (next) setSelectedExplorerPath(next.path);
+          if (next) {
+            setSelectedExplorerPath(next.path);
+            setSelectedExplorerPaths(new Set([next.path]));
+          }
           return;
         }
         if (event.key === "Enter" && selectedEntry) {
@@ -3664,7 +3709,10 @@ export function App() {
             invoke(() => toggleEntry(selectedEntry));
           } else {
             const firstChild = selectedEntry.children?.find((entry) => explorerShowHidden || !entry.name.startsWith("."));
-            if (firstChild) setSelectedExplorerPath(firstChild.path);
+            if (firstChild) {
+              setSelectedExplorerPath(firstChild.path);
+              setSelectedExplorerPaths(new Set([firstChild.path]));
+            }
           }
           return;
         }
@@ -3674,7 +3722,10 @@ export function App() {
             invoke(() => toggleEntry(selectedEntry));
           } else {
             const parentPath = parentEntryPath(selectedEntry.path);
-            if (parentPath) setSelectedExplorerPath(parentPath);
+            if (parentPath) {
+              setSelectedExplorerPath(parentPath);
+              setSelectedExplorerPaths(new Set([parentPath]));
+            }
           }
           return;
         }
@@ -3698,7 +3749,11 @@ export function App() {
         const selectedEntry = findWorkspaceEntry(entries, selectedExplorerPath);
         if (selectedEntry) {
           event.preventDefault();
-          setExplorerPendingDeletion(selectedEntry);
+          const paths = selectedExplorerPaths.has(selectedEntry.path) ? selectedExplorerPaths : new Set([selectedEntry.path]);
+          const selectedEntries = topLevelWorkspacePaths(paths)
+            .map((path) => findWorkspaceEntry(entries, path))
+            .filter((candidate): candidate is WorkspaceEntry => Boolean(candidate));
+          setExplorerPendingDeletion(selectedEntries);
         }
         return;
       }
@@ -4207,15 +4262,18 @@ export function App() {
                       onClick={(event) => {
                         if ((event.target as Element).closest("button")) return;
                         setSelectedExplorerPath("");
+                        setSelectedExplorerPaths(new Set());
                       }}
                       onKeyDown={(event) => {
                         if (event.key !== "Enter" && event.key !== " ") return;
                         event.preventDefault();
                         setSelectedExplorerPath("");
+                        setSelectedExplorerPaths(new Set());
                       }}
                       onContextMenu={(event) => {
                         event.preventDefault();
                         setSelectedExplorerPath("");
+                        setSelectedExplorerPaths(new Set());
                         invoke(() => openRootMenu(event.clientX, event.clientY));
                       }}
                     >
@@ -4261,15 +4319,27 @@ export function App() {
                       filterVisiblePaths={explorerFilterResult?.visiblePaths}
                       highlightedPath={highlightedExplorerPath}
                       selectedPath={selectedExplorerPath}
+                      selectedPaths={selectedExplorerPaths}
                       resourceDecorations={resourceDecorations}
                       onToggle={(entry) => invoke(() => toggleEntry(entry))}
-                      onSelect={(entry) => setSelectedExplorerPath(entry.path)}
+                      onSelect={(entry, additive) => {
+                        setSelectedExplorerPaths((current) => {
+                          if (!additive) return new Set([entry.path]);
+                          const next = new Set(current);
+                          if (next.has(entry.path)) next.delete(entry.path);
+                          else next.add(entry.path);
+                          return next;
+                        });
+                        setSelectedExplorerPath((current) => additive && current === entry.path ? undefined : entry.path);
+                      }}
                       onOpen={(entry) => invoke(() => openEntry(entry))}
                       onContextMenu={(entry, x, y) => invoke(() => openResourceMenu(entry, x, y))}
-                      onMove={(sourcePath, targetPath) => invoke(() => moveExplorerEntry(sourcePath, targetPath))}
-                      draggingPath={draggingExplorerPath}
+                      onMove={(sourcePaths, targetPath) => invoke(() => moveExplorerEntries(sourcePaths, targetPath))}
+                      draggingPaths={draggingExplorerPaths}
                       dropTargetPath={dropTargetExplorerPath}
-                      onDraggingPathChange={setDraggingExplorerPath}
+                      onDraggingPathChange={(path) => setDraggingExplorerPaths(path
+                        ? new Set(selectedExplorerPaths.has(path) ? selectedExplorerPaths : [path])
+                        : new Set())}
                       onDropTargetPathChange={setDropTargetExplorerPath}
                       onShowHiddenDirectory={(path) => setExplorerRevealedHiddenPaths((current) => new Set(current).add(path))}
                       renamePath={explorerRenamePath}
@@ -5668,17 +5738,22 @@ export function App() {
             <section className="profile-removal-dialog" role="alertdialog" aria-modal="true" aria-labelledby="explorer-removal-title">
               <div>
                 <span className="eyebrow">CONFIRMAÇÃO</span>
-                <h3 id="explorer-removal-title">Excluir {explorerPendingDeletion.kind === "directory" ? "pasta" : "arquivo"}?</h3>
+                <h3 id="explorer-removal-title">Excluir {explorerPendingDeletion.length === 1
+                  ? explorerPendingDeletion[0]?.kind === "directory" ? "pasta" : "arquivo"
+                  : `${explorerPendingDeletion.length} itens`}?</h3>
                 <p>
-                  <strong>{explorerPendingDeletion.name}</strong> será removido do workspace
-                  {explorerPendingDeletion.kind === "directory" ? " com todo o conteúdo interno." : "."}
+                  {explorerPendingDeletion.length === 1 ? (
+                    <><strong>{explorerPendingDeletion[0]?.name}</strong> será removido do workspace
+                    {explorerPendingDeletion[0]?.kind === "directory" ? " com todo o conteúdo interno." : "."}</>
+                  ) : (
+                    <>Os <strong>{explorerPendingDeletion.length} itens selecionados</strong> serão removidos do workspace. Pastas incluem todo o conteúdo interno.</>
+                  )}
                 </p>
               </div>
               <div className="dialog-actions">
                 <button className="button secondary" type="button" onClick={() => setExplorerPendingDeletion(undefined)}>Cancelar</button>
                 <button className="button danger" type="button" onClick={() => invoke(async () => {
-                  const entry = explorerPendingDeletion;
-                  await deleteWorkspaceEntry(entry);
+                  await deleteExplorerEntries(explorerPendingDeletion);
                   setExplorerPendingDeletion(undefined);
                 })}>Excluir</button>
               </div>

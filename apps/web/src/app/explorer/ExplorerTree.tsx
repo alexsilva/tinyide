@@ -82,13 +82,14 @@ export function EntryTree({
   filterVisiblePaths,
   highlightedPath,
   selectedPath,
+  selectedPaths,
   resourceDecorations,
   onToggle,
   onSelect,
   onOpen,
   onContextMenu,
   onMove,
-  draggingPath,
+  draggingPaths,
   dropTargetPath,
   onDraggingPathChange,
   onDropTargetPathChange,
@@ -118,13 +119,14 @@ export function EntryTree({
   readonly filterVisiblePaths: ReadonlySet<string> | undefined;
   readonly highlightedPath: string | undefined;
   readonly selectedPath: string | undefined;
+  readonly selectedPaths: ReadonlySet<string>;
   readonly resourceDecorations: ReadonlyMap<string, ResourceDecoration>;
   readonly onToggle: (entry: WorkspaceEntry) => void;
-  readonly onSelect: (entry: WorkspaceEntry) => void;
+  readonly onSelect: (entry: WorkspaceEntry, additive: boolean) => void;
   readonly onOpen: (entry: WorkspaceEntry) => void;
   readonly onContextMenu: (entry: WorkspaceEntry, x: number, y: number) => void;
-  readonly onMove: (sourcePath: string, targetDirectoryPath: string) => void;
-  readonly draggingPath: string | undefined;
+  readonly onMove: (sourcePaths: readonly string[], targetDirectoryPath: string) => void;
+  readonly draggingPaths: ReadonlySet<string>;
   readonly dropTargetPath: string | undefined;
   readonly onDraggingPathChange: (path: string | undefined) => void;
   readonly onDropTargetPathChange: (path: string | undefined) => void;
@@ -212,10 +214,11 @@ export function EntryTree({
                 data-explorer-path={entry.path}
                 data-explorer-kind={entry.kind}
                 draggable
-                className={`tree-entry tree-entry--${entry.kind}${highlightedPath === entry.path ? " is-new" : ""}${selectedPath === entry.path ? " is-selected" : ""}${draggingPath === entry.path ? " is-dragging" : ""}${dropTargetPath === entry.path ? " is-drop-target" : ""}`}
+                className={`tree-entry tree-entry--${entry.kind}${highlightedPath === entry.path ? " is-new" : ""}${selectedPaths.has(entry.path) ? " is-selected" : ""}${draggingPaths.has(entry.path) ? " is-dragging" : ""}${dropTargetPath === entry.path ? " is-drop-target" : ""}`}
                 onDragStart={(event) => {
+                  const sourcePaths = selectedPaths.has(entry.path) ? [...selectedPaths] : [entry.path];
                   event.dataTransfer.effectAllowed = "move";
-                  event.dataTransfer.setData("application/x-tinyide-workspace-path", entry.path);
+                  event.dataTransfer.setData("application/x-tinyide-workspace-paths", JSON.stringify(sourcePaths));
                   onDraggingPathChange(entry.path);
                 }}
                 onDragEnd={() => {
@@ -236,25 +239,33 @@ export function EntryTree({
                   if (entry.kind !== "directory") return;
                   event.preventDefault();
                   event.stopPropagation();
-                  const sourcePath = event.dataTransfer.getData("application/x-tinyide-workspace-path");
+                  const encodedPaths = event.dataTransfer.getData("application/x-tinyide-workspace-paths");
                   onDropTargetPathChange(undefined);
-                  if (sourcePath) onMove(sourcePath, entry.path);
+                  try {
+                    const sourcePaths = JSON.parse(encodedPaths) as unknown;
+                    if (Array.isArray(sourcePaths) && sourcePaths.every((path) => typeof path === "string")) {
+                      onMove(sourcePaths, entry.path);
+                    }
+                  } catch {
+                    // Ignore drops from outside the Explorer.
+                  }
                 }}
-                onClick={() => {
+                onClick={(event) => {
+                  const additive = event.ctrlKey || event.metaKey;
                   if (entry.kind === "directory") {
-                    onSelect(entry);
-                    onToggle(entry);
+                    onSelect(entry, additive);
+                    if (!additive) onToggle(entry);
                     return;
                   }
-                  if (selectedPath === entry.path) {
+                  if (!additive && selectedPath === entry.path && selectedPaths.size === 1) {
                     onOpen(entry);
                     return;
                   }
-                  onSelect(entry);
+                  onSelect(entry, additive);
                 }}
                 onContextMenu={(event) => {
                   event.preventDefault();
-                  onSelect(entry);
+                  if (!selectedPaths.has(entry.path)) onSelect(entry, false);
                   onContextMenu(entry, event.clientX, event.clientY);
                 }}
               >
@@ -301,13 +312,14 @@ export function EntryTree({
                   filterVisiblePaths={filterVisiblePaths}
                   highlightedPath={highlightedPath}
                   selectedPath={selectedPath}
+                  selectedPaths={selectedPaths}
                   resourceDecorations={resourceDecorations}
                   onToggle={onToggle}
                   onSelect={onSelect}
                   onOpen={onOpen}
                   onContextMenu={onContextMenu}
                   onMove={onMove}
-                  draggingPath={draggingPath}
+                  draggingPaths={draggingPaths}
                   dropTargetPath={dropTargetPath}
                   onDraggingPathChange={onDraggingPathChange}
                   onDropTargetPathChange={onDropTargetPathChange}
@@ -345,13 +357,14 @@ export function EntryTree({
                   filterVisiblePaths={filterVisiblePaths}
                   highlightedPath={highlightedPath}
                   selectedPath={selectedPath}
+                  selectedPaths={selectedPaths}
                   resourceDecorations={resourceDecorations}
                   onToggle={onToggle}
                   onSelect={onSelect}
                   onOpen={onOpen}
                   onContextMenu={onContextMenu}
                   onMove={onMove}
-                  draggingPath={draggingPath}
+                  draggingPaths={draggingPaths}
                   dropTargetPath={dropTargetPath}
                   onDraggingPathChange={onDraggingPathChange}
                   onDropTargetPathChange={onDropTargetPathChange}
@@ -380,4 +393,3 @@ export function EntryTree({
     </div>
   );
 }
-

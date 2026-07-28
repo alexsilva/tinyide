@@ -15,6 +15,7 @@ import {
   joinWorkspacePath,
   nearestRemainingItemId,
   nextExplorerHiddenVisibility,
+  topLevelWorkspacePaths,
   parentEntryPath,
   remapOpenDocumentResource,
   replaceWorkspacePathPrefix,
@@ -202,5 +203,12 @@ describe("explorer model", () => {
     expect(nearestRemainingItemId(ordered, new Set(["a.py", "b.py", "c.py", "d.py"]), "c.py")).toBeUndefined();
     expect(nearestRemainingItemId(ordered, new Set(["b.py"]), "a.py")).toBe("a.py");
     expect(nearestRemainingItemId(ordered, new Set(["b.py"]), undefined)).toBeUndefined();
+  });
+
+  it("keeps only top-level paths for batch Explorer actions", () => {
+    expect(topLevelWorkspacePaths(["src", "src/main.py", "README.md", "src/lib/util.py"])).toEqual([
+      "src",
+      "README.md",
+    ]);
   });
 });

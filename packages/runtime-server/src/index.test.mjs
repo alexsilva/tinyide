@@ -216,6 +216,39 @@ describe("runtime server hardening", () => {
     expect(pluginRequest.status).toBe(409);
   });
 
+  it("opens only workspace directories in the system file manager", async () => {
+    const openedDirectories = [];
+    const { runtime, workspaceRoot } = await fixture({
+      openInFileManager: async (directory) => { openedDirectories.push(directory); },
+    });
+    await mkdir(join(workspaceRoot, "src"));
+    await writeFile(join(workspaceRoot, "src", "main.ts"), "export {};\n");
+
+    const file = await fetch(`${runtime.url}/core-api/workspace/open-in-file-manager`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "src/main.ts" }),
+    });
+    expect(file.status).toBe(200);
+    expect(openedDirectories).toEqual([join(workspaceRoot, "src")]);
+
+    const root = await fetch(`${runtime.url}/core-api/workspace/open-in-file-manager`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "" }),
+    });
+    expect(root.status).toBe(200);
+    expect(openedDirectories).toEqual([join(workspaceRoot, "src"), workspaceRoot]);
+
+    const outside = await fetch(`${runtime.url}/core-api/workspace/open-in-file-manager`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "../outside" }),
+    });
+    expect(outside.status).toBe(400);
+    expect(openedDirectories).toHaveLength(2);
+  });
+
   it("rejects invalid workspace selections", async () => {
     const { runtime, root } = await fixture();
     const invalidName = await fetch(`${runtime.url}/core-api/workspace`, {

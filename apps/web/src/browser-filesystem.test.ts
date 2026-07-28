@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   listDirectory,
   inspectBrowserFile,
+  copyWorkspaceEntry,
   moveWorkspaceEntry,
   readFileDocument,
   renameWorkspaceEntry,
@@ -424,6 +425,57 @@ describe("browser filesystem", () => {
     await expect(moveWorkspaceEntry(rootTarget, "source/nested.py", "")).resolves.toBe("nested.py");
     expect(rootFiles.has("nested.py")).toBe(true);
     expect(nestedRemoveEntry).toHaveBeenCalledWith("nested.py", { recursive: false });
+  });
+
+  it("copies files and directories without overwriting existing workspace entries", async () => {
+    const sourceFile = fileHandle("main.py", "print('ok')");
+    const sourceDirectory = directoryHandle("assets", [fileHandle("logo.txt", "logo")]);
+    const copiedFiles = new Map<string, BrowserFileHandle>();
+    const copiedDirectories = new Map<string, BrowserDirectoryHandle>();
+    const target: BrowserDirectoryHandle = {
+      kind: "directory",
+      name: "target",
+      async *values() { yield* copiedDirectories.values(); yield* copiedFiles.values(); },
+      async getFileHandle(name, options) {
+        const existing = copiedFiles.get(name);
+        if (existing) return existing;
+        if (!options?.create) throw new Error("missing file");
+        const created = fileHandle(name);
+        copiedFiles.set(name, created);
+        return created;
+      },
+      async getDirectoryHandle(name, options) {
+        const existing = copiedDirectories.get(name);
+        if (existing) return existing;
+        if (!options?.create) throw new Error("missing directory");
+        const nestedFiles = new Map<string, BrowserFileHandle>();
+        const created: BrowserDirectoryHandle = {
+          kind: "directory",
+          name,
+          async *values() { yield* nestedFiles.values(); },
+          async getFileHandle(fileName, fileOptions) {
+            const file = nestedFiles.get(fileName);
+            if (file) return file;
+            if (!fileOptions?.create) throw new Error("missing file");
+            const next = fileHandle(fileName);
+            nestedFiles.set(fileName, next);
+            return next;
+          },
+          async getDirectoryHandle() { throw new Error("missing directory"); },
+        };
+        copiedDirectories.set(name, created);
+        return created;
+      },
+    };
+    const root = directoryHandle("root", [sourceFile, sourceDirectory, target]);
+
+    await expect(copyWorkspaceEntry(root, "main.py", "target")).resolves.toBe("target/main.py");
+    await expect(copyWorkspaceEntry(root, "main.py", "target")).resolves.toBe("target/main copia.py");
+    await expect(copyWorkspaceEntry(root, "assets", "target")).resolves.toBe("target/assets");
+    expect(copiedFiles.has("main.py")).toBe(true);
+    expect(copiedFiles.has("main copia.py")).toBe(true);
+    expect(copiedDirectories.has("assets")).toBe(true);
+    await expect(copyWorkspaceEntry(root, "assets", "assets/nested")).rejects.toThrow("dentro dela mesma");
   });
 
   it("closes the stream even when writing fails", async () => {

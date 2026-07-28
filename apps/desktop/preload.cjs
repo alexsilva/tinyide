@@ -40,6 +40,9 @@ contextBridge.exposeInMainWorld("tinyideDesktop", {
   removeEntry(token, path, recursive) {
     return ipcRenderer.invoke("tinyide:workspace:remove", token, path, recursive);
   },
+  openInFileManager(rootPath, path) {
+    return ipcRenderer.invoke("tinyide:workspace:open-in-file-manager", rootPath, path);
+  },
   getPathForFile(file) {
     return webUtils.getPathForFile(file);
   },

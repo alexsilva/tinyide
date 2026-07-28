@@ -35,6 +35,7 @@ export interface TinyIdeDesktopApi {
   readFile?(token: string, path: string): Promise<DesktopFilePayload>;
   writeFile?(token: string, path: string, bytes: ArrayBuffer): Promise<boolean>;
   removeEntry?(token: string, path: string, recursive: boolean): Promise<boolean>;
+  openInFileManager?(workspaceRoot: string, path: string): Promise<boolean>;
 }
 
 type DesktopWorkspaceApi = TinyIdeDesktopApi & Required<Pick<TinyIdeDesktopApi,
@@ -181,6 +182,21 @@ class DesktopDirectoryHandleImpl implements DesktopDirectoryHandle {
 
 export function isDesktopHost(): boolean {
   return typeof window !== "undefined" && supportsDesktopWorkspace(window.tinyideDesktop);
+}
+
+export async function openInSystemFileManager(workspaceRoot: string, path = ""): Promise<boolean> {
+  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
+  if (desktop?.openInFileManager) {
+    return await desktop.openInFileManager(workspaceRoot, path);
+  }
+  const response = await fetch("/core-api/workspace/open-in-file-manager", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (response.ok) return true;
+  const payload = await response.json().catch(() => undefined);
+  throw new Error(typeof payload?.error === "string" ? payload.error : "Não foi possível abrir o gerenciador de arquivos.");
 }
 
 export function isDesktopWorkspaceHandle(

@@ -219,6 +219,65 @@ async function copyDirectoryHandle(source: BrowserDirectoryHandle, target: Brows
   }
 }
 
+async function workspaceEntryExists(directory: BrowserDirectoryHandle, name: string): Promise<boolean> {
+  try {
+    await directory.getFileHandle(name);
+    return true;
+  } catch {
+    try {
+      await directory.getDirectoryHandle(name);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function copiedEntryName(name: string, index: number): string {
+  if (index === 0) return name;
+  const extensionIndex = name.lastIndexOf(".");
+  const base = extensionIndex > 0 ? name.slice(0, extensionIndex) : name;
+  const extension = extensionIndex > 0 ? name.slice(extensionIndex) : "";
+  return `${base} copia${index === 1 ? "" : ` ${index}`}${extension}`;
+}
+
+export async function copyWorkspaceEntry(
+  workspaceHandle: BrowserDirectoryHandle,
+  sourcePath: string,
+  targetDirectoryPath: string,
+): Promise<string> {
+  const sourceSegments = [...workspacePathSegments(sourcePath)];
+  const sourceName = sourceSegments.pop();
+  if (!sourceName) throw new Error("O caminho do recurso está vazio.");
+  const sourceParentPath = sourceSegments.join("/");
+  if (targetDirectoryPath === sourcePath || targetDirectoryPath.startsWith(`${sourcePath}/`)) {
+    throw new Error("Não é possível copiar uma pasta para dentro dela mesma.");
+  }
+
+  const sourceParent = await resolveDirectoryHandle(workspaceHandle, sourceParentPath);
+  const targetParent = await resolveDirectoryHandle(workspaceHandle, targetDirectoryPath);
+  let source: BrowserFileHandle | BrowserDirectoryHandle;
+  try {
+    source = await sourceParent.getFileHandle(sourceName);
+  } catch {
+    source = await sourceParent.getDirectoryHandle(sourceName);
+  }
+
+  let nameIndex = sourceParentPath === targetDirectoryPath ? 1 : 0;
+  let targetName = copiedEntryName(sourceName, nameIndex);
+  while (await workspaceEntryExists(targetParent, targetName)) {
+    nameIndex += 1;
+    targetName = copiedEntryName(sourceName, nameIndex);
+  }
+
+  if (source.kind === "file") {
+    await copyFileHandle(source, await targetParent.getFileHandle(targetName, { create: true }));
+  } else {
+    await copyDirectoryHandle(source, await targetParent.getDirectoryHandle(targetName, { create: true }));
+  }
+  return targetDirectoryPath ? `${targetDirectoryPath}/${targetName}` : targetName;
+}
+
 export async function renameWorkspaceEntry(
   workspaceHandle: BrowserDirectoryHandle,
   path: string,

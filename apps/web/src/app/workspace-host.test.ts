@@ -4,6 +4,7 @@ import type {
   BrowserFileHandle,
 } from "../browser-filesystem";
 import {
+  openInSystemFileManager,
   restoreLastDesktopWorkspaceHandle,
   workspaceRootFromFilePath,
   workspaceRootHintForHandle,
@@ -84,5 +85,27 @@ describe("restoreLastDesktopWorkspaceHandle", () => {
     };
     const handle = await restoreLastDesktopWorkspaceHandle(desktop);
     expect(handle).toMatchObject({ name: "preco", desktopWorkspaceRoot: "/mnt/projects/preco" });
+  });
+});
+
+describe("system file manager bridge", () => {
+  it("delegates only when the desktop bridge exposes the operation", async () => {
+    const openInFileManager = vi.fn(async () => true);
+    vi.stubGlobal("window", { tinyideDesktop: { openInFileManager } });
+
+    await expect(openInSystemFileManager("/mnt/projects/preco", "src/main.ts")).resolves.toBe(true);
+    expect(openInFileManager).toHaveBeenCalledWith("/mnt/projects/preco", "src/main.ts");
+  });
+
+  it("uses the local runtime when the browser has no desktop bridge", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ directory: "/mnt/projects/preco/src" }), { status: 200 }));
+    vi.stubGlobal("window", { tinyideDesktop: {} });
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(openInSystemFileManager("/mnt/projects/preco", "src/main.ts")).resolves.toBe(true);
+    expect(fetch).toHaveBeenCalledWith("/core-api/workspace/open-in-file-manager", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ path: "src/main.ts" }),
+    }));
   });
 });

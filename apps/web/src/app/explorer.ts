@@ -23,6 +23,17 @@ export function joinWorkspacePath(parentPath: string, name: string): string {
   return parentPath ? `${parentPath}/${name}` : name;
 }
 
+/** Returns an absolute path for a workspace-relative Explorer path. */
+export function workspaceAbsolutePath(
+  workspaceRoot: string | undefined,
+  path = "",
+): string | undefined {
+  if (!workspaceRoot) return undefined;
+  const root = workspaceRoot.replace(/[\\/]+$/, "");
+  const relativePath = path.replace(/^[\\/]+/, "");
+  return relativePath ? `${root}/${relativePath}` : root;
+}
+
 export function findWorkspaceEntry(
   entries: readonly WorkspaceEntry[],
   path: string,

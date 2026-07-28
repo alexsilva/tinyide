@@ -1,4 +1,6 @@
 import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { realpath, stat } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -106,6 +108,22 @@ function safeFile(root, path) {
   return absolutePath === root || absolutePath.startsWith(`${root}${sep}`) ? absolutePath : undefined;
 }
 
+function openSystemFileManager(directory) {
+  const [command, arguments_] = process.platform === "win32"
+    ? ["explorer.exe", [directory]]
+    : process.platform === "darwin"
+      ? ["open", [directory]]
+      : ["xdg-open", [directory]];
+  return new Promise((resolveOpen, rejectOpen) => {
+    const child = spawn(command, arguments_, { detached: true, stdio: "ignore", windowsHide: true });
+    child.once("error", rejectOpen);
+    child.once("spawn", () => {
+      child.unref();
+      resolveOpen();
+    });
+  });
+}
+
 function manifestDirectories(pluginsRoot) {
   if (!existsSync(pluginsRoot)) return [];
   return readdirSync(pluginsRoot)
@@ -151,6 +169,21 @@ export function createTinyIdeRuntime(options) {
     ? resolve(options.initialWorkspaceRoot)
     : undefined;
   const executionBackend = createExecutionBackend({ workspaceRoot: () => activeWorkspaceRoot });
+  const openInFileManager = options.openInFileManager ?? openSystemFileManager;
+
+  async function workspaceDirectoryForFileManager(workspacePath) {
+    if (!activeWorkspaceRoot) throw new Error("Abra um workspace antes de usar o gerenciador de arquivos.");
+    if (typeof workspacePath !== "string" || workspacePath.includes("\0") || isAbsolute(workspacePath)) {
+      throw new Error("Caminho de workspace inválido.");
+    }
+    const target = safeFile(activeWorkspaceRoot, workspacePath);
+    if (!target) throw new Error("O caminho solicitado está fora do workspace.");
+    const [workspaceRoot, resolvedTarget] = await Promise.all([realpath(activeWorkspaceRoot), realpath(target)]);
+    if (resolvedTarget !== workspaceRoot && !resolvedTarget.startsWith(`${workspaceRoot}${sep}`)) {
+      throw new Error("O caminho solicitado está fora do workspace.");
+    }
+    return (await stat(resolvedTarget)).isDirectory() ? resolvedTarget : dirname(resolvedTarget);
+  }
 
   function isInsideWorkspaceSearchRoot(candidate) {
     const relativePath = relative(workspaceSearchRoot, candidate);
@@ -279,6 +312,19 @@ export function createTinyIdeRuntime(options) {
         activeWorkspaceRoot = undefined;
         writeJson(response, 204, undefined);
       }).catch((error) => writeJson(response, 500, {error: error instanceof Error ? error.message : String(error)}));
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/core-api/workspace/open-in-file-manager") {
+      void readJson(request).then(async (payload) => {
+        const directory = await workspaceDirectoryForFileManager(payload.path ?? "");
+        await openInFileManager(directory);
+        writeJson(response, 200, { directory });
+      }).catch((error) => writeJson(
+        response,
+        Number.isInteger(error?.statusCode) ? error.statusCode : 400,
+        {error: error instanceof Error ? error.message : String(error)},
+      ));
       return;
     }
 

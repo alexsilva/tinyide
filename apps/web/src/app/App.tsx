@@ -133,6 +133,7 @@ import type {
 } from "@tinyide/plugin-api";
 import {
   browserFileSystemAccessError,
+  copyWorkspaceEntry,
   isBrowserFileSystemAccessDenied,
   listDirectory,
   moveWorkspaceEntry,
@@ -177,6 +178,7 @@ import {
   parentEntryPath,
   remapOpenDocumentResource,
   replaceWorkspacePathPrefix,
+  workspaceAbsolutePath,
   workspacePathBelongsToResource,
   workspacePathName,
   workspacePathParent,
@@ -258,6 +260,7 @@ import {
   type DebugOutputOffsets,
 } from "./debug-panel";
 import {
+  openInSystemFileManager,
   isDesktopHost,
   isDesktopWorkspaceHandle,
   pickWorkspaceDirectory,
@@ -579,6 +582,7 @@ export function App() {
   const [explorerRenameName, setExplorerRenameName] = useState("");
   const [explorerRenameError, setExplorerRenameError] = useState<string>();
   const [explorerPendingDeletion, setExplorerPendingDeletion] = useState<WorkspaceEntry>();
+  const [explorerClipboard, setExplorerClipboard] = useState<Pick<WorkspaceEntry, "path" | "name" | "kind"> | undefined>(undefined);
   const [highlightedExplorerPath, setHighlightedExplorerPath] = useState<string>();
   const [selectedExplorerPath, setSelectedExplorerPath] = useState<string>();
   const [contextMenu, setContextMenu] = useState<ContextMenuState>();
@@ -598,6 +602,8 @@ export function App() {
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const explorerHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const explorerHistoryRef = useRef<ExplorerHistoryState>(createExplorerHistoryState());
+  const explorerClipboardRef = useRef<Pick<WorkspaceEntry, "path" | "name" | "kind"> | undefined>(undefined);
+  explorerClipboardRef.current = explorerClipboard;
   const browserResolverRef = useRef<((path: string | undefined) => void) | undefined>(undefined);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const highlightedEditorScrollRef = useRef<HTMLDivElement | null>(null);
@@ -1910,6 +1916,31 @@ export function App() {
         order: 10,
         icon: "folder",
       },
+      {
+        id: "core.root.copyAbsolutePath",
+        label: "Copiar caminho absoluto",
+        command: "core.root.copyAbsolutePath",
+        group: "clipboard",
+        order: 100,
+        icon: "copy",
+        enabled: Boolean(workspaceAbsolutePath(workspaceRoot)),
+      },
+      ...(explorerClipboard ? [{
+        id: "core.root.paste",
+        label: `Colar ${explorerClipboard.kind === "directory" ? "pasta" : "arquivo"}`,
+        command: "core.root.paste",
+        group: "clipboard",
+        order: 120,
+        icon: "plus" as const,
+      }] : []),
+      ...(workspaceRoot ? [{
+        id: "core.root.openInFileManager",
+        label: "Abrir no gerenciador de arquivos",
+        command: "core.root.openInFileManager",
+        group: "navigation",
+        order: 10,
+        icon: "folder" as const,
+      }] : []),
     ];
     const resource = rootResourceContext();
     const providers = platform.capabilities.getAll<ResourceContextMenuProvider>("resource.contextMenu");
@@ -1935,6 +1966,14 @@ export function App() {
         order: 0,
         icon: entry.kind === "file" ? "file" : "folder",
       },
+      ...(workspaceRoot ? [{
+        id: "core.openInFileManager",
+        label: "Abrir no gerenciador de arquivos",
+        command: "core.resource.openInFileManager",
+        group: "navigation",
+        order: 10,
+        icon: "folder" as const,
+      }] : []),
       ...(entry.kind === "directory" ? [
         ...newFileContextMenuItems(fileCreationOptions),
         {
@@ -1962,6 +2001,31 @@ export function App() {
         order: 100,
         icon: "copy",
       },
+      {
+        id: "core.copyEntry",
+        label: entry.kind === "directory" ? "Copiar pasta" : "Copiar arquivo",
+        command: "core.resource.copyEntry",
+        group: "clipboard",
+        order: 90,
+        icon: "copy",
+      },
+      {
+        id: "core.copyAbsolutePath",
+        label: "Copiar caminho absoluto",
+        command: "core.resource.copyAbsolutePath",
+        group: "clipboard",
+        order: 110,
+        icon: "copy",
+        enabled: Boolean(workspaceAbsolutePath(workspaceRoot, entry.path)),
+      },
+      ...(explorerClipboard ? [{
+        id: "core.resource.paste",
+        label: `Colar ${explorerClipboard.kind === "directory" ? "pasta" : "arquivo"}`,
+        command: "core.resource.paste",
+        group: "clipboard",
+        order: 120,
+        icon: "plus" as const,
+      }] : []),
       {
         id: "core.delete",
         label: entry.kind === "directory" ? "Excluir pasta" : "Excluir arquivo",
@@ -2788,6 +2852,48 @@ export function App() {
     }));
   };
 
+  const copyExplorerEntry = (entry: WorkspaceEntry) => {
+    setExplorerClipboard({ path: entry.path, name: entry.name, kind: entry.kind });
+    setSelectedExplorerPath(entry.path);
+  };
+
+  const pasteExplorerEntry = async (targetDirectoryPath: string) => {
+    const source = explorerClipboardRef.current;
+    if (!source || !workspaceHandle) return;
+    const nextPath = await copyWorkspaceEntry(workspaceHandle, source.path, targetDirectoryPath);
+    const nextExpanded = new Set(expanded);
+    if (targetDirectoryPath) nextExpanded.add(targetDirectoryPath);
+    setExpanded(nextExpanded);
+    setSelectedExplorerPath(nextPath);
+    await refreshExplorer(nextExpanded);
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      const target = event.target;
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+        || (target instanceof HTMLElement && target.isContentEditable)) return;
+      const selectedPath = selectedExplorerPath;
+      if (event.key.toLocaleLowerCase() === "c" && selectedPath) {
+        const entry = findWorkspaceEntry(entries, selectedPath);
+        if (!entry) return;
+        event.preventDefault();
+        copyExplorerEntry(entry);
+        return;
+      }
+      if (event.key.toLocaleLowerCase() !== "v" || !explorerClipboardRef.current) return;
+      const selected = selectedPath ? findWorkspaceEntry(entries, selectedPath) : undefined;
+      const targetDirectoryPath = selected
+        ? selected.kind === "directory" ? selected.path : workspacePathParent(selected.path)
+        : "";
+      event.preventDefault();
+      void pasteExplorerEntry(targetDirectoryPath).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [entries, selectedExplorerPath, workspaceHandle, expanded]);
+
   const toggleBreakpoint = (path: string, line: number) => {
     const exists = debugBreakpoints.some((breakpoint) => breakpoint.path === path && breakpoint.line === line);
     const next = exists
@@ -3176,6 +3282,19 @@ export function App() {
         await startExplorerCreation("directory", "");
         return;
       }
+      if (item.command === "core.root.copyAbsolutePath") {
+        const path = workspaceAbsolutePath(workspaceRoot);
+        if (path) await navigator.clipboard?.writeText(path);
+        return;
+      }
+      if (item.command === "core.root.openInFileManager") {
+        if (workspaceRoot) await openInSystemFileManager(workspaceRoot);
+        return;
+      }
+      if (item.command === "core.root.paste") {
+        await pasteExplorerEntry("");
+        return;
+      }
       if (!item.command) throw new Error(`A ação '${item.id}' não possui executor.`);
       await platform.commands.execute(item.command, rootResourceContext());
       return;
@@ -3211,6 +3330,23 @@ export function App() {
       }
       if (item.command === "core.resource.copyPath") {
         await navigator.clipboard?.writeText(entry.path);
+        return;
+      }
+      if (item.command === "core.resource.copyEntry") {
+        copyExplorerEntry(entry);
+        return;
+      }
+      if (item.command === "core.resource.copyAbsolutePath") {
+        const path = workspaceAbsolutePath(workspaceRoot, entry.path);
+        if (path) await navigator.clipboard?.writeText(path);
+        return;
+      }
+      if (item.command === "core.resource.openInFileManager") {
+        if (workspaceRoot) await openInSystemFileManager(workspaceRoot, entry.path);
+        return;
+      }
+      if (item.command === "core.resource.paste") {
+        await pasteExplorerEntry(entry.kind === "directory" ? entry.path : workspacePathParent(entry.path));
         return;
       }
       if (item.command?.startsWith("core.resource.newFile")) {
@@ -3292,7 +3428,9 @@ export function App() {
       if (existingRun) {
         await existingRun.catch(() => undefined);
       }
-      restartedRun = runProfile(profile, wasRunning && !existingRun);
+      // The finished run can still be rendered as running until React commits its final state.
+      // It has already been stopped and awaited above, so this only bypasses that stale guard.
+      restartedRun = runProfile(profile, true);
     } finally {
       setRestartingProfileId((current) => current === profile.id ? undefined : current);
     }

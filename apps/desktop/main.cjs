@@ -28,6 +28,21 @@ async function safeWorkspacePath(token, workspacePath = "") {
   return resolveSafeWorkspacePath(root, workspacePath);
 }
 
+function registeredWorkspaceRoot(rootPath) {
+  if (typeof rootPath !== "string" || !rootPath.trim()) {
+    throw new Error("O caminho do workspace e obrigatorio.");
+  }
+  const root = resolve(rootPath);
+  if (![...desktopWorkspaces.values()].some((candidate) => resolve(candidate) === root)) {
+    throw new Error("O workspace solicitado nao esta registrado.");
+  }
+  return root;
+}
+
+async function safeRegisteredWorkspacePath(rootPath, workspacePath = "") {
+  return resolveSafeWorkspacePath(registeredWorkspaceRoot(rootPath), workspacePath);
+}
+
 async function registerDesktopWorkspace(rootPath, { persist = true } = {}) {
   const root = resolve(rootPath);
   if (!existsSync(root) || !statSync(root).isDirectory()) {
@@ -139,6 +154,15 @@ function installDesktopFileSystemHandlers() {
   ipcMain.handle("tinyide:workspace:remove", async (_event, token, workspacePath, recursive) => {
     const target = await safeWorkspacePath(token, workspacePath);
     await rm(target, { recursive: recursive === true, force: false });
+    return true;
+  });
+
+  ipcMain.handle("tinyide:workspace:open-in-file-manager", async (_event, rootPath, workspacePath) => {
+    const target = await safeRegisteredWorkspacePath(rootPath, workspacePath);
+    const targetInfo = await stat(target);
+    const directory = targetInfo.isDirectory() ? target : dirname(target);
+    const failure = await shell.openPath(directory);
+    if (failure) throw new Error(failure);
     return true;
   });
 }

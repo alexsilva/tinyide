@@ -19,6 +19,7 @@ import {
   remapOpenDocumentResource,
   replaceWorkspacePathPrefix,
   workspacePathBelongsToResource,
+  workspaceAbsolutePath,
   workspacePathName,
   workspacePathParent,
   workspacePathContainsHiddenSegment,
@@ -44,6 +45,13 @@ describe("explorer model", () => {
     expect(explorerDropTargetDirectory("README.md", "file")).toBe("");
     expect(explorerDropTargetDirectory("src/main.ts", "file")).toBe("src");
     expect(explorerDropTargetDirectory("src/components", "directory")).toBe("src/components");
+  });
+
+  it("joins Explorer paths to the absolute workspace root", () => {
+    expect(workspaceAbsolutePath("/workspace/project", "src/main.py")).toBe("/workspace/project/src/main.py");
+    expect(workspaceAbsolutePath("/workspace/project/", "/src/main.py")).toBe("/workspace/project/src/main.py");
+    expect(workspaceAbsolutePath("/workspace/project", "")).toBe("/workspace/project");
+    expect(workspaceAbsolutePath(undefined, "src/main.py")).toBeUndefined();
   });
 
   it("resolves entries and contextual target directories", () => {

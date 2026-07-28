@@ -104,6 +104,8 @@ import type {
   WorkbenchDialogContribution,
   WorkbenchEditorToolbarItem,
   WorkbenchEditorToolbarProvider,
+  WorkbenchExecutionProfileUpdateOptions,
+  WorkbenchExecutionSnapshot,
   WorkbenchActivityIcon,
   WorkbenchPanelContribution,
   WorkbenchPanelHookContribution,
@@ -597,8 +599,16 @@ export function App() {
   const editorHistoriesRef = useRef<Map<string, EditorHistory>>(new Map());
   const documentsRef = useRef<readonly OpenDocument[]>(documents);
   documentsRef.current = documents;
+  const profilesStateRef = useRef<StoredProfiles>(profilesState);
+  profilesStateRef.current = profilesState;
+  const environmentsRef = useRef<readonly ExecutionEnvironment[]>(environments);
+  environmentsRef.current = environments;
+  const selectedEnvironmentIdRef = useRef<string | undefined>(selectedEnvironmentId);
+  selectedEnvironmentIdRef.current = selectedEnvironmentId;
   const profileExecutionsRef = useRef(profileExecutions);
   profileExecutionsRef.current = profileExecutions;
+  const debugSessionRef = useRef<DebugSessionSnapshot | undefined>(debugSession);
+  debugSessionRef.current = debugSession;
   const openProfileTabIdsRef = useRef(openProfileTabIds);
   openProfileTabIdsRef.current = openProfileTabIds;
   const profileRunCancellationRef = useRef(new Map<string, { cancelled: boolean }>());
@@ -619,6 +629,48 @@ export function App() {
     toolWindowVisible,
     ...(selectedEnvironmentId ? { selectedExecutionEnvironmentId: selectedEnvironmentId } : {}),
     pluginSettings: workspaceSettings.plugins ?? {},
+  });
+  const executionStateListenersRef = useRef(new Set<(snapshot: WorkbenchExecutionSnapshot) => void>());
+  const updateProfilesRef = useRef<(
+    profiles: readonly ExecutionProfile[],
+    selectedId?: string,
+  ) => void>(() => undefined);
+  const runProfileRef = useRef<(profile: ExecutionProfile) => Promise<void>>(async () => {
+    throw new Error("A execução de perfis ainda não está disponível.");
+  });
+  const debugProfileRef = useRef<(profile: ExecutionProfile) => Promise<DebugSessionSnapshot>>(async () => {
+    throw new Error("A depuração de perfis ainda não está disponível.");
+  });
+  const stopProfileRef = useRef<(profileId: string) => Promise<void>>(async () => {
+    throw new Error("A interrupção de perfis ainda não está disponível.");
+  });
+
+  const executionSnapshot = (): WorkbenchExecutionSnapshot => ({
+    profiles: profilesStateRef.current.profiles.map((profile) => ({
+      ...profile,
+      environment: { ...profile.environment },
+      steps: profile.steps.map((step) => ({
+        ...step,
+        ...(step.arguments ? { arguments: [...step.arguments] } : {}),
+        parameters: [...step.parameters],
+        ...(step.target ? { target: { ...step.target } } : {}),
+        ...(step.environmentVariables
+          ? { environmentVariables: { ...step.environmentVariables } }
+          : {}),
+      })),
+    })),
+    ...(profilesStateRef.current.selectedId
+      ? { selectedProfileId: profilesStateRef.current.selectedId }
+      : {}),
+    environments: environmentsRef.current.map((environment) => ({ ...environment })),
+    ...(selectedEnvironmentIdRef.current
+      ? { selectedEnvironmentId: selectedEnvironmentIdRef.current }
+      : {}),
+    executions: Object.values(profileExecutionsRef.current).map((execution) => ({
+      ...execution,
+      output: [...execution.output],
+    })),
+    ...(debugSessionRef.current ? { debugSession: debugSessionRef.current } : {}),
   });
   const workbenchStateListenersRef = useRef(new Set<(snapshot: WorkbenchStateSnapshot) => void>());
   const workbenchState = useMemo<WorkbenchStateApi>(() => ({
@@ -837,6 +889,11 @@ export function App() {
   }, [workspaceName, workspaceRoot, sidebarView, sidebarVisible, panelTab, panelVisible, activeToolWindowId, toolWindowVisible, selectedEnvironmentId, workspaceSettings.plugins]);
 
   useEffect(() => {
+    const snapshot = executionSnapshot();
+    for (const listener of executionStateListenersRef.current) listener(snapshot);
+  }, [profilesState, environments, selectedEnvironmentId, profileExecutions, debugSession]);
+
+  useEffect(() => {
     if (!restorationComplete) return;
     for (const document of documentsRef.current) {
       if (document.kind !== "text" || !document.path || document.content === document.savedContent) continue;
@@ -940,6 +997,48 @@ export function App() {
     },
     async openWorkspaceResource(request) {
       await openWorkspaceResourceRef.current(request);
+    },
+    executionSnapshot,
+    subscribeExecution(listener) {
+      executionStateListenersRef.current.add(listener);
+      listener(executionSnapshot());
+      return { dispose: () => executionStateListenersRef.current.delete(listener) };
+    },
+    async upsertExecutionProfile(profile, options: WorkbenchExecutionProfileUpdateOptions = {}) {
+      const current = profilesStateRef.current;
+      const existingIndex = current.profiles.findIndex((candidate) => candidate.id === profile.id);
+      const profiles = existingIndex < 0
+        ? [...current.profiles, profile]
+        : current.profiles.map((candidate, index) => index === existingIndex ? profile : candidate);
+      updateProfilesRef.current(
+        profiles,
+        options.select ? profile.id : current.selectedId,
+      );
+    },
+    async removeExecutionProfile(profileId) {
+      const current = profilesStateRef.current;
+      const profiles = current.profiles.filter((profile) => profile.id !== profileId);
+      if (profiles.length === current.profiles.length) return;
+      updateProfilesRef.current(
+        profiles,
+        current.selectedId === profileId ? undefined : current.selectedId,
+      );
+    },
+    async selectExecutionProfile(profileId) {
+      const current = profilesStateRef.current;
+      if (profileId && !current.profiles.some((profile) => profile.id === profileId)) {
+        throw new Error(`Perfil não encontrado: ${profileId}`);
+      }
+      updateProfilesRef.current(current.profiles, profileId);
+    },
+    async runExecutionProfile(profile) {
+      await runProfileRef.current(profile);
+    },
+    async debugExecutionProfile(profile) {
+      return debugProfileRef.current(profile);
+    },
+    async stopExecutionProfile(profileId) {
+      await stopProfileRef.current(profileId);
     },
     highlightText(request) {
       const provider = resolveSyntaxHighlighter({
@@ -1590,6 +1689,7 @@ export function App() {
       executionProfiles: next,
     })).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
   };
+  updateProfilesRef.current = updateProfiles;
 
   const openFolder = async () => {
     const handle = await pickWorkspaceDirectory();
@@ -2629,22 +2729,34 @@ export function App() {
     }
   };
 
-  const startSelectedDebugProfile = async () => {
-    if (!selectedProfile) throw new Error("Selecione um perfil de execução.");
-    if (!selectedProfileDebugAdapter) throw new Error("O perfil selecionado não possui runtime com suporte a debug.");
-    if (selectedProfile.saveBeforeRun && activeDocument && activeDocument.content !== activeDocument.savedContent) await saveDocument();
+  const startDebugForProfile = async (profile: ExecutionProfile): Promise<DebugSessionSnapshot> => {
+    const adapter = debugAdapterForProfile({
+      profile,
+      ...(activeDocument ? { activeDocument } : {}),
+      environments,
+    });
+    if (!adapter) throw new Error("O perfil não possui runtime com suporte a debug.");
+    if (profile.saveBeforeRun && activeDocument && activeDocument.content !== activeDocument.savedContent) await saveDocument();
     const started = await startDebugProfile({
-      profile: selectedProfile,
+      profile,
       ...(activeDocument ? { activeDocument } : {}),
       environments,
       breakpoints: debugBreakpoints,
     });
     setDebugAdapter(started.adapter);
     setDebugSession(started.session);
-    const tabId = profileExecutionPanelTabId(selectedProfile.id, "debug");
-    setOpenProfileTabIds((current) => openProfileExecutionTab(current, selectedProfile.id, "debug"));
+    const tabId = profileExecutionPanelTabId(profile.id, "debug");
+    setOpenProfileTabIds((current) => openProfileExecutionTab(current, profile.id, "debug"));
     setPanelHeight((current) => Math.max(current, 420));
     revealExecutionPanel(tabId);
+    return started.session;
+  };
+  debugProfileRef.current = startDebugForProfile;
+
+  const startSelectedDebugProfile = async () => {
+    if (!selectedProfile) throw new Error("Selecione um perfil de execução.");
+    if (!selectedProfileDebugAdapter) throw new Error("O perfil selecionado não possui runtime com suporte a debug.");
+    await startDebugForProfile(selectedProfile);
   };
 
   const debugCommand = async (command: "pause" | "resume" | "stepOver" | "stepInto" | "stepOut" | "stop") => {
@@ -2816,6 +2928,7 @@ export function App() {
       }
     });
   };
+  runProfileRef.current = (profile) => runProfile(profile);
 
   const runSelectedProfile = async () => {
     if (!selectedProfile) throw new Error("Selecione um perfil de execução.");
@@ -3082,6 +3195,7 @@ export function App() {
     const processId = profileExecutionsRef.current[profileId]?.processId;
     if (processId) await stopHostProcess(processId);
   };
+  stopProfileRef.current = stopProfileExecution;
 
   const restartProfileExecution = async (profile: ExecutionProfile) => {
     if (restartingProfileId === profile.id) return;

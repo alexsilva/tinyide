@@ -6,7 +6,9 @@ import {
 } from "@tinyide/core";
 import type {
   DebugAdapterProvider,
+  DebugSessionSnapshot,
   ExecutionEnvironmentProvider,
+  ExecutionProfile,
   ExecutionProfileContributionProvider,
   InteractiveSessionHookProvider,
   InteractiveSessionProvider,
@@ -24,6 +26,8 @@ import type {
   TextEditorLineDecorationProvider,
   WorkbenchApi,
   WorkbenchDialogContribution,
+  WorkbenchExecutionProfileUpdateOptions,
+  WorkbenchExecutionSnapshot,
   WorkbenchExplorerFilterProvider,
   WorkbenchWorkspaceResourceOpenRequest,
   WorkbenchTextEditorReplaceContentRequest,
@@ -75,6 +79,17 @@ interface WorkbenchBinding {
   saveEditorDocument(request: WorkbenchTextEditorSaveRequest): Promise<void>;
   highlightText(request: WorkbenchTextHighlightRequest): WorkbenchTextHighlightResult;
   openWorkspaceResource(request: WorkbenchWorkspaceResourceOpenRequest): Promise<void>;
+  executionSnapshot(): WorkbenchExecutionSnapshot;
+  subscribeExecution(listener: (snapshot: WorkbenchExecutionSnapshot) => void): Disposable;
+  upsertExecutionProfile(
+    profile: ExecutionProfile,
+    options?: WorkbenchExecutionProfileUpdateOptions,
+  ): Promise<void>;
+  removeExecutionProfile(profileId: string): Promise<void>;
+  selectExecutionProfile(profileId?: string): Promise<void>;
+  runExecutionProfile(profile: ExecutionProfile): Promise<void>;
+  debugExecutionProfile(profile: ExecutionProfile): Promise<DebugSessionSnapshot>;
+  stopExecutionProfile(profileId: string): Promise<void>;
 }
 
 class AppWorkbenchApi implements WorkbenchApi {
@@ -114,6 +129,44 @@ class AppWorkbenchApi implements WorkbenchApi {
 
   readonly output = {
     createFollowControl: createOutputFollowControl,
+  };
+
+  readonly execution = {
+    snapshot: (): WorkbenchExecutionSnapshot => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      return this.#binding.executionSnapshot();
+    },
+    subscribe: (listener: (snapshot: WorkbenchExecutionSnapshot) => void): Disposable => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      return this.#binding.subscribeExecution(listener);
+    },
+    upsertProfile: async (
+      profile: ExecutionProfile,
+      options?: WorkbenchExecutionProfileUpdateOptions,
+    ): Promise<void> => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      await this.#binding.upsertExecutionProfile(profile, options);
+    },
+    removeProfile: async (profileId: string): Promise<void> => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      await this.#binding.removeExecutionProfile(profileId);
+    },
+    selectProfile: async (profileId?: string): Promise<void> => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      await this.#binding.selectExecutionProfile(profileId);
+    },
+    runProfile: async (profile: ExecutionProfile): Promise<void> => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      await this.#binding.runExecutionProfile(profile);
+    },
+    debugProfile: async (profile: ExecutionProfile): Promise<DebugSessionSnapshot> => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      return this.#binding.debugExecutionProfile(profile);
+    },
+    stopProfile: async (profileId: string): Promise<void> => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      await this.#binding.stopExecutionProfile(profileId);
+    },
   };
 
   bind(binding: WorkbenchBinding): Disposable {

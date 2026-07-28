@@ -22,3 +22,9 @@
 [submodule "plugins/search"]
 	path = plugins/search
 	url = git@github.com:alexsilva/tinyide.search.git
+[submodule "plugins/pytest"]
+	path = plugins/pytest
+	url = git@github.com:alexsilva/tinyide.pytest.git
+[submodule "plugins/pytest"]
+	path = plugins/pytest
+	url = git@github.com:alexsilva/tinyide.pytest.git

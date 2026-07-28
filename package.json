@@ -28,7 +28,7 @@
     "coverage:runtime-security": "vitest run apps/desktop/security.test.mjs apps/desktop/startup.test.mjs packages/runtime-server/src/index.test.mjs --coverage --coverage.provider=v8 --coverage.reporter=text --coverage.include='apps/desktop/security.cjs' --coverage.include='apps/desktop/startup.cjs' --coverage.include='packages/runtime-server/src/index.mjs' --coverage.thresholds.lines=75 --coverage.thresholds.functions=85 --coverage.thresholds.statements=70 --coverage.thresholds.branches=60",
     "coverage:plugins": "npm run coverage --prefix plugins/python && npm run coverage --prefix plugins/python-venv",
     "coverage": "npm run coverage:core && npm run coverage:web-critical && npm run coverage:runtime-security && npm run coverage:plugins",
-    "typecheck:plugins": "tsc -p plugins/python/jsconfig.json && tsc -p plugins/python-venv/jsconfig.json && tsc -p plugins/javascript/jsconfig.json && tsc -p plugins/node-runtime/jsconfig.json && tsc -p plugins/docker/jsconfig.json && tsc -p plugins/terminal/jsconfig.json && tsc -p plugins/git/jsconfig.json && tsc -p plugins/search/jsconfig.json",
+    "typecheck:plugins": "tsc -p plugins/python/jsconfig.json && tsc -p plugins/python-venv/jsconfig.json && tsc -p plugins/pytest/jsconfig.json && tsc -p plugins/javascript/jsconfig.json && tsc -p plugins/node-runtime/jsconfig.json && tsc -p plugins/docker/jsconfig.json && tsc -p plugins/terminal/jsconfig.json && tsc -p plugins/git/jsconfig.json && tsc -p plugins/search/jsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck:plugins",
     "check": "npm run typecheck && npm run test && npm run test:performance && npm run coverage && npm run build"
   },

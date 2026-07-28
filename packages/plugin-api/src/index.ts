@@ -807,12 +807,53 @@ export interface WorkbenchOutputApi {
   createFollowControl(options: WorkbenchOutputFollowOptions): WorkbenchOutputFollowControl;
 }
 
+export type WorkbenchProfileExecutionStatus = "running" | "completed" | "failed" | "stopped";
+
+export interface WorkbenchProfileExecutionSnapshot {
+  readonly profileId: string;
+  readonly profileName: string;
+  readonly status: WorkbenchProfileExecutionStatus;
+  readonly output: readonly string[];
+  readonly processId?: string;
+  readonly error?: string;
+  readonly startedAt?: number;
+  readonly finishedAt?: number;
+}
+
+export interface WorkbenchExecutionSnapshot {
+  readonly profiles: readonly ExecutionProfile[];
+  readonly selectedProfileId?: string;
+  readonly environments: readonly ExecutionEnvironment[];
+  readonly selectedEnvironmentId?: string;
+  readonly executions: readonly WorkbenchProfileExecutionSnapshot[];
+  readonly debugSession?: DebugSessionSnapshot;
+}
+
+export interface WorkbenchExecutionProfileUpdateOptions {
+  readonly select?: boolean;
+}
+
+export interface WorkbenchExecutionApi {
+  snapshot(): WorkbenchExecutionSnapshot;
+  subscribe(listener: (snapshot: WorkbenchExecutionSnapshot) => void): Disposable;
+  upsertProfile(
+    profile: ExecutionProfile,
+    options?: WorkbenchExecutionProfileUpdateOptions,
+  ): Promise<void>;
+  removeProfile(profileId: string): Promise<void>;
+  selectProfile(profileId?: string): Promise<void>;
+  runProfile(profile: ExecutionProfile): Promise<void>;
+  debugProfile(profile: ExecutionProfile): Promise<DebugSessionSnapshot>;
+  stopProfile(profileId: string): Promise<void>;
+}
+
 export interface WorkbenchApi {
   readonly dialogs: WorkbenchDialogApi;
   readonly editor: WorkbenchTextEditorApi;
   readonly text: WorkbenchTextApi;
   readonly workspace: WorkbenchWorkspaceApi;
   readonly output: WorkbenchOutputApi;
+  readonly execution: WorkbenchExecutionApi;
   openSidebar(id: string): void;
   openToolWindow(id: string, viewId?: string): void;
 }

@@ -12,6 +12,8 @@ function cloneProfile(profile: ExecutionProfile): ExecutionProfile {
     environment: { ...profile.environment },
     steps: profile.steps.map((step) => ({
       ...step,
+      ...(step.arguments ? { arguments: [...step.arguments] } : {}),
+      ...(step.target ? { target: { ...step.target } } : {}),
       parameters: [...step.parameters],
       ...(step.environmentVariables
         ? { environmentVariables: { ...step.environmentVariables } }
@@ -58,12 +60,13 @@ export function resolveExecutionProfile(
       id: step.id,
       name: step.name,
       executable: expandExecutionVariables(step.executable.trim(), context),
-      arguments: [
-        ...(step.command.trim()
-          ? [expandExecutionVariables(step.command.trim(), context)]
-          : []),
-        ...step.parameters.map((parameter) => expandExecutionVariables(parameter, context)),
-      ],
+      arguments: (step.arguments
+        ? step.arguments
+        : [
+            ...(step.command.trim() ? [step.command.trim()] : []),
+            ...step.parameters,
+          ]
+      ).map((argument) => expandExecutionVariables(argument, context)),
       ...(step.workingDirectory
         ? { workingDirectory: expandExecutionVariables(step.workingDirectory.trim(), context) }
         : {}),

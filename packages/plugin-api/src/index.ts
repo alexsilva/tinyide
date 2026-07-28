@@ -184,11 +184,25 @@ export interface ExecutionProfileStep {
   readonly id: string;
   readonly name: string;
   readonly executable: string;
+  /**
+   * Fully materialized process arguments. When present, these arguments are
+   * the execution source of truth and `command`/`parameters` are retained only
+   * for backward-compatible profile authoring.
+   */
+  readonly arguments?: readonly string[];
+  /** Optional provider-owned authoring metadata. The execution core ignores it. */
+  readonly target?: ExecutionProfileTargetSelection;
   readonly command: string;
   readonly parameters: readonly string[];
   readonly workingDirectory?: string;
   readonly environmentVariables?: Readonly<Record<string, string>>;
   readonly continueOnError?: boolean;
+}
+
+export interface ExecutionProfileTargetSelection {
+  readonly providerId: string;
+  readonly kindId: string;
+  readonly value: string;
 }
 
 export interface ExecutionProfile {
@@ -253,9 +267,29 @@ export interface ExecutionProfilePresetContribution {
   create(context: ExecutionProfileContributionContext): ExecutionProfile;
 }
 
+export interface ExecutionProfileTargetKindContribution {
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly valueLabel: string;
+  readonly placeholder?: string;
+  readonly browse?: boolean;
+  buildArguments(target: string, parameters: readonly string[]): readonly string[];
+  parseArguments?(
+    argumentsList: readonly string[],
+  ): { readonly target: string; readonly parameters: readonly string[] } | undefined;
+}
+
+export interface ExecutionProfileTargetKindOption extends ExecutionProfileTargetKindContribution {
+  readonly providerId: string;
+  readonly providerName: string;
+  readonly environmentProviderId?: string;
+}
+
 export interface ExecutionProfileContributionProvider {
   readonly id: string;
   readonly name: string;
+  readonly environmentProviderId?: string;
   executableOptions?(
     context: ExecutionProfileContributionContext,
   ): Promise<readonly ExecutionProfileExecutableOption[]> | readonly ExecutionProfileExecutableOption[];
@@ -265,6 +299,9 @@ export interface ExecutionProfileContributionProvider {
   presets?(
     context: ExecutionProfileContributionContext,
   ): Promise<readonly ExecutionProfilePresetContribution[]> | readonly ExecutionProfilePresetContribution[];
+  targetKinds?(
+    context: ExecutionProfileContributionContext,
+  ): Promise<readonly ExecutionProfileTargetKindContribution[]> | readonly ExecutionProfileTargetKindContribution[];
 }
 
 export const EXECUTION_PROFILE_CONTRIBUTION_CAPABILITY = "execution.profile.contribution";

@@ -7,7 +7,17 @@ import type {
   ExecutionProfile,
   ExecutionProfileExecutableOption,
   ExecutionProfilePresetContribution,
+  ExecutionProfileTargetKindOption,
 } from "@tinyide/plugin-api";
+import {
+  clearExecutionTarget,
+  executionTargetKindForStep,
+  executionTargetKindKey,
+  GENERIC_EXECUTION_TARGET,
+  materializeExecutionTarget,
+  selectExecutionTargetKind,
+  updateExecutionTargetValue,
+} from "./profile-targets";
 
 function makeProfile(): ExecutionProfile {
   const id = `profile-${crypto.randomUUID()}`;
@@ -55,6 +65,7 @@ export function ProfileDialog({
   environments,
   executableOptions,
   presets,
+  targetKinds,
   onBrowseCommand,
   onChange,
 }: {
@@ -65,6 +76,7 @@ export function ProfileDialog({
   readonly environments: readonly ExecutionEnvironment[];
   readonly executableOptions: readonly ExecutionProfileExecutableOption[];
   readonly presets: readonly ExecutionProfilePresetContribution[];
+  readonly targetKinds: readonly ExecutionProfileTargetKindOption[];
   readonly onBrowseCommand: () => Promise<string | undefined>;
   readonly onChange: (profiles: readonly ExecutionProfile[], selectedId?: string) => void;
 }) {
@@ -90,6 +102,14 @@ export function ProfileDialog({
   const step = editing?.steps[0];
   const editingEnvironmentId = editing?.environment.mode === "fixed"
     ? editing.environment.environmentId
+    : undefined;
+  const compatibleTargetKinds = targetKinds.filter((targetKind) => (
+    !targetKind.environmentProviderId
+    || environments.find((environment) => environment.id === editingEnvironmentId)?.providerId
+      === targetKind.environmentProviderId
+  ));
+  const selectedTargetKind = step
+    ? executionTargetKindForStep(step, compatibleTargetKinds)
     : undefined;
 
   const updateEditing = (update: (profile: ExecutionProfile) => ExecutionProfile) => {
@@ -131,10 +151,13 @@ export function ProfileDialog({
         const rawParameters = parameterDrafts[profile.id]
           ?? formatCommandLineArguments(profile.steps[0]?.parameters ?? []);
         const parameters = rawParameters.trim() ? parseCommandLineArguments(rawParameters) : [];
+        const targetKind = executionTargetKindForStep(profile.steps[0]!, targetKinds);
         return {
           ...profile,
           steps: profile.steps.map((profileStep, index) => index === 0
-            ? { ...profileStep, parameters }
+            ? targetKind
+              ? materializeExecutionTarget(profileStep, targetKind, parameters)
+              : { ...profileStep, parameters }
             : profileStep),
         };
       });
@@ -297,25 +320,70 @@ export function ProfileDialog({
                       </div>
                     ) : null}
                     <label>
-                      Comando ou arquivo
-                      <div className="path-row">
-                        <input
-                          value={step.command}
-                          placeholder="Ex.: caminho/do/arquivo ou subcomando"
-                          onChange={(event) => updateEditing((profile) => ({
-                            ...profile,
-                            steps: profile.steps.map((item, index) => index === 0 ? { ...item, command: event.target.value } : item),
-                          }))}
-                        />
-                        <button className="button secondary compact" type="button" onClick={() => {
-                          void onBrowseCommand().then((path) => {
-                            if (!path) return;
+                      Comando
+                      <div className="profile-target-row">
+                        <select
+                          className="profile-target-kind-select"
+                          aria-label="Tipo de alvo"
+                          title={selectedTargetKind?.description ?? "Comando genérico"}
+                          value={selectedTargetKind ? executionTargetKindKey(selectedTargetKind) : GENERIC_EXECUTION_TARGET}
+                          onChange={(event) => {
+                            const targetKind = compatibleTargetKinds.find((candidate) => (
+                              executionTargetKindKey(candidate) === event.target.value
+                            ));
                             updateEditing((profile) => ({
                               ...profile,
-                              steps: profile.steps.map((item, index) => index === 0 ? { ...item, command: path } : item),
+                              steps: profile.steps.map((item, index) => index === 0
+                                ? targetKind
+                                  ? selectExecutionTargetKind(item, targetKind)
+                                  : clearExecutionTarget(item)
+                                : item),
                             }));
-                          });
-                        }}>Procurar</button>
+                          }}
+                        >
+                          <option value={GENERIC_EXECUTION_TARGET}>Genérico</option>
+                          {compatibleTargetKinds.map((targetKind) => (
+                            <option key={executionTargetKindKey(targetKind)} value={executionTargetKindKey(targetKind)}>
+                              {targetKind.label}
+                            </option>
+                          ))}
+                        </select>
+                        {selectedTargetKind ? (
+                          <input
+                            value={step.target?.value ?? ""}
+                            placeholder={selectedTargetKind.placeholder}
+                            onChange={(event) => updateEditing((profile) => ({
+                              ...profile,
+                              steps: profile.steps.map((item, index) => index === 0
+                                ? updateExecutionTargetValue(item, selectedTargetKind, event.target.value)
+                                : item),
+                            }))}
+                          />
+                        ) : (
+                          <input
+                            value={step.command}
+                            placeholder="Ex.: caminho/do/arquivo ou subcomando"
+                            onChange={(event) => updateEditing((profile) => ({
+                              ...profile,
+                              steps: profile.steps.map((item, index) => index === 0 ? { ...item, command: event.target.value } : item),
+                            }))}
+                          />
+                        )}
+                        {selectedTargetKind?.browse || !selectedTargetKind ? (
+                            <button className="button secondary compact" type="button" onClick={() => {
+                              void onBrowseCommand().then((path) => {
+                                if (!path) return;
+                                updateEditing((profile) => ({
+                                  ...profile,
+                                  steps: profile.steps.map((item, index) => index === 0
+                                    ? selectedTargetKind
+                                      ? updateExecutionTargetValue(item, selectedTargetKind, path)
+                                      : { ...item, command: path }
+                                    : item),
+                                }));
+                              });
+                            }}>Procurar</button>
+                        ) : null}
                       </div>
                     </label>
                     <label>

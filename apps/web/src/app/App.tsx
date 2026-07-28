@@ -88,6 +88,7 @@ import type {
   ExecutionProfile,
   ExecutionProfileExecutableOption,
   ExecutionProfilePresetContribution,
+  ExecutionProfileTargetKindOption,
   LanguageLintSettings,
   LanguageProvider,
   PluginSettingValues,
@@ -519,6 +520,7 @@ export function App() {
   const [environmentBrowserExecutableOnly, setEnvironmentBrowserExecutableOnly] = useState(false);
   const [executableOptions, setExecutableOptions] = useState<readonly ExecutionProfileExecutableOption[]>([]);
   const [profilePresets, setProfilePresets] = useState<readonly ExecutionProfilePresetContribution[]>([]);
+  const [profileTargetKinds, setProfileTargetKinds] = useState<readonly ExecutionProfileTargetKindOption[]>([]);
   const [busy, setBusy] = useState(false);
   const [pageReloading, setPageReloading] = useState(false);
   const [activeProcessId, setActiveProcessId] = useState<string>();
@@ -1339,9 +1341,10 @@ export function App() {
               workspaceRoot: restoredWorkspaceRoot,
               ...(restoredActive ? { activeDocument: restoredActive } : {}),
             })
-          : { executableOptions: [], variables: [], presets: [] };
+          : { executableOptions: [], variables: [], presets: [], targetKinds: [] };
         setExecutableOptions(contributions.executableOptions);
         setProfilePresets(contributions.presets);
+        setProfileTargetKinds(contributions.targetKinds);
         restoredRef.current = true;
       })
       .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
@@ -1547,6 +1550,7 @@ export function App() {
       setEnvironments([]);
       setSelectedEnvironmentId(undefined);
       setExecutableOptions([]);
+      setProfileTargetKinds([]);
       return;
     }
     void loadEnvironments().then((loaded) => {
@@ -1574,6 +1578,7 @@ export function App() {
     }).then((contributions) => {
       setExecutableOptions(contributions.executableOptions);
       setProfilePresets(contributions.presets);
+      setProfileTargetKinds(contributions.targetKinds);
     });
   }, [platformSnapshot.plugins, platformSnapshot.initialized, restorationComplete, workspaceName, workspaceRoot, activeDocument?.id, replaceWorkspaceSettings]);
 
@@ -4950,6 +4955,7 @@ export function App() {
           environments={environments}
           executableOptions={executableOptions}
           presets={profilePresets}
+          targetKinds={profileTargetKinds}
           onBrowseCommand={() => pickHostPath("file")}
           onChange={updateProfiles}
         />

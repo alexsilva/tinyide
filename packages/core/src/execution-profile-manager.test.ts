@@ -114,6 +114,29 @@ describe("execution profile resolution", () => {
     ]);
   });
 
+  it("uses materialized arguments without interpreting provider target metadata", () => {
+    const resolved = resolveExecutionProfile({
+      ...profile,
+      steps: [{
+        ...profile.steps[0]!,
+        command: "ignored.py",
+        parameters: ["ignored"],
+        arguments: ["-m", "celery", "-A", "config"],
+        target: {
+          providerId: "python-environments",
+          kindId: "module",
+          value: "celery",
+        },
+      }],
+    }, {
+      workspaceRoot: "/project",
+      environmentExecutable: "/project/.venv/bin/python",
+      activeFile: "/project/task.py",
+    });
+
+    expect(resolved[0]?.arguments).toEqual(["-m", "celery", "-A", "config"]);
+  });
+
   it("validates profile and step fields and optional branches", () => {
     expect(() => resolveExecutionProfile({ ...profile, name: " " }, {})).toThrow("perfil precisa de um nome");
     expect(() => resolveExecutionProfile({ ...profile, steps: [] }, {})).toThrow("ao menos uma etapa");

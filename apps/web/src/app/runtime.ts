@@ -10,6 +10,7 @@ import type {
   ExecutionProfileContributionProvider,
   ExecutionProfileExecutableOption,
   ExecutionProfilePresetContribution,
+  ExecutionProfileTargetKindOption,
   ExecutionProfileVariableContribution,
   LanguageProvider,
   LanguageLintSettings,
@@ -66,6 +67,7 @@ export interface ProfileContributions {
   readonly executableOptions: readonly ExecutionProfileExecutableOption[];
   readonly variables: readonly ExecutionProfileVariableContribution[];
   readonly presets: readonly ExecutionProfilePresetContribution[];
+  readonly targetKinds: readonly ExecutionProfileTargetKindOption[];
 }
 
 export interface RunProfileCallbacks {
@@ -211,10 +213,23 @@ export async function loadProfileContributions(input: {
   const presets = await Promise.all(
     providers.map((provider) => provider.presets?.(context) ?? []),
   );
+  const targetKinds = await Promise.all(
+    providers.map(async (provider) => (
+      (await provider.targetKinds?.(context) ?? []).map((targetKind) => ({
+        ...targetKind,
+        providerId: provider.id,
+        providerName: provider.name,
+        ...(provider.environmentProviderId
+          ? { environmentProviderId: provider.environmentProviderId }
+          : {}),
+      }))
+    )),
+  );
   return {
     executableOptions: executableOptions.flat(),
     variables: variables.flat(),
     presets: presets.flat(),
+    targetKinds: targetKinds.flat(),
   };
 }
 

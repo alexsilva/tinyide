@@ -24,6 +24,8 @@ import type {
   TextEditorLineDecorationProvider,
   WorkbenchApi,
   WorkbenchDialogContribution,
+  WorkbenchExplorerFilterProvider,
+  WorkbenchWorkspaceResourceOpenRequest,
   WorkbenchTextEditorReplaceContentRequest,
   WorkbenchTextEditorSaveRequest,
   WorkbenchTextHighlightRequest,
@@ -72,6 +74,7 @@ interface WorkbenchBinding {
   replaceEditorContent(request: WorkbenchTextEditorReplaceContentRequest): Promise<void>;
   saveEditorDocument(request: WorkbenchTextEditorSaveRequest): Promise<void>;
   highlightText(request: WorkbenchTextHighlightRequest): WorkbenchTextHighlightResult;
+  openWorkspaceResource(request: WorkbenchWorkspaceResourceOpenRequest): Promise<void>;
 }
 
 class AppWorkbenchApi implements WorkbenchApi {
@@ -99,6 +102,13 @@ class AppWorkbenchApi implements WorkbenchApi {
     highlight: (request: WorkbenchTextHighlightRequest): WorkbenchTextHighlightResult => {
       if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
       return this.#binding.highlightText(request);
+    },
+  };
+
+  readonly workspace = {
+    openResource: async (request: WorkbenchWorkspaceResourceOpenRequest): Promise<void> => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      await this.#binding.openWorkspaceResource(request);
     },
   };
 
@@ -189,6 +199,7 @@ function pluginContext(platform: TinyIdePlatform, pluginId: string): PluginConte
       registerWorkbenchPanelHook: (hook: WorkbenchPanelHook) => platform.capabilities.register("workbench.panel.hook", hook),
       registerWorkbenchToolWindowHook: (hook: WorkbenchToolWindowHook) => platform.capabilities.register("workbench.toolWindow.hook", hook),
       registerWorkbenchTitlebarContribution: (contribution: WorkbenchTitlebarContribution) => platform.capabilities.register("workbench.titlebar", contribution),
+      registerWorkbenchExplorerFilterProvider: (provider: WorkbenchExplorerFilterProvider) => platform.capabilities.register("workbench.explorerFilter", provider),
       registerWorkbenchEditorToolbarProvider: (provider: WorkbenchEditorToolbarProvider) => platform.capabilities.register("workbench.editorToolbar", provider),
       registerTextEditorLineDecorationProvider: (provider: TextEditorLineDecorationProvider) => platform.capabilities.register("textEditor.lineDecoration", provider),
       registerWorkbenchResourceEditorProvider: (provider: WorkbenchResourceEditorProvider) => platform.capabilities.register("workbench.resourceEditor", provider),

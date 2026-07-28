@@ -55,6 +55,28 @@ export function explorerAncestorDirectoryPaths(path: string): readonly string[] 
   return ancestors;
 }
 
+export interface ExplorerFilterView {
+  /** Matched paths plus every ancestor directory needed to reach them. */
+  readonly visiblePaths: ReadonlySet<string>;
+  /** Ancestor directories that must be expanded so matches stay reachable. */
+  readonly expandedPaths: ReadonlySet<string>;
+}
+
+export function explorerFilterView(paths: readonly string[]): ExplorerFilterView {
+  const visiblePaths = new Set<string>();
+  const expandedPaths = new Set<string>();
+  for (const path of paths) {
+    const normalized = path.split("/").filter(Boolean).join("/");
+    if (!normalized) continue;
+    visiblePaths.add(normalized);
+    for (const ancestor of explorerAncestorDirectoryPaths(normalized)) {
+      visiblePaths.add(ancestor);
+      expandedPaths.add(ancestor);
+    }
+  }
+  return { visiblePaths, expandedPaths };
+}
+
 export function workspacePathContainsHiddenSegment(path: string): boolean {
   return path.split("/").filter(Boolean).some((segment) => segment.startsWith("."));
 }

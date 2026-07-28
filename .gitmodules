@@ -19,3 +19,6 @@
 [submodule "plugins/docker"]
 	path = plugins/docker
 	url = git@github.com:alexsilva/tinyide.docker.git
+[submodule "plugins/search"]
+	path = plugins/search
+	url = git@github.com:alexsilva/tinyide.search.git

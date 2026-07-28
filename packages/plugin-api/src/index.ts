@@ -117,6 +117,7 @@ export interface PluginExtensionApi {
   registerWorkbenchPanelHook(hook: WorkbenchPanelHook): Disposable;
   registerWorkbenchToolWindowHook(hook: WorkbenchToolWindowHook): Disposable;
   registerWorkbenchTitlebarContribution(contribution: WorkbenchTitlebarContribution): Disposable;
+  registerWorkbenchExplorerFilterProvider(provider: WorkbenchExplorerFilterProvider): Disposable;
   registerWorkbenchEditorToolbarProvider(provider: WorkbenchEditorToolbarProvider): Disposable;
   registerTextEditorLineDecorationProvider(provider: TextEditorLineDecorationProvider): Disposable;
   registerWorkbenchResourceEditorProvider(provider: WorkbenchResourceEditorProvider): Disposable;
@@ -725,13 +726,50 @@ export interface WorkbenchTextEditorApi {
   save(request: WorkbenchTextEditorSaveRequest): Promise<void>;
 }
 
+export interface WorkbenchWorkspaceResourceOpenRequest {
+  /** Workspace-relative path of the file to open in the text editor. */
+  readonly path: string;
+  /** One-based line to scroll into view after the document is opened. */
+  readonly line?: number;
+  /** Selects the resource in the Explorer, expanding its ancestors. */
+  readonly reveal?: boolean;
+}
+
+export interface WorkbenchWorkspaceApi {
+  openResource(request: WorkbenchWorkspaceResourceOpenRequest): Promise<void>;
+}
+
 export interface WorkbenchApi {
   readonly dialogs: WorkbenchDialogApi;
   readonly editor: WorkbenchTextEditorApi;
   readonly text: WorkbenchTextApi;
+  readonly workspace: WorkbenchWorkspaceApi;
   openSidebar(id: string): void;
   openToolWindow(id: string, viewId?: string): void;
 }
+
+export interface WorkbenchExplorerFilterRequest {
+  readonly query: string;
+}
+
+export interface WorkbenchExplorerFilterResult {
+  /** Workspace-relative paths that match the query; ancestors are revealed by the host. */
+  readonly paths: readonly string[];
+  /** Signals that the provider stopped before listing every match. */
+  readonly truncated?: boolean;
+}
+
+export interface WorkbenchExplorerFilterProvider {
+  readonly id: string;
+  readonly pluginId: string;
+  readonly placeholder?: string;
+  readonly priority?: number;
+  filter(
+    request: WorkbenchExplorerFilterRequest,
+  ): WorkbenchExplorerFilterResult | Promise<WorkbenchExplorerFilterResult>;
+}
+
+export const WORKBENCH_EXPLORER_FILTER_CAPABILITY = "workbench.explorerFilter";
 
 export type WorkbenchResourceKind = "text" | "image" | "binary";
 

@@ -54,6 +54,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -103,6 +104,8 @@ import type {
   WorkbenchStateApi,
   WorkbenchStateSnapshot,
   WorkbenchTitlebarContribution,
+  WorkbenchExplorerFilterProvider,
+  WorkbenchWorkspaceResourceOpenRequest,
   WorkbenchToolWindowContribution,
   WorkbenchToolWindowHookContribution,
   WorkbenchToolWindowHook,
@@ -145,6 +148,7 @@ import {
   explorerCreationInsertionIndex,
   hiddenExplorerEntryCount,
   explorerTargetDirectoryPath,
+  explorerFilterView,
   findWorkspaceEntry,
   flattenVisibleEntries,
   joinWorkspacePath,
@@ -303,6 +307,17 @@ interface ContextMenuState {
   readonly x: number;
   readonly y: number;
   readonly items: readonly ResourceContextMenuItem[];
+}
+
+const EXPLORER_FILTER_DEBOUNCE_MS = 40;
+
+interface ExplorerFilterResultState {
+  readonly query: string;
+  readonly visiblePaths: ReadonlySet<string>;
+  readonly expandedPaths: ReadonlySet<string>;
+  readonly matchCount: number;
+  readonly truncated: boolean;
+  readonly error?: string;
 }
 
 function encodedNewFileCommand(option?: Pick<WorkspaceFileCreationOption, "extension" | "suggestedName">): string {
@@ -1025,6 +1040,7 @@ function EntryTree({
   showHidden,
   revealHidden,
   revealedHiddenPaths,
+  filterVisiblePaths,
   highlightedPath,
   selectedPath,
   resourceDecorations,
@@ -1060,6 +1076,7 @@ function EntryTree({
   readonly showHidden: boolean;
   readonly revealHidden: boolean;
   readonly revealedHiddenPaths: ReadonlySet<string>;
+  readonly filterVisiblePaths: ReadonlySet<string> | undefined;
   readonly highlightedPath: string | undefined;
   readonly selectedPath: string | undefined;
   readonly resourceDecorations: ReadonlyMap<string, ResourceDecoration>;
@@ -1089,9 +1106,12 @@ function EntryTree({
   readonly workspaceName: string;
   readonly workspaceRoot?: string;
 }) {
+  const filteredEntries = filterVisiblePaths
+    ? entries.filter((entry) => filterVisiblePaths.has(entry.path))
+    : entries;
   const visibleEntries = revealHidden
-    ? entries
-    : entries.filter((entry) => !entry.name.startsWith("."));
+    ? filteredEntries
+    : filteredEntries.filter((entry) => !entry.name.startsWith("."));
   const creationIndex = creationKind && creationParentPath === parentPath
     ? explorerCreationInsertionIndex(visibleEntries, creationKind, creationName.trim())
     : -1;
@@ -1239,6 +1259,7 @@ function EntryTree({
                   showHidden={showHidden}
                   revealHidden={showHidden || revealedHiddenPaths.has(entry.path)}
                   revealedHiddenPaths={revealedHiddenPaths}
+                  filterVisiblePaths={filterVisiblePaths}
                   highlightedPath={highlightedPath}
                   selectedPath={selectedPath}
                   resourceDecorations={resourceDecorations}
@@ -1282,6 +1303,7 @@ function EntryTree({
                   showHidden={showHidden}
                   revealHidden={showHidden || revealedHiddenPaths.has(entry.path)}
                   revealedHiddenPaths={revealedHiddenPaths}
+                  filterVisiblePaths={filterVisiblePaths}
                   highlightedPath={highlightedPath}
                   selectedPath={selectedPath}
                   resourceDecorations={resourceDecorations}
@@ -2533,7 +2555,14 @@ export function App() {
   const [draggingExplorerPath, setDraggingExplorerPath] = useState<string>();
   const [dropTargetExplorerPath, setDropTargetExplorerPath] = useState<string>();
   const [explorerHistory, setExplorerHistory] = useState<ExplorerHistoryState>(createExplorerHistoryState);
+  const [explorerFilterQuery, setExplorerFilterQuery] = useState("");
+  const [explorerFilterResult, setExplorerFilterResult] = useState<ExplorerFilterResultState>();
+  const explorerFilterInputRef = useRef<HTMLInputElement>(null);
   const restoredRef = useRef(false);
+  const openWorkspaceResourceRef = useRef<
+    (request: WorkbenchWorkspaceResourceOpenRequest) => Promise<void>
+  >(async () => undefined);
+  const explorerFilterExpansionBackupRef = useRef<ReadonlySet<string> | undefined>(undefined);
   const snapshotTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const explorerHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -2634,6 +2663,11 @@ export function App() {
     .getAll<WorkbenchTitlebarContribution>("workbench.titlebar")
     .slice()
     .sort((left, right) => (left.order ?? 0) - (right.order ?? 0) || left.id.localeCompare(right.id)), [platformSnapshot]);
+  const explorerFilterProvider = useMemo(() => platform.capabilities
+    .getAll<WorkbenchExplorerFilterProvider>("workbench.explorerFilter")
+    .slice()
+    .sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0) || left.id.localeCompare(right.id))
+    .at(0), [platformSnapshot]);
   useEffect(() => {
     let cancelled = false;
     if (!activeDocument || activeDocument.kind !== "text") {
@@ -2929,6 +2963,9 @@ export function App() {
       if (currentDocument.kind !== "text") throw new Error("Este recurso não é um documento de texto editável.");
       if (currentDocument.content === currentDocument.savedContent) return;
       await saveOpenDocument(currentDocument);
+    },
+    async openWorkspaceResource(request) {
+      await openWorkspaceResourceRef.current(request);
     },
     highlightText(request) {
       const provider = resolveSyntaxHighlighter({
@@ -3585,21 +3622,57 @@ export function App() {
     setActiveDocumentId(document.id);
   };
 
-  const openEntry = async (entry: WorkspaceEntry) => {
-    if (entry.kind !== "file") return;
-    const handle = entry.handle?.kind === "file"
-      ? entry.handle
-      : workspaceHandle
-        ? await resolveFileHandle(workspaceHandle, entry.path)
-        : undefined;
+  const openWorkspaceFilePath = async (path: string, fileHandle?: BrowserFileHandle) => {
+    const handle = fileHandle
+      ?? (workspaceHandle ? await resolveFileHandle(workspaceHandle, path) : undefined);
     if (!handle) throw new Error("Restaure o acesso ao workspace antes de abrir este arquivo.");
-    const document = await readFileDocument(handle, entry.path, workspaceRoot);
+    const document = await readFileDocument(handle, path, workspaceRoot);
     setDocuments((current) => {
       const index = current.findIndex((item) => item.id === document.id);
       return index === -1 ? [...current, document] : current.map((item) => item.id === document.id ? document : item);
     });
     setActiveDocumentId(document.id);
   };
+
+  const openEntry = async (entry: WorkspaceEntry) => {
+    if (entry.kind !== "file") return;
+    await openWorkspaceFilePath(
+      entry.path,
+      entry.handle?.kind === "file" ? entry.handle : undefined,
+    );
+  };
+
+  const scrollEditorToLine = (line: number) => {
+    window.requestAnimationFrame(() => {
+      const scrollContainer = highlightedEditorScrollRef.current ?? editorRef.current;
+      if (!scrollContainer) return;
+      scrollContainer.scrollTop = Math.max(0, 18 + (line - 1) * 21.45 - 120);
+      syncEditorLineRuler(scrollContainer.scrollTop);
+    });
+  };
+
+  const openWorkspaceResource = async (request: WorkbenchWorkspaceResourceOpenRequest) => {
+    const path = request.path.split("/").filter(Boolean).join("/");
+    if (!path) throw new Error("Informe o caminho do recurso a ser aberto.");
+    const opened = documentsRef.current.find((document) => document.path === path);
+    if (opened) {
+      setActiveDocumentId(opened.id);
+    } else {
+      await openWorkspaceFilePath(path);
+    }
+    if (request.reveal) {
+      const nextExpanded = new Set([...expanded, ...explorerAncestorDirectoryPaths(path)]);
+      if (workspacePathContainsHiddenSegment(path)) setExplorerShowHidden(true);
+      setExpanded(nextExpanded);
+      await refreshExplorer(nextExpanded);
+      setSelectedExplorerPath(path);
+    }
+    if (request.line && request.line > 0) scrollEditorToLine(request.line);
+  };
+
+  useEffect(() => {
+    openWorkspaceResourceRef.current = openWorkspaceResource;
+  });
 
   const revealDebugLocation = async (path: string | undefined, line: number | undefined) => {
     const relativePath = workspaceRelativeDebugPath(path, workspaceRoot);
@@ -3613,12 +3686,7 @@ export function App() {
       await openEntry(entry);
     }
     if (!line) return;
-    window.requestAnimationFrame(() => {
-      const scrollContainer = highlightedEditorScrollRef.current ?? editorRef.current;
-      if (!scrollContainer) return;
-      scrollContainer.scrollTop = Math.max(0, 18 + (line - 1) * 21.45 - 120);
-      syncEditorLineRuler(scrollContainer.scrollTop);
-    });
+    scrollEditorToLine(line);
   };
 
   useEffect(() => {
@@ -4207,6 +4275,75 @@ export function App() {
     setExpanded(nextExpanded);
     await refreshExplorer(nextExpanded);
   };
+
+  const explorerFilterActive = Boolean(explorerFilterResult);
+
+  useLayoutEffect(() => {
+    if (!explorerFilterQuery) return;
+    const input = explorerFilterInputRef.current;
+    if (!input) return;
+    input.focus({ preventScroll: true });
+    input.setSelectionRange(input.value.length, input.value.length);
+  }, [explorerFilterQuery]);
+
+  useEffect(() => {
+    const query = explorerFilterQuery.trim();
+    if (!explorerFilterProvider || !query) {
+      setExplorerFilterResult(undefined);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void Promise.resolve(explorerFilterProvider.filter({ query })).then((result) => {
+        if (cancelled) return;
+        const view = explorerFilterView(result.paths);
+        setExplorerFilterResult({
+          query,
+          visiblePaths: view.visiblePaths,
+          expandedPaths: view.expandedPaths,
+          matchCount: result.paths.length,
+          truncated: result.truncated === true,
+        });
+      }).catch((cause) => {
+        if (cancelled) return;
+        setExplorerFilterResult({
+          query,
+          visiblePaths: new Set(),
+          expandedPaths: new Set(),
+          matchCount: 0,
+          truncated: false,
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+      });
+    }, EXPLORER_FILTER_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [explorerFilterQuery, explorerFilterProvider]);
+
+  useEffect(() => {
+    if (!workspaceHandle) return;
+    if (!explorerFilterResult) {
+      const restored = explorerFilterExpansionBackupRef.current;
+      if (!restored) return;
+      explorerFilterExpansionBackupRef.current = undefined;
+      setExpanded(restored);
+      invoke(() => refreshExplorer(restored));
+      return;
+    }
+    const missing = [...explorerFilterResult.expandedPaths].filter((path) => !expanded.has(path));
+    if (!missing.length) return;
+    explorerFilterExpansionBackupRef.current ??= expanded;
+    const nextExpanded = new Set([...expanded, ...missing]);
+    setExpanded(nextExpanded);
+    invoke(() => refreshExplorer(nextExpanded));
+  }, [explorerFilterResult, workspaceHandle, expanded, invoke]);
+
+  useEffect(() => {
+    if (explorerFilterProvider && workspaceHandle) return;
+    setExplorerFilterQuery("");
+  }, [explorerFilterProvider, workspaceHandle]);
 
   const explorerHiddenEntriesVisible = explorerShowHidden || explorerRevealedHiddenPaths.size > 0;
   const toggleExplorerHiddenEntries = () => {
@@ -5712,6 +5849,27 @@ export function App() {
               {view === "explorer" ? (
                 <div
                   className={`sidebar-content explorer-content${dropTargetExplorerPath === "" ? " is-root-drop-target" : ""}`}
+                  tabIndex={-1}
+                  aria-label="Arquivos do Explorer"
+                  onPointerDown={(event) => {
+                    const target = event.target as HTMLElement;
+                    if (target.closest("input, textarea, select, button, [contenteditable='true']")) return;
+                    event.currentTarget.focus({ preventScroll: true });
+                  }}
+                  onKeyDown={(event) => {
+                    if (!explorerFilterProvider || !workspaceHandle) return;
+                    const target = event.target as HTMLElement;
+                    const isTextControl = target.matches("input, textarea, [contenteditable='true']");
+                    if (isTextControl || event.ctrlKey || event.metaKey || event.altKey) return;
+                    if (event.key === "Escape" && explorerFilterQuery) {
+                      event.preventDefault();
+                      setExplorerFilterQuery("");
+                      return;
+                    }
+                    if (event.key.length !== 1 || event.key.trim() === "") return;
+                    event.preventDefault();
+                    setExplorerFilterQuery((current) => `${current}${event.key}`);
+                  }}
                   onDragOver={(event) => {
                     const target = (event.target as Element).closest<HTMLElement>("[data-explorer-path]");
                     if (target?.dataset.explorerKind === "directory") return;
@@ -5748,6 +5906,41 @@ export function App() {
                     }
                   }}
                 >
+                  {explorerFilterProvider && workspaceHandle && explorerFilterQuery ? (
+                    <div className="explorer-filter" data-explorer-filter={explorerFilterProvider.id}>
+                      <Search className="explorer-filter__icon" size={13} />
+                      <input
+                        ref={explorerFilterInputRef}
+                        className="explorer-filter__input"
+                        type="search"
+                        value={explorerFilterQuery}
+                        aria-label="Filtrar arquivos do Explorer"
+                        placeholder={explorerFilterProvider.placeholder ?? "Filtrar arquivos"}
+                        onChange={(event) => setExplorerFilterQuery(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            setExplorerFilterQuery("");
+                          }
+                        }}
+                      />
+                      <button
+                        className="icon-button small"
+                        type="button"
+                        aria-label="Limpar filtro do Explorer"
+                        onClick={() => setExplorerFilterQuery("")}
+                      ><X size={12} /></button>
+                    </div>
+                  ) : null}
+                  {explorerFilterResult ? (
+                    <div className="explorer-filter-summary" role="status">
+                      {explorerFilterResult.error
+                        ? explorerFilterResult.error
+                        : explorerFilterResult.matchCount === 0
+                          ? "Nenhum arquivo corresponde ao filtro."
+                          : `${explorerFilterResult.matchCount} ${explorerFilterResult.matchCount === 1 ? "arquivo" : "arquivos"}${explorerFilterResult.truncated ? " (parcial)" : ""}`}
+                    </div>
+                  ) : null}
                   {workspaceName !== "Sem workspace" ? (
                     <div
                       className={`workspace-name${selectedExplorerPath === "" ? " is-selected" : ""}`}
@@ -5794,9 +5987,10 @@ export function App() {
                       entries={entries}
                       parentPath=""
                       expanded={expanded}
-                      showHidden={explorerShowHidden}
-                      revealHidden={explorerShowHidden}
+                      showHidden={explorerShowHidden || explorerFilterActive}
+                      revealHidden={explorerShowHidden || explorerFilterActive}
                       revealedHiddenPaths={explorerRevealedHiddenPaths}
+                      filterVisiblePaths={explorerFilterResult?.visiblePaths}
                       highlightedPath={highlightedExplorerPath}
                       selectedPath={selectedExplorerPath}
                       resourceDecorations={resourceDecorations}

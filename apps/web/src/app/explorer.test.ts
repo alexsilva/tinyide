@@ -8,6 +8,7 @@ import {
   explorerTargetDirectoryPath,
   explorerDirectoryEmptyState,
   explorerCreationInsertionIndex,
+  explorerFilterView,
   hiddenExplorerEntryCount,
   findWorkspaceEntry,
   flattenVisibleEntries,
@@ -165,6 +166,24 @@ describe("explorer model", () => {
     expect([...collapseDeepestExplorerLevel(new Set(["src", "src/.cache"]))]).toEqual(["src"]);
     expect([...collapseDeepestExplorerLevel(new Set(["src"]))]).toEqual([]);
     expect(collapseDeepestExplorerLevel(new Set())).toEqual(new Set());
+  });
+
+  it("reveals matched filter paths together with their ancestors", () => {
+    const view = explorerFilterView(["src/nested/beta.ts", "/docs/readme.md", "", "src"]);
+    expect([...view.visiblePaths].sort()).toEqual([
+      "docs",
+      "docs/readme.md",
+      "src",
+      "src/nested",
+      "src/nested/beta.ts",
+    ]);
+    expect([...view.expandedPaths].sort()).toEqual(["docs", "src", "src/nested"]);
+  });
+
+  it("produces an empty filter view without matches", () => {
+    const view = explorerFilterView([]);
+    expect(view.visiblePaths.size).toBe(0);
+    expect(view.expandedPaths.size).toBe(0);
   });
 
   it("selects the nearest remaining tab after explorer deletion", () => {

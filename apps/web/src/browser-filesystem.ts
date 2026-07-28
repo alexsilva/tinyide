@@ -41,6 +41,8 @@ export interface OpenDocument {
   readonly path?: string;
   readonly workspaceRoot?: string;
   readonly handle?: BrowserFileHandle;
+  readonly readOnly?: boolean;
+  readonly origin?: string;
   readonly kind: "text" | "image" | "binary";
   readonly mediaType: string;
   readonly size: number;

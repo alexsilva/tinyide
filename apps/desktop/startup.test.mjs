@@ -9,9 +9,13 @@ import { describe, expect, it, vi } from "vitest";
 const require = createRequire(import.meta.url);
 const {
   applyLoginShellEnvironment,
+  configureProductionChromium,
+  disableBrowserExtensions,
   installGracefulShutdown,
+  installProductionWindowHardening,
   installSingleInstanceGuard,
   installWindowVisibilityFallback,
+  isDeveloperShortcut,
   loginShellEnvironment,
   parseNullSeparatedEnvironment,
 } = require("./startup.cjs");
@@ -112,6 +116,56 @@ describe("desktop startup", () => {
     });
     expect(loaded).toEqual({});
     expect(targetEnvironment).toEqual({ PATH: "/usr/bin" });
+  });
+
+  it("disables browser debugging and extensions in packaged builds", () => {
+    const commandLine = {
+      appendSwitch: vi.fn(),
+      removeSwitch: vi.fn(),
+    };
+    expect(configureProductionChromium({ isPackaged: true, commandLine })).toBe(true);
+    expect(commandLine.removeSwitch).toHaveBeenCalledWith("remote-debugging-port");
+    expect(commandLine.removeSwitch).toHaveBeenCalledWith("remote-debugging-pipe");
+    expect(commandLine.appendSwitch).toHaveBeenCalledWith("disable-extensions");
+    expect(commandLine.appendSwitch).toHaveBeenCalledWith("disable-plugins");
+
+    commandLine.appendSwitch.mockClear();
+    commandLine.removeSwitch.mockClear();
+    expect(configureProductionChromium({ isPackaged: false, commandLine })).toBe(false);
+    expect(commandLine.appendSwitch).not.toHaveBeenCalled();
+    expect(commandLine.removeSwitch).not.toHaveBeenCalled();
+  });
+
+  it("blocks developer shortcuts and closes DevTools in packaged windows", () => {
+    expect(isDeveloperShortcut({ key: "F12" })).toBe(true);
+    expect(isDeveloperShortcut({ key: "I", control: true, shift: true })).toBe(true);
+    expect(isDeveloperShortcut({ key: "C", meta: true, shift: true })).toBe(true);
+    expect(isDeveloperShortcut({ key: "I", control: true })).toBe(false);
+
+    const window = createWindow();
+    window.webContents.closeDevTools = vi.fn();
+    const hardening = installProductionWindowHardening(window, { packaged: true });
+    const event = { preventDefault: vi.fn() };
+    window.webContents.emit("before-input-event", event, { key: "F12" });
+    window.webContents.emit("devtools-opened");
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(window.webContents.closeDevTools).toHaveBeenCalledOnce();
+    hardening.dispose();
+    expect(window.webContents.listenerCount("before-input-event")).toBe(0);
+    expect(window.webContents.listenerCount("devtools-opened")).toBe(0);
+  });
+
+  it("removes loaded browser extensions and rejects extensions loaded later", () => {
+    const extensions = new EventEmitter();
+    extensions.getAllExtensions = vi.fn(() => [{ id: "one" }, { id: "two" }]);
+    extensions.removeExtension = vi.fn();
+    const guard = disableBrowserExtensions({ extensions });
+    expect(extensions.removeExtension).toHaveBeenCalledWith("one");
+    expect(extensions.removeExtension).toHaveBeenCalledWith("two");
+    extensions.emit("extension-loaded", {}, { id: "three" });
+    expect(extensions.removeExtension).toHaveBeenCalledWith("three");
+    guard.dispose();
+    expect(extensions.listenerCount("extension-loaded")).toBe(0);
   });
 
   it("exits immediately when another tinyIde instance already owns the lock", () => {

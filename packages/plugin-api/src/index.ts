@@ -112,6 +112,7 @@ export interface PluginExtensionApi {
   registerScriptExecution(contribution: ScriptExecutionContribution): Disposable;
   registerResourceContextMenuProvider(provider: ResourceContextMenuProvider): Disposable;
   registerTextEditorContextMenuProvider(provider: TextEditorContextMenuProvider): Disposable;
+  registerTextEditorNavigationProvider(provider: TextEditorNavigationProvider): Disposable;
   registerInteractiveSessionHook(provider: InteractiveSessionHookProvider): Disposable;
   registerInteractiveSessionProvider(provider: InteractiveSessionProvider): Disposable;
   getInteractiveSessionHooks(): readonly InteractiveSessionHookProvider[];
@@ -538,6 +539,58 @@ export interface TextEditorContextMenuProvider {
 
 export const TEXT_EDITOR_CONTEXT_MENU_CAPABILITY = "textEditor.contextMenu";
 
+export interface TextEditorPosition {
+  /** One-based line. */
+  readonly line: number;
+  /** One-based column. */
+  readonly column: number;
+}
+
+export interface TextEditorRange {
+  readonly start: TextEditorPosition;
+  readonly end: TextEditorPosition;
+}
+
+export type TextEditorNavigationKind = "definition" | "declaration" | "implementation";
+
+export interface TextEditorNavigationContext {
+  readonly document: TextEditorDocumentSnapshot;
+  readonly position: TextEditorPosition;
+  readonly offset: number;
+  readonly kind: TextEditorNavigationKind;
+  /** Executable selected by the workspace, when navigation depends on its SDK/runtime. */
+  readonly environmentExecutable?: string;
+}
+
+export interface TextEditorNavigationSource {
+  readonly name: string;
+  readonly content: string;
+  readonly mediaType?: string;
+  /** Human-readable origin, such as an SDK or dependency path. */
+  readonly origin: string;
+}
+
+export interface TextEditorNavigationTarget {
+  /** Workspace-relative path. Optional when the provider supplies external source. */
+  readonly path?: string;
+  /** Provider-owned source outside the workspace, opened read-only by the workbench. */
+  readonly source?: TextEditorNavigationSource;
+  readonly range: TextEditorRange;
+  readonly label?: string;
+}
+
+export interface TextEditorNavigationProvider {
+  readonly id: string;
+  readonly pluginId: string;
+  readonly priority?: number;
+  canNavigate(document: TextEditorDocumentSnapshot): boolean;
+  provideTargets(
+    context: TextEditorNavigationContext,
+  ): Promise<readonly TextEditorNavigationTarget[]> | readonly TextEditorNavigationTarget[];
+}
+
+export const TEXT_EDITOR_NAVIGATION_CAPABILITY = "textEditor.navigation";
+
 export type PluginSettingValue = boolean | string | number;
 
 export type PluginSettingValues = Readonly<Record<string, PluginSettingValue>>;
@@ -602,11 +655,25 @@ export interface WorkbenchSidebarMountContext extends WorkbenchPanelMountContext
   close(): void;
 }
 
+export type WorkbenchActivityBadgeTone = "neutral" | "active" | "warning" | "error";
+
+export interface WorkbenchActivityBadgeSnapshot {
+  readonly value: string | number;
+  readonly label: string;
+  readonly tone?: WorkbenchActivityBadgeTone;
+}
+
+export interface WorkbenchActivityBadgeProvider {
+  snapshot(): WorkbenchActivityBadgeSnapshot | undefined;
+  subscribe(listener: (snapshot: WorkbenchActivityBadgeSnapshot | undefined) => void): Disposable;
+}
+
 export interface WorkbenchSidebarContribution {
   readonly id: string;
   readonly pluginId: string;
   readonly label: string;
   readonly icon?: WorkbenchActivityIcon;
+  readonly activityBadge?: WorkbenchActivityBadgeProvider;
   readonly order?: number;
   mount(context: WorkbenchSidebarMountContext): void | Disposable | Promise<void | Disposable>;
 }
@@ -685,6 +752,7 @@ export interface WorkbenchToolWindowContribution {
   readonly pluginId: string;
   readonly label: string;
   readonly icon?: WorkbenchActivityIcon;
+  readonly activityBadge?: WorkbenchActivityBadgeProvider;
   readonly order?: number;
   mount(context: WorkbenchToolWindowMountContext): void | Disposable | Promise<void | Disposable>;
 }
@@ -702,6 +770,7 @@ export interface WorkbenchToolWindowGroupContribution {
   readonly pluginId: string;
   readonly label: string;
   readonly icon?: WorkbenchActivityIcon;
+  readonly activityBadge?: WorkbenchActivityBadgeProvider;
   readonly order?: number;
   readonly views: readonly WorkbenchToolWindowViewContribution[];
 }
@@ -806,6 +875,12 @@ export interface WorkbenchWorkspaceResourceOpenRequest {
   readonly path: string;
   /** One-based line to scroll into view after the document is opened. */
   readonly line?: number;
+  /** One-based column to place the selection at. */
+  readonly column?: number;
+  /** One-based end line for a selected navigation target. */
+  readonly endLine?: number;
+  /** One-based end column for a selected navigation target. */
+  readonly endColumn?: number;
   /** Selects the resource in the Explorer, expanding its ancestors. */
   readonly reveal?: boolean;
 }

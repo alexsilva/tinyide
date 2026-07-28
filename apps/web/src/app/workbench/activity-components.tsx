@@ -1,7 +1,11 @@
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { Box, Files, History, Terminal } from "lucide-react";
-import { useState, type KeyboardEventHandler, type ReactElement, type ReactNode } from "react";
-import type { WorkbenchActivityIcon } from "@tinyide/plugin-api";
+import { useEffect, useState, type KeyboardEventHandler, type ReactElement, type ReactNode } from "react";
+import type {
+  WorkbenchActivityBadgeProvider,
+  WorkbenchActivityBadgeSnapshot,
+  WorkbenchActivityIcon,
+} from "@tinyide/plugin-api";
 import type { ActivityBarSide, ActivityButtonDescriptor } from "../activity-layout";
 
 export function IconButton({
@@ -64,6 +68,23 @@ export interface PluginActivityButton extends ActivityButtonDescriptor {
   readonly kind: "sidebar" | "toolWindow";
   readonly label: string;
   readonly icon?: WorkbenchActivityIcon;
+  readonly activityBadge?: WorkbenchActivityBadgeProvider;
+}
+
+function useActivityBadge(provider: WorkbenchActivityBadgeProvider | undefined): WorkbenchActivityBadgeSnapshot | undefined {
+  const [snapshot, setSnapshot] = useState<WorkbenchActivityBadgeSnapshot | undefined>(() => provider?.snapshot());
+
+  useEffect(() => {
+    if (!provider) {
+      setSnapshot(undefined);
+      return undefined;
+    }
+    setSnapshot(provider.snapshot());
+    const subscription = provider.subscribe(setSnapshot);
+    return () => subscription.dispose();
+  }, [provider]);
+
+  return snapshot;
 }
 
 export function FixedActivitySlot({
@@ -157,6 +178,8 @@ export function MovableActivityButton({
   ) => void;
   readonly onDragStateChange: (key?: string) => void;
 }) {
+  const badge = useActivityBadge(item.activityBadge);
+  const accessibleLabel = badge ? `${item.label}: ${badge.label}` : item.label;
   return (
     <div
       className={`activity-button-slot${dragActive ? " is-drag-active" : ""}${dragging ? " is-dragging" : ""}`}
@@ -184,7 +207,7 @@ export function MovableActivityButton({
       }}
     >
       <IconButton
-        label={item.label}
+        label={accessibleLabel}
         active={active}
         onClick={onActivate}
         onKeyDown={(event) => {
@@ -204,6 +227,12 @@ export function MovableActivityButton({
         }}
       >
         <WorkbenchActivityIconView icon={item.icon} />
+        {badge ? (
+          <span
+            className={`activity-notification-badge is-${badge.tone ?? "neutral"}`}
+            aria-hidden="true"
+          >{badge.value}</span>
+        ) : null}
       </IconButton>
     </div>
   );

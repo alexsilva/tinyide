@@ -29,6 +29,7 @@ import type {
   WorkbenchResourceEditorProvider,
 } from "@tinyide/plugin-api";
 import type { OpenDocument } from "../browser-filesystem";
+import { appendExecutionOutput } from "./execution/execution-output-buffer";
 import { pluginLanguageProviderFor } from "./generic-syntax";
 import { platform } from "./platform";
 import { setActiveHostWorkspaceRoot } from "./host-workspace-state";
@@ -43,12 +44,38 @@ export interface HostProcessSnapshot {
   readonly presentation?: HostProcessPresentation;
   readonly stdout: string;
   readonly stderr: string;
+  readonly output?: string;
+  readonly outputStartCursor?: number;
+  readonly outputEndCursor?: number;
+  readonly outputTruncated?: boolean;
   readonly stopRequested: boolean;
   readonly exitCode?: number;
   readonly signal?: string;
   readonly startedAt: number;
   readonly finishedAt?: number;
   readonly durationMs: number;
+}
+
+export interface HostProcessOutputChunk {
+  readonly stream: "stdout" | "stderr";
+  readonly text: string;
+}
+
+export interface HostProcessOutputDelta {
+  readonly id: string;
+  readonly status: "running" | "exited";
+  readonly stopRequested: boolean;
+  readonly exitCode?: number;
+  readonly signal?: string;
+  readonly startedAt: number;
+  readonly finishedAt?: number;
+  readonly durationMs: number;
+  readonly startCursor: number;
+  readonly endCursor: number;
+  readonly cursor: number;
+  readonly truncated: boolean;
+  readonly hasMore: boolean;
+  readonly chunks: readonly HostProcessOutputChunk[];
 }
 
 export interface HostProcessPresentation {
@@ -331,6 +358,18 @@ export async function readHostProcess(id: string): Promise<HostProcessSnapshot> 
   return payload as HostProcessSnapshot;
 }
 
+export async function readHostProcessOutput(id: string, cursor: number): Promise<HostProcessOutputDelta> {
+  const response = await fetch(
+    `/core-api/execution/processes/${encodeURIComponent(id)}/output?cursor=${Math.max(0, Math.trunc(cursor))}`,
+    { cache: "no-store" },
+  );
+  const payload = await response.json() as HostProcessOutputDelta | { readonly error?: string };
+  if (!response.ok) {
+    throw new Error("error" in payload && payload.error ? payload.error : "Falha ao ler a saída do processo.");
+  }
+  return payload as HostProcessOutputDelta;
+}
+
 export async function stopHostProcess(id: string): Promise<void> {
   const response = await fetch(`/core-api/execution/processes/${encodeURIComponent(id)}`, {
     method: "DELETE",
@@ -348,14 +387,49 @@ export function hostProcessOutputLines(process: HostProcessSnapshot): readonly s
   ];
   return [
     ...(process.presentation?.outputPrefix ?? fallbackPrefix),
-    process.stdout,
-    process.stderr,
-    process.stopRequested
-      ? "[interrompido pelo usuário]"
+    process.output ?? process.stdout,
+    ...(process.output === undefined ? [process.stderr] : []),
+    ...(process.stopRequested
+      ? ["[interrompido pelo usuário]"]
       : process.status === "running"
-        ? "[executando...]"
-        : `[exit] ${process.exitCode ?? -1}`,
+        ? []
+        : [`[exit] ${process.exitCode ?? -1}`]),
   ].filter(Boolean);
+}
+
+async function followHostProcess(
+  initial: HostProcessSnapshot,
+  callbacks: RunProfileCallbacks,
+  onDelta: (delta: HostProcessOutputDelta) => void,
+): Promise<HostProcessSnapshot> {
+  let process = initial;
+  let cursor = initial.outputStartCursor ?? 0;
+  let hasMore = false;
+
+  do {
+    await new Promise((resolve) => setTimeout(resolve, hasMore ? 0 : 200));
+    const delta = await readHostProcessOutput(process.id, cursor);
+    cursor = delta.cursor;
+    hasMore = delta.hasMore;
+    onDelta(delta);
+    process = {
+      ...process,
+      status: delta.status,
+      stopRequested: delta.stopRequested,
+      ...(delta.exitCode === undefined ? {} : { exitCode: delta.exitCode }),
+      ...(delta.signal === undefined ? {} : { signal: delta.signal }),
+      ...(delta.finishedAt === undefined ? {} : { finishedAt: delta.finishedAt }),
+      durationMs: delta.durationMs,
+      outputStartCursor: delta.startCursor,
+      outputEndCursor: delta.endCursor,
+      outputTruncated: delta.truncated,
+    };
+    if (callbacks.shouldStop?.() && process.status === "running") {
+      await stopHostProcess(process.id);
+    }
+  } while (process.status === "running" || hasMore);
+
+  return process;
 }
 
 function activeFileDirectory(path: string | undefined): string | undefined {
@@ -399,12 +473,18 @@ export async function runExecutionProfile(input: {
     ...(environment?.path ? { environmentPath: environment.path } : {}),
   });
 
-  const completedOutput: string[] = [];
+  let completedOutput: readonly string[] = [];
+  const publish = (
+    additions: readonly string[],
+    options: { readonly truncated?: boolean } = {},
+  ) => {
+    completedOutput = appendExecutionOutput(completedOutput, additions, options);
+    callbacks.onOutput(completedOutput);
+  };
   callbacks.onOutput(completedOutput);
   for (const step of resolvedSteps) {
     if (callbacks.shouldStop?.()) {
-      completedOutput.push("[interrompido pelo usuário]");
-      callbacks.onOutput(completedOutput.filter(Boolean));
+      publish(["[interrompido pelo usuário]"]);
       return "stopped";
     }
     const workingDirectory = step.workingDirectory ?? workspaceRoot;
@@ -413,7 +493,7 @@ export async function runExecutionProfile(input: {
       `[diretório] ${workingDirectory}`,
       `$ ${step.executable} ${step.arguments.join(" ")}`,
     ];
-    callbacks.onOutput([...completedOutput, ...heading]);
+    publish(heading);
     let process = await startHostProcess({
       executable: step.executable,
       arguments: step.arguments,
@@ -433,29 +513,19 @@ export async function runExecutionProfile(input: {
     if (callbacks.shouldStop?.() && process.status === "running") {
       await stopHostProcess(process.id);
     }
-    while (process.status === "running") {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      process = await readHostProcess(process.id);
-      callbacks.onOutput([
-        ...completedOutput,
-        ...hostProcessOutputLines(process),
-      ]);
-      if (callbacks.shouldStop?.() && process.status === "running") {
-        await stopHostProcess(process.id);
-      }
-    }
+    process = await followHostProcess(process, callbacks, (delta) => {
+      publish(delta.chunks.map((chunk) => chunk.text), { truncated: delta.truncated });
+    });
     callbacks.onProcessFinished();
     if (process.stopRequested) {
-      completedOutput.push(...heading, process.stdout, process.stderr, "[interrompido pelo usuário]");
-      callbacks.onOutput(completedOutput.filter(Boolean));
+      publish(["[interrompido pelo usuário]"]);
       return "stopped";
     }
-    completedOutput.push(...heading, process.stdout, process.stderr, `[exit] ${process.exitCode ?? -1}`);
+    publish([`[exit] ${process.exitCode ?? -1}`]);
     if (process.exitCode !== 0 && !step.continueOnError) {
       throw new Error(`A etapa '${step.name}' terminou com código ${process.exitCode}.`);
     }
   }
-  callbacks.onOutput(completedOutput.filter(Boolean));
   return "completed";
 }
 
@@ -538,9 +608,17 @@ export async function runScript(input: {
     `[script] ${document.name}`,
     `$ ${executable} ${[...(contribution.arguments ?? []), scriptPath].join(" ")}`,
   ];
-  callbacks.onOutput(heading);
+  let output: readonly string[] = appendExecutionOutput([], heading);
+  const publish = (
+    additions: readonly string[],
+    options: { readonly truncated?: boolean } = {},
+  ) => {
+    output = appendExecutionOutput(output, additions, options);
+    callbacks.onOutput(output);
+  };
+  callbacks.onOutput(output);
   if (callbacks.shouldStop?.()) {
-    callbacks.onOutput([...heading, "[interrompido pelo usuário]"]);
+    publish(["[interrompido pelo usuário]"]);
     return "stopped";
   }
   let process = await startHostProcess({
@@ -558,16 +636,15 @@ export async function runScript(input: {
   if (callbacks.shouldStop?.() && process.status === "running") {
     await stopHostProcess(process.id);
   }
-  while (process.status === "running") {
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    process = await readHostProcess(process.id);
-    callbacks.onOutput(hostProcessOutputLines(process));
-    if (callbacks.shouldStop?.() && process.status === "running") {
-      await stopHostProcess(process.id);
-    }
-  }
+  process = await followHostProcess(process, callbacks, (delta) => {
+    publish(delta.chunks.map((chunk) => chunk.text), { truncated: delta.truncated });
+  });
   callbacks.onProcessFinished();
-  if (process.stopRequested) return "stopped";
+  if (process.stopRequested) {
+    publish(["[interrompido pelo usuário]"]);
+    return "stopped";
+  }
+  publish([`[exit] ${process.exitCode ?? -1}`]);
   if (process.exitCode !== 0) throw new Error(`O script terminou com código ${process.exitCode}.`);
   return "completed";
 }

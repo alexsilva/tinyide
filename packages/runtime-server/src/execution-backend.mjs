@@ -4,7 +4,10 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 const MAX_BODY_BYTES = 1024 * 1024;
-const MAX_OUTPUT_CHARS = 1024 * 1024;
+const DEFAULT_MAX_OUTPUT_CHARS = 512 * 1024;
+const DEFAULT_MAX_OUTPUT_READ_CHARS = 64 * 1024;
+const DEFAULT_MAX_SNAPSHOT_STREAM_CHARS = 64 * 1024;
+const DEFAULT_MAX_SNAPSHOT_OUTPUT_CHARS = 128 * 1024;
 const WORKSPACE_SETTINGS_VERSION = 1;
 
 function writeJson(response, statusCode, value) {
@@ -66,12 +69,101 @@ function processPresentation(value) {
   };
 }
 
-function appendOutput(current, chunk) {
-  const next = current + chunk.toString("utf8");
-  return next.length > MAX_OUTPUT_CHARS ? next.slice(-MAX_OUTPUT_CHARS) : next;
+function appendOutput(current, chunk, maxChars) {
+  const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+  const next = current + text;
+  return next.length > maxChars ? next.slice(-maxChars) : next;
 }
 
-function processSnapshot(record) {
+export function createProcessOutputBuffer(maxChars = DEFAULT_MAX_OUTPUT_CHARS) {
+  const segments = [];
+  let head = 0;
+  let endCursor = 0;
+  let retainedChars = 0;
+
+  const compact = () => {
+    if (head < 256 || head * 2 < segments.length) return;
+    segments.splice(0, head);
+    head = 0;
+  };
+
+  const trim = () => {
+    while (retainedChars > maxChars && head < segments.length) {
+      const overflow = retainedChars - maxChars;
+      const segment = segments[head];
+      if (segment.text.length <= overflow) {
+        retainedChars -= segment.text.length;
+        head += 1;
+        continue;
+      }
+      segment.text = segment.text.slice(overflow);
+      segment.start += overflow;
+      retainedChars -= overflow;
+    }
+    compact();
+  };
+
+  const startCursor = () => segments[head]?.start ?? endCursor;
+
+  return {
+    append(stream, value) {
+      const text = typeof value === "string" ? value : value.toString("utf8");
+      if (!text) return;
+      const last = segments.at(-1);
+      if (last && last.stream === stream && segments.length - 1 >= head) {
+        last.text += text;
+        last.end += text.length;
+      } else {
+        segments.push({ stream, text, start: endCursor, end: endCursor + text.length });
+      }
+      endCursor += text.length;
+      retainedChars += text.length;
+      trim();
+    },
+    read(cursor = 0, limit = DEFAULT_MAX_OUTPUT_READ_CHARS) {
+      const oldest = startCursor();
+      const requested = Number.isFinite(Number(cursor)) ? Math.max(0, Math.trunc(Number(cursor))) : oldest;
+      let position = Math.min(Math.max(requested, oldest), endCursor);
+      let remaining = Math.max(1, Math.trunc(Number(limit) || DEFAULT_MAX_OUTPUT_READ_CHARS));
+      const chunks = [];
+      for (let index = head; index < segments.length && remaining > 0; index += 1) {
+        const segment = segments[index];
+        if (segment.end <= position) continue;
+        const offset = Math.max(0, position - segment.start);
+        const text = segment.text.slice(offset, offset + remaining);
+        if (!text) continue;
+        const previous = chunks.at(-1);
+        if (previous?.stream === segment.stream) previous.text += text;
+        else chunks.push({ stream: segment.stream, text });
+        position += text.length;
+        remaining -= text.length;
+      }
+      return {
+        startCursor: oldest,
+        endCursor,
+        cursor: position,
+        truncated: requested < oldest,
+        hasMore: position < endCursor,
+        chunks,
+      };
+    },
+    tail(limit = DEFAULT_MAX_SNAPSHOT_OUTPUT_CHARS) {
+      return this.read(Math.max(startCursor(), endCursor - limit), limit);
+    },
+    status() {
+      return {
+        startCursor: startCursor(),
+        endCursor,
+        retainedChars,
+        truncated: startCursor() > 0,
+      };
+    },
+  };
+}
+
+function processSnapshot(record, snapshotOutputChars = DEFAULT_MAX_SNAPSHOT_OUTPUT_CHARS) {
+  const output = record.output.tail(snapshotOutputChars);
+  const outputStatus = record.output.status();
   return {
     id: record.id,
     workspaceRoot: record.workspaceRoot,
@@ -82,12 +174,30 @@ function processSnapshot(record) {
     presentation: record.presentation,
     stdout: record.stdout,
     stderr: record.stderr,
+    output: output.chunks.map((chunk) => chunk.text).join(""),
+    outputStartCursor: outputStatus.startCursor,
+    outputEndCursor: outputStatus.endCursor,
+    outputTruncated: outputStatus.truncated,
     stopRequested: Boolean(record.stopRequested),
     exitCode: record.exitCode,
     signal: record.signal,
     startedAt: record.startedAt,
     finishedAt: record.finishedAt,
     durationMs: (record.finishedAt ?? Date.now()) - record.startedAt,
+  };
+}
+
+function processOutputSnapshot(record, cursor, maxOutputReadChars) {
+  return {
+    id: record.id,
+    status: record.status,
+    stopRequested: Boolean(record.stopRequested),
+    exitCode: record.exitCode,
+    signal: record.signal,
+    startedAt: record.startedAt,
+    finishedAt: record.finishedAt,
+    durationMs: (record.finishedAt ?? Date.now()) - record.startedAt,
+    ...record.output.read(cursor, maxOutputReadChars),
   };
 }
 
@@ -178,7 +288,13 @@ function assertExpectedWorkspace(request, workspaceRoot) {
   }
 }
 
-export function createExecutionBackend({ workspaceRoot }) {
+export function createExecutionBackend({
+  workspaceRoot,
+  maxOutputChars = DEFAULT_MAX_OUTPUT_CHARS,
+  maxOutputReadChars = DEFAULT_MAX_OUTPUT_READ_CHARS,
+  maxSnapshotStreamChars = DEFAULT_MAX_SNAPSHOT_STREAM_CHARS,
+  maxSnapshotOutputChars = DEFAULT_MAX_SNAPSHOT_OUTPUT_CHARS,
+}) {
   const getWorkspaceRoot = typeof workspaceRoot === "function" ? workspaceRoot : () => workspaceRoot;
   const processes = new Map();
   const resolvedWorkspaceRoot = () => {
@@ -209,13 +325,22 @@ export function createExecutionBackend({ workspaceRoot }) {
     });
     const record = {
       id, workspaceRoot, child, status: "running", executable, arguments: args, workingDirectory, presentation,
-      stdout: "", stderr: "", exitCode: undefined, signal: undefined, startedAt, finishedAt: undefined,
+      stdout: "", stderr: "", output: createProcessOutputBuffer(maxOutputChars),
+      exitCode: undefined, signal: undefined, startedAt, finishedAt: undefined,
     };
     processes.set(id, record);
-    child.stdout.on("data", (chunk) => { record.stdout = appendOutput(record.stdout, chunk); });
-    child.stderr.on("data", (chunk) => { record.stderr = appendOutput(record.stderr, chunk); });
+    child.stdout.on("data", (chunk) => {
+      record.stdout = appendOutput(record.stdout, chunk, maxSnapshotStreamChars);
+      record.output.append("stdout", chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      record.stderr = appendOutput(record.stderr, chunk, maxSnapshotStreamChars);
+      record.output.append("stderr", chunk);
+    });
     child.on("error", (error) => {
-      record.stderr = appendOutput(record.stderr, `${error.message}\n`);
+      const message = `${error.message}\n`;
+      record.stderr = appendOutput(record.stderr, message, maxSnapshotStreamChars);
+      record.output.append("stderr", message);
       record.status = "exited";
       record.exitCode = -1;
       record.finishedAt = Date.now();
@@ -226,7 +351,7 @@ export function createExecutionBackend({ workspaceRoot }) {
       record.signal = signal ?? undefined;
       record.finishedAt = Date.now();
     });
-    return processSnapshot(record);
+    return processSnapshot(record, maxSnapshotOutputChars);
   }
 
   const executionBackend = async function executionBackend(request, response, relativePath) {
@@ -257,7 +382,26 @@ export function createExecutionBackend({ workspaceRoot }) {
         writeJson(response, 200, [...processes.values()]
           .filter((record) => record.workspaceRoot === workspaceRoot)
           .sort((left, right) => right.startedAt - left.startedAt)
-          .map(processSnapshot));
+          .map((record) => processSnapshot(record, maxSnapshotOutputChars)));
+        return;
+      }
+      const outputMatch = /^\/execution\/processes\/([^/]+)\/output$/.exec(relativePath);
+      if (outputMatch) {
+        const record = processes.get(decodeURIComponent(outputMatch[1]));
+        if (!record || record.workspaceRoot !== workspaceRoot) {
+          writeJson(response, 404, { error: "Processo não encontrado." });
+          return;
+        }
+        if (request.method !== "GET") {
+          writeJson(response, 405, { error: "Método não permitido para saída do processo." });
+          return;
+        }
+        const requestUrl = new URL(request.url ?? relativePath, "http://localhost");
+        writeJson(
+          response,
+          200,
+          processOutputSnapshot(record, requestUrl.searchParams.get("cursor"), maxOutputReadChars),
+        );
         return;
       }
       const match = /^\/execution\/processes\/([^/]+)$/.exec(relativePath);
@@ -268,17 +412,16 @@ export function createExecutionBackend({ workspaceRoot }) {
           return;
         }
         if (request.method === "GET") {
-          writeJson(response, 200, processSnapshot(record));
+          writeJson(response, 200, processSnapshot(record, maxSnapshotOutputChars));
           return;
         }
         if (request.method === "DELETE") {
           if (record.status === "running" && !record.stopRequested) void stopProcessRecord(record).catch((error) => {
-            record.stderr = appendOutput(
-              record.stderr,
-              `Falha ao encerrar a árvore de processos: ${error instanceof Error ? error.message : String(error)}\n`,
-            );
+            const message = `Falha ao encerrar a árvore de processos: ${error instanceof Error ? error.message : String(error)}\n`;
+            record.stderr = appendOutput(record.stderr, message, maxSnapshotStreamChars);
+            record.output.append("stderr", message);
           });
-          writeJson(response, 202, processSnapshot(record));
+          writeJson(response, 202, processSnapshot(record, maxSnapshotOutputChars));
           return;
         }
       }

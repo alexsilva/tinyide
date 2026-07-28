@@ -40,6 +40,11 @@
   content: "";
 }
 .activity-bar .icon-button.is-active { color: #fff; background: #252b38; box-shadow: inset 2px 0 var(--accent); }
+.activity-notification-badge { position: absolute; top: 3px; right: 2px; display: grid; min-width: 13px; height: 13px; place-items: center; border: 1px solid #12151b; border-radius: 999px; padding: 0 3px; background: #44536b; color: #f3f6fb; font: 700 8px/1 system-ui, sans-serif; letter-spacing: 0; }
+.activity-notification-badge.is-active { background: #368b58; }
+.activity-notification-badge.is-warning { background: #a06d24; }
+.activity-notification-badge.is-error { background: #a6434d; }
+.icon-button.is-active .activity-notification-badge { border-color: #252b38; }
 .execution-activity__badge { position: absolute; top: 3px; right: 2px; display: grid; min-width: 13px; height: 13px; place-items: center; border: 1px solid #12151b; border-radius: 999px; padding: 0 3px; background: #44536b; color: #f3f6fb; font: 700 8px/1 system-ui, sans-serif; letter-spacing: 0; }
 .execution-activity__badge.is-running { background: #368b58; }
 .activity-bar .icon-button.is-active .execution-activity__badge { border-color: #252b38; }
@@ -181,6 +186,19 @@
 .tree-entry.is-selected { background: var(--surface-4); color: var(--text); outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: -1px; }
 .editor-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 37px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--border); background: #12161d; }
 .breadcrumb { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.editor-search { display: flex; align-items: center; gap: 4px; width: min(330px, 42vw); min-width: 150px; padding: 0 4px; border: 1px solid #252c38; border-radius: 4px; background: #0d1016; }
+.editor-search:focus-within { border-color: var(--accent); }
+.editor-search[data-invalid="true"] { border-color: #b4545e; }
+.editor-search__icon { flex: 0 0 auto; color: #788392; }
+.editor-search__input { min-width: 0; flex: 1 1 auto; height: 23px; border: 0; background: transparent; color: var(--text); font-size: 11px; }
+.editor-search__input:focus-visible { outline: none; }
+.editor-search__input::-webkit-search-cancel-button { display: none; }
+.editor-search__count { flex: 0 0 auto; color: #788392; font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.editor-search__toggle { display: grid; width: 22px; height: 20px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 3px; background: transparent; color: #8792a1; font: 600 10px/1 monospace; cursor: pointer; }
+.editor-search__toggle:hover { background: #252c38; color: #d7dde6; }
+.editor-search__toggle[aria-pressed="true"] { background: #294a70; color: #f0f5fb; }
+.editor-search__toggle:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.editor-search .icon-button { width: 20px; min-height: 20px; border-color: transparent; background: transparent; }
 .editor-actions select { height: 27px; min-width: 150px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2); color: var(--text); font-size: 11px; }
 .code-editor { width: 100%; height: 100%; resize: none; border: 0; outline: 0; padding: 18px 20px; background: #0f1218; color: #d4d8df; font: 13px/1.65 "JetBrains Mono", "Fira Code", Consolas, monospace; tab-size: 4; }
 

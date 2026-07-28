@@ -97,6 +97,7 @@ describe("profile execution state", () => {
     expect(restored.states.python).toMatchObject({ status: "running", processId: "python-step" });
     expect(restored.states.node).toMatchObject({ status: "completed" });
     expect(restored.states.python!.output.join("\n")).toContain("python-online");
+    expect(restored.states.python!.output.join("\n")).not.toContain("[executando...]");
     expect(restored.states.python!.output.join("\n")).not.toContain("node-finished");
     expect(restored.states.node!.output.join("\n")).toContain("node-finished");
     expect(restored.states.node!.output.join("\n")).not.toContain("python-online");

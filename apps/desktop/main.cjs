@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, session, shell } = require("electron");
 const { randomUUID } = require("node:crypto");
 const { existsSync, statSync } = require("node:fs");
 const { mkdir, readFile, readdir, rm, stat, writeFile } = require("node:fs/promises");
@@ -6,11 +6,20 @@ const { basename, dirname, join, resolve } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { openInSystemFileManager } = require("./file-manager.cjs");
 const { allowedExternalUrl, safeWorkspacePath: resolveSafeWorkspacePath, sameOriginUrl } = require("./security.cjs");
-const { applyLoginShellEnvironment, installGracefulShutdown, installSingleInstanceGuard, installWindowVisibilityFallback } = require("./startup.cjs");
+const {
+  applyLoginShellEnvironment,
+  configureProductionChromium,
+  disableBrowserExtensions,
+  installGracefulShutdown,
+  installProductionWindowHardening,
+  installSingleInstanceGuard,
+  installWindowVisibilityFallback,
+} = require("./startup.cjs");
 const { readDesktopState, removeDesktopState, writeDesktopState } = require("./state-store.cjs");
 
 let runtime;
 let mainWindow;
+let browserExtensionGuard;
 const desktopWorkspaces = new Map();
 const LAST_WORKSPACE_STATE_KEY = "last-workspace";
 
@@ -212,8 +221,13 @@ function createWindow(url) {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
+      devTools: !app.isPackaged,
+      plugins: false,
+      webviewTag: false,
     },
   });
+
+  const productionHardening = installProductionWindowHardening(window, { packaged: app.isPackaged });
 
   window.webContents.setWindowOpenHandler(({ url: target }) => {
     if (allowedExternalUrl(target)) void shell.openExternal(target);
@@ -232,6 +246,7 @@ function createWindow(url) {
   };
   ipcMain.on("tinyide:renderer:ready", rendererReady);
   window.on("closed", () => {
+    productionHardening.dispose();
     ipcMain.removeListener("tinyide:renderer:ready", rendererReady);
     if (mainWindow === window) mainWindow = undefined;
   });
@@ -239,11 +254,13 @@ function createWindow(url) {
   return window;
 }
 
+configureProductionChromium(app);
 const isPrimaryInstance = installSingleInstanceGuard(app, () => mainWindow);
 
 if (isPrimaryInstance) {
   applyLoginShellEnvironment();
   app.whenReady().then(async () => {
+    browserExtensionGuard = disableBrowserExtensions(session.defaultSession);
     installDesktopFileSystemHandlers();
     runtime = await startRuntime();
     mainWindow = createWindow(runtime.url);
@@ -260,6 +277,7 @@ if (isPrimaryInstance) {
   });
 
   installGracefulShutdown(app, async () => {
+    browserExtensionGuard?.dispose();
     if (runtime) await runtime.close();
   });
 }

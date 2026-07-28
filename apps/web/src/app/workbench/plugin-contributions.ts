@@ -27,6 +27,7 @@ export function expandWorkbenchToolWindowContribution(
     pluginId: contribution.pluginId,
     label: contribution.label,
     ...(contribution.icon ? { icon: contribution.icon } : {}),
+    ...(contribution.activityBadge ? { activityBadge: contribution.activityBadge } : {}),
     ...(contribution.order !== undefined ? { order: contribution.order } : {}),
     mount({ container, headerContainer, tabs, state }) {
       container.replaceChildren();

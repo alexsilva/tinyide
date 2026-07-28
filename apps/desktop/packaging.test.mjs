@@ -5,3 +5,14 @@ test("desktop package includes plugin root icons", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
   expect(packageJson.build.files).toContain("plugins/*/icon.*");
 });
+
+test("desktop package disables Node debugging entry points", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
+  expect(packageJson.build.electronFuses).toMatchObject({
+    runAsNode: false,
+    enableNodeOptionsEnvironmentVariable: false,
+    enableNodeCliInspectArguments: false,
+    grantFileProtocolExtraPrivileges: false,
+  });
+  expect(packageJson.build.files).toContain("!**/*.map");
+});

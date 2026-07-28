@@ -4,17 +4,49 @@ import type { CSSProperties, ReactNode } from "react";
 import type { TextDiagnostic, TextEditorLineDecoration } from "@tinyide/plugin-api";
 import type { SyntaxHighlighter } from "../generic-syntax";
 
-export function HighlightedSource({ source, provider }: { readonly source: string; readonly provider: Pick<SyntaxHighlighter, "highlight"> }) {
-  const tokens = [...provider.highlight(source)].sort((left, right) => left.start - right.start);
-  const fragments: ReactNode[] = [];
-  let cursor = 0;
-  for (const token of tokens) {
-    if (token.start < cursor || token.start < 0 || token.end > source.length) continue;
-    if (token.start > cursor) fragments.push(source.slice(cursor, token.start));
-    fragments.push(<span className={`syntax-${token.scope}`} key={`${token.start}:${token.end}`}>{source.slice(token.start, token.end)}</span>);
-    cursor = token.end;
+export function HighlightedSource({
+  source,
+  provider,
+  highlight,
+}: {
+  readonly source: string;
+  readonly provider?: Pick<SyntaxHighlighter, "highlight">;
+  readonly highlight?: { readonly start: number; readonly end: number };
+}) {
+  const tokens = [...(provider?.highlight(source) ?? [])]
+    .filter((token) => token.start >= 0 && token.start < token.end && token.end <= source.length)
+    .sort((left, right) => left.start - right.start);
+  const highlightStart = Math.max(0, Math.min(source.length, highlight?.start ?? 0));
+  const highlightEnd = Math.max(highlightStart, Math.min(source.length, highlight?.end ?? 0));
+  const boundaries = new Set([0, source.length]);
+  tokens.forEach((token) => {
+    boundaries.add(token.start);
+    boundaries.add(token.end);
+  });
+  if (highlightEnd > highlightStart) {
+    boundaries.add(highlightStart);
+    boundaries.add(highlightEnd);
   }
-  if (cursor < source.length) fragments.push(source.slice(cursor));
+  const offsets = [...boundaries].sort((left, right) => left - right);
+  const fragments: ReactNode[] = [];
+  let tokenIndex = 0;
+  for (let index = 0; index < offsets.length - 1; index += 1) {
+    const start = offsets[index] ?? 0;
+    const end = offsets[index + 1] ?? start;
+    if (end <= start) continue;
+    while (tokenIndex < tokens.length && (tokens[tokenIndex]?.end ?? Number.POSITIVE_INFINITY) <= start) tokenIndex += 1;
+    const token = tokens[tokenIndex];
+    const classes = [
+      token && token.start <= start && token.end >= end ? `syntax-${token.scope}` : undefined,
+      start >= highlightStart && end <= highlightEnd && highlightEnd > highlightStart
+        ? "editor-search-match"
+        : undefined,
+    ].filter(Boolean).join(" ");
+    const content = source.slice(start, end);
+    fragments.push(classes
+      ? <span className={classes} key={`${start}:${end}`}>{content}</span>
+      : content);
+  }
   fragments.push("\n");
   return <>{fragments}</>;
 }
@@ -172,4 +204,3 @@ export function DiagnosticLayer({
     </div>
   );
 }
-

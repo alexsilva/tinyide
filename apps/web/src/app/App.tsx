@@ -103,6 +103,7 @@ import type {
   TextEditorDocumentSnapshot,
   TextEditorDocumentSavedEvent,
   TextEditorLineDecoration,
+  TextEditorNavigationProvider,
   TextDiagnostic,
   WorkbenchDialogContribution,
   WorkbenchEditorToolbarItem,
@@ -241,6 +242,7 @@ import {
   listHostProcesses,
   readHostContext,
   readHostProcess,
+  readHostProcessOutput,
   runExecutionProfile,
   sendDebugCommand,
   startDebugProfile,
@@ -328,9 +330,13 @@ import { EntryTree } from "./explorer/ExplorerTree";
 import { DebugVariableNode } from "./debug/DebugVariableNode";
 import { DiagnosticLayer, EditorLineDiffPeek, HighlightedSource } from "./editor/editor-components";
 import { NativeImageEditor, UnsupportedBinaryEditor } from "./editor/resource-editors";
+import { resolveTextEditorNavigation } from "./editor/navigation";
+import { findTextMatches } from "./editor/text-search";
+import { textOffsetAtPosition, textPositionAtOffset } from "./editor/text-position";
 import { ProfileDialog } from "./execution/ProfileDialog";
 import { EnvironmentPackageManager } from "./execution/EnvironmentPackageManager";
 import { FollowedExecutionOutput } from "./execution/FollowedExecutionOutput";
+import { appendExecutionOutput } from "./execution/execution-output-buffer";
 import { ButtonTooltip, PluginCardIcon } from "./workbench/activity-components";
 import { WorkbenchActivityBar } from "./workbench/WorkbenchActivityBar";
 import { ProblemsPanel } from "./workbench/ProblemsPanel";
@@ -358,6 +364,8 @@ interface ContextMenuState {
 
 const EXPLORER_FILTER_DEBOUNCE_MS = 40;
 const MAX_SYNTAX_HIGHLIGHT_SOURCE_LENGTH = 100_000;
+const EDITOR_NAVIGATION_LOADING_DELAY_MS = 150;
+const EDITOR_NAVIGATION_LOADING_MINIMUM_MS = 350;
 
 interface ExplorerFilterResultState {
   readonly query: string;
@@ -617,7 +625,15 @@ export function App() {
   const [explorerFilterOpen, setExplorerFilterOpen] = useState(false);
   const [explorerFilterQuery, setExplorerFilterQuery] = useState("");
   const [explorerFilterResult, setExplorerFilterResult] = useState<ExplorerFilterResultState>();
+  const [editorSearchOpen, setEditorSearchOpen] = useState(false);
+  const [editorSearchQuery, setEditorSearchQuery] = useState("");
+  const [editorSearchMatchIndex, setEditorSearchMatchIndex] = useState(0);
+  const [editorSearchCaseSensitive, setEditorSearchCaseSensitive] = useState(false);
+  const [editorSearchRegex, setEditorSearchRegex] = useState(false);
+  const [editorNavigationLoading, setEditorNavigationLoading] = useState(false);
   const explorerFilterInputRef = useRef<HTMLInputElement>(null);
+  const editorSearchInputRef = useRef<HTMLInputElement>(null);
+  const editorNavigationLoadingRef = useRef(false);
   const restoredRef = useRef(false);
   const openWorkspaceResourceRef = useRef<
     (request: WorkbenchWorkspaceResourceOpenRequest) => Promise<void>
@@ -736,6 +752,22 @@ export function App() {
   const [editorToolbarItems, setEditorToolbarItems] = useState<readonly WorkbenchEditorToolbarItem[]>([]);
   const activeResourceEditorProvider = resourceEditorProviderFor(activeDocument);
   const activeLanguageProvider = activeResourceEditorProvider ? undefined : languageProviderFor(activeDocument);
+  const editorSearchResult = useMemo(() => {
+    if (!editorSearchOpen || activeDocument?.kind !== "text" || activeResourceEditorProvider) return { matches: [] };
+    try {
+      return {
+        matches: findTextMatches(activeDocument.content, editorSearchQuery, {
+          caseSensitive: editorSearchCaseSensitive,
+          regex: editorSearchRegex,
+        }),
+      };
+    } catch {
+      return { matches: [], error: "Expressão regular inválida" };
+    }
+  }, [editorSearchOpen, editorSearchQuery, editorSearchCaseSensitive, editorSearchRegex, activeDocument?.id, activeDocument?.kind, activeDocument?.content, activeResourceEditorProvider]);
+  const editorSearchMatches = editorSearchResult.matches;
+  const editorSearchError = "error" in editorSearchResult ? editorSearchResult.error : undefined;
+  const activeEditorSearchMatch = editorSearchMatches[editorSearchMatchIndex];
   const activeSyntaxHighlighter = useMemo(() => {
     if (activeResourceEditorProvider || !activeDocument || activeDocument.kind !== "text") return undefined;
     if (activeDocument.content.length > MAX_SYNTAX_HIGHLIGHT_SOURCE_LENGTH) return undefined;
@@ -1604,8 +1636,9 @@ export function App() {
     const monitor = async (resumed: ResumedProfileProcess) => {
       try {
         let process = await readHostProcess(resumed.processId);
+        let cursor = process.outputEndCursor ?? process.outputStartCursor ?? 0;
+        let processOutput = resumedProfileProcessOutput(resumed, process);
         while (!cancelled) {
-          const processOutput = resumedProfileProcessOutput(resumed, process);
           setProfileExecutions((current) => ({
             ...current,
             [resumed.profileId]: {
@@ -1628,8 +1661,26 @@ export function App() {
             },
           }));
           if (process.status !== "running") break;
-          await new Promise((resolve) => window.setTimeout(resolve, 250));
-          process = await readHostProcess(resumed.processId);
+          await new Promise((resolve) => window.setTimeout(resolve, 200));
+          const delta = await readHostProcessOutput(resumed.processId, cursor);
+          cursor = delta.cursor;
+          processOutput = appendExecutionOutput(
+            processOutput,
+            delta.chunks.map((chunk) => chunk.text),
+            { truncated: delta.truncated },
+          );
+          process = {
+            ...process,
+            status: delta.status,
+            stopRequested: delta.stopRequested,
+            ...(delta.exitCode === undefined ? {} : { exitCode: delta.exitCode }),
+            ...(delta.signal === undefined ? {} : { signal: delta.signal }),
+            ...(delta.finishedAt === undefined ? {} : { finishedAt: delta.finishedAt }),
+            durationMs: delta.durationMs,
+            outputStartCursor: delta.startCursor,
+            outputEndCursor: delta.endCursor,
+            outputTruncated: delta.truncated,
+          };
         }
       } catch (cause) {
         if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
@@ -1829,6 +1880,7 @@ export function App() {
       return index === -1 ? [...current, document] : current.map((item) => item.id === document.id ? document : item);
     });
     setActiveDocumentId(document.id);
+    return document;
   };
 
   const openEntry = async (entry: WorkspaceEntry) => {
@@ -1839,12 +1891,40 @@ export function App() {
     );
   };
 
-  const scrollEditorToLine = (line: number) => {
-    window.requestAnimationFrame(() => {
+  const editorScrollTopForLine = (line: number) => Math.max(0, 18 + (line - 1) * 21.45 - 120);
+
+  const revealEditorLocation = (
+    line: number,
+    selectionStart?: number,
+    selectionEnd?: number,
+  ) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
       const scrollContainer = highlightedEditorScrollRef.current ?? editorRef.current;
       if (!scrollContainer) return;
-      scrollContainer.scrollTop = Math.max(0, 18 + (line - 1) * 21.45 - 120);
+      scrollContainer.scrollTop = editorScrollTopForLine(line);
       syncEditorLineRuler(scrollContainer.scrollTop);
+      if (selectionStart !== undefined) {
+        editorRef.current?.focus({ preventScroll: true });
+        editorRef.current?.setSelectionRange(selectionStart, selectionEnd ?? selectionStart);
+      }
+    }));
+  };
+
+  const scrollEditorToLine = (line: number) => revealEditorLocation(line);
+
+  const selectEditorSearchMatch = (requestedIndex: number) => {
+    if (!activeDocument || activeDocument.kind !== "text" || !editorSearchMatches.length) return;
+    const index = ((requestedIndex % editorSearchMatches.length) + editorSearchMatches.length) % editorSearchMatches.length;
+    const match = editorSearchMatches[index];
+    if (!match) return;
+    setEditorSearchMatchIndex(index);
+    setDocuments((current) => current.map((document) => document.id === activeDocument.id
+      ? { ...document, selectionStart: match.start, selectionEnd: match.end }
+      : document));
+    scrollEditorToLine(textPositionAtOffset(activeDocument.content, match.start).line);
+    window.requestAnimationFrame(() => {
+      editorRef.current?.setSelectionRange(match.start, match.end);
+      editorSearchInputRef.current?.focus({ preventScroll: true });
     });
   };
 
@@ -1852,10 +1932,11 @@ export function App() {
     const path = request.path.split("/").filter(Boolean).join("/");
     if (!path) throw new Error("Informe o caminho do recurso a ser aberto.");
     const opened = documentsRef.current.find((document) => document.path === path);
+    let targetDocument = opened;
     if (opened) {
       setActiveDocumentId(opened.id);
     } else {
-      await openWorkspaceFilePath(path);
+      targetDocument = await openWorkspaceFilePath(path);
     }
     if (request.reveal) {
       const nextExpanded = new Set([...expanded, ...explorerAncestorDirectoryPaths(path)]);
@@ -1864,7 +1945,32 @@ export function App() {
       setEntries(await hydrateExplorerPath(entries, path));
       setSelectedExplorerPath(path);
     }
-    if (request.line && request.line > 0) scrollEditorToLine(request.line);
+    if (request.line && request.line > 0) {
+      const targetLine = request.line;
+      if (targetDocument?.kind === "text" && request.column && request.column > 0) {
+        const selectionStart = textOffsetAtPosition(targetDocument.content, {
+          line: request.line,
+          column: request.column,
+        });
+        const selectionEnd = request.endLine && request.endColumn
+          ? textOffsetAtPosition(targetDocument.content, {
+              line: request.endLine,
+              column: request.endColumn,
+            })
+          : selectionStart;
+        setDocuments((current) => current.map((document) => document.id === targetDocument.id
+          ? {
+              ...document,
+              selectionStart,
+              selectionEnd,
+              scrollTop: editorScrollTopForLine(targetLine),
+            }
+          : document));
+        revealEditorLocation(targetLine, selectionStart, selectionEnd);
+      } else {
+        scrollEditorToLine(targetLine);
+      }
+    }
   };
 
   useEffect(() => {
@@ -2196,6 +2302,93 @@ export function App() {
     if (items.length) setContextMenu({ target: { kind: "editor", context }, x, y, items });
   };
 
+  const navigateFromEditor = async (
+    document: OpenDocument,
+    textarea: HTMLTextAreaElement,
+    kind: "definition" | "declaration" | "implementation" = "definition",
+  ) => {
+    if (document.kind !== "text" || !document.path || editorNavigationLoadingRef.current) return;
+    const offset = textarea.selectionStart;
+    const providers = platform.capabilities.getAll<TextEditorNavigationProvider>("textEditor.navigation");
+    if (!providers.length) {
+      setError("Nenhum provider de navegação está ativo para este arquivo.");
+      return;
+    }
+    editorNavigationLoadingRef.current = true;
+    let loadingVisibleAt: number | undefined;
+    const loadingTimer = window.setTimeout(() => {
+      loadingVisibleAt = window.performance.now();
+      setEditorNavigationLoading(true);
+    }, EDITOR_NAVIGATION_LOADING_DELAY_MS);
+    try {
+      const environmentExecutable = environments.find(
+        (environment) => environment.id === selectedEnvironmentId,
+      )?.executable;
+      const context = {
+        document: {
+          ...editorToolbarDocumentSnapshot(document),
+          content: textarea.value,
+        },
+        position: textPositionAtOffset(textarea.value, offset),
+        offset,
+        kind,
+        ...(environmentExecutable ? { environmentExecutable } : {}),
+      } as const;
+      const target = await resolveTextEditorNavigation(providers, context);
+      if (!target) {
+        setError("Nenhuma definição foi encontrada para o símbolo selecionado.");
+        return;
+      }
+      if (target.source) {
+        const selectionStart = textOffsetAtPosition(target.source.content, target.range.start);
+        const selectionEnd = textOffsetAtPosition(target.source.content, target.range.end);
+        const id = `navigation:${target.source.origin}`;
+        const sourceDocument: OpenDocument = {
+          id,
+          name: target.source.name,
+          kind: "text",
+          mediaType: target.source.mediaType ?? "text/plain",
+          size: target.source.content.length,
+          content: target.source.content,
+          savedContent: target.source.content,
+          selectionStart,
+          selectionEnd,
+          scrollTop: editorScrollTopForLine(target.range.start.line),
+          scrollLeft: 0,
+          readOnly: true,
+          origin: target.source.origin,
+        };
+        setDocuments((current) => current.some((candidate) => candidate.id === id)
+          ? current.map((candidate) => candidate.id === id ? sourceDocument : candidate)
+          : [...current, sourceDocument]);
+        setActiveDocumentId(id);
+        revealEditorLocation(target.range.start.line, selectionStart, selectionEnd);
+        return;
+      }
+      if (!target.path) {
+        setError("O provider não informou a origem da implementação.");
+        return;
+      }
+      await openWorkspaceResourceRef.current({
+        path: target.path,
+        line: target.range.start.line,
+        column: target.range.start.column,
+        endLine: target.range.end.line,
+        endColumn: target.range.end.column,
+      });
+    } finally {
+      window.clearTimeout(loadingTimer);
+      if (loadingVisibleAt !== undefined) {
+        const remaining = EDITOR_NAVIGATION_LOADING_MINIMUM_MS - (window.performance.now() - loadingVisibleAt);
+        if (remaining > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, remaining));
+        }
+      }
+      editorNavigationLoadingRef.current = false;
+      setEditorNavigationLoading(false);
+    }
+  };
+
   const toggleEntry = async (entry: WorkspaceEntry) => {
     if (entry.kind !== "directory") return;
     if (expanded.has(entry.path)) {
@@ -2225,7 +2418,7 @@ export function App() {
   const updateDocument = (textarea: HTMLTextAreaElement) => {
     if (!activeDocumentId) return;
     const previous = documents.find((document) => document.id === activeDocumentId);
-    if (!previous || previous.kind !== "text") return;
+    if (!previous || previous.kind !== "text" || previous.readOnly) return;
     const content = textarea.value;
     const selectionStart = textarea.selectionStart;
     const selectionEnd = textarea.selectionEnd;
@@ -2314,6 +2507,7 @@ export function App() {
   };
 
   const handleEditorKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    event.currentTarget.classList.toggle("is-navigation-modifier", event.ctrlKey || event.metaKey);
     if (event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey) {
       event.preventDefault();
       const textarea = event.currentTarget;
@@ -2333,6 +2527,12 @@ export function App() {
         textarea.focus();
         textarea.setSelectionRange(result.selectionStart, result.selectionEnd);
       });
+      return;
+    }
+    if (event.key === "F12") {
+      if (!activeDocument) return;
+      event.preventDefault();
+      invoke(() => navigateFromEditor(activeDocument, event.currentTarget));
       return;
     }
     if (!(event.ctrlKey || event.metaKey)) return;
@@ -2378,7 +2578,7 @@ export function App() {
       scrollContainer.scrollLeft = activeDocument.scrollLeft;
       syncEditorLineRuler(activeDocument.scrollTop);
     });
-  }, [activeDocumentId, editorSettings.lineNumbers]);
+  }, [activeDocumentId, editorSettings.lineNumbers, editorSearchOpen]);
 
   const downloadDocument = (openDocument: OpenDocument) => {
     const url = URL.createObjectURL(new Blob([openDocument.content], { type: "text/plain;charset=utf-8" }));
@@ -2393,6 +2593,7 @@ export function App() {
     if (document.kind !== "text") {
       throw new Error("Este recurso não é um documento de texto editável.");
     }
+    if (document.readOnly) throw new Error("Este documento de origem é somente leitura.");
     let handle = forceSaveAs ? undefined : document.handle;
     if (!handle) {
       if (!window.showSaveFilePicker) {
@@ -2569,6 +2770,30 @@ export function App() {
     input.focus({ preventScroll: true });
     input.setSelectionRange(input.value.length, input.value.length);
   }, [explorerFilterOpen, explorerFilterQuery]);
+
+  useLayoutEffect(() => {
+    if (!editorSearchOpen) return;
+    const input = editorSearchInputRef.current;
+    if (!input) return;
+    input.focus({ preventScroll: true });
+    input.select();
+  }, [editorSearchOpen]);
+
+  useEffect(() => {
+    if (!editorSearchOpen || activeDocument?.kind === "text") return;
+    setEditorSearchOpen(false);
+    setEditorSearchQuery("");
+  }, [editorSearchOpen, activeDocument?.id, activeDocument?.kind]);
+
+  useEffect(() => {
+    if (!editorSearchOpen) return;
+    setEditorSearchMatchIndex((current) => Math.min(current, Math.max(0, editorSearchMatches.length - 1)));
+  }, [editorSearchOpen, editorSearchMatches.length]);
+
+  useEffect(() => {
+    if (!editorSearchOpen || !editorSearchQuery || !editorSearchMatches.length) return;
+    selectEditorSearchMatch(0);
+  }, [editorSearchOpen, editorSearchQuery, editorSearchCaseSensitive, editorSearchRegex, activeDocument?.id]);
 
   useEffect(() => {
     if (explorerFilterProvider && workspaceHandle) return;
@@ -4774,6 +4999,10 @@ export function App() {
                         className="tab-trigger"
                         key={document.id}
                         value={document.id}
+                        title={document.origin
+                          ?? workspaceAbsolutePath(document.workspaceRoot ?? workspaceRoot, document.path)
+                          ?? document.path
+                          ?? document.name}
                         onContextMenu={(event) => {
                           event.preventDefault();
                           invoke(() => openDocumentMenu(document, event.clientX, event.clientY));
@@ -4800,8 +5029,104 @@ export function App() {
                   </Tabs.List>
                 </Tabs.Root>
                 <div className="editor-toolbar">
-                  <div className="breadcrumb">{activeDocument?.path ?? activeDocument?.name}</div>
+                  <div className="breadcrumb">{activeDocument?.path ?? activeDocument?.origin ?? activeDocument?.name}</div>
                   <div className="editor-actions">
+                    {editorSearchOpen ? (
+                      <div className="editor-search" role="search" data-invalid={editorSearchError ? "true" : undefined}>
+                        <Search className="editor-search__icon" size={13} />
+                        <input
+                          ref={editorSearchInputRef}
+                          className="editor-search__input"
+                          type="search"
+                          value={editorSearchQuery}
+                          aria-label="Pesquisar no arquivo aberto"
+                          aria-invalid={Boolean(editorSearchError)}
+                          title={editorSearchError}
+                          placeholder="Pesquisar no arquivo"
+                          onChange={(event) => {
+                            setEditorSearchQuery(event.target.value);
+                            setEditorSearchMatchIndex(0);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              setEditorSearchOpen(false);
+                              setEditorSearchQuery("");
+                              return;
+                            }
+                            if (event.key === "Enter" && editorSearchMatches.length) {
+                              event.preventDefault();
+                              selectEditorSearchMatch(editorSearchMatchIndex + (event.shiftKey ? -1 : 1));
+                            }
+                          }}
+                        />
+                        <button
+                          className="editor-search__toggle"
+                          type="button"
+                          aria-label="Diferenciar maiúsculas de minúsculas"
+                          aria-pressed={editorSearchCaseSensitive}
+                          title="Diferenciar maiúsculas de minúsculas"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => {
+                            setEditorSearchCaseSensitive((current) => !current);
+                            setEditorSearchMatchIndex(0);
+                          }}
+                        >Aa</button>
+                        <button
+                          className="editor-search__toggle"
+                          type="button"
+                          aria-label="Interpretar como expressão regular"
+                          aria-pressed={editorSearchRegex}
+                          title="Interpretar o termo como expressão regular"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => {
+                            setEditorSearchRegex((current) => !current);
+                            setEditorSearchMatchIndex(0);
+                          }}
+                        >.*</button>
+                        <span className="editor-search__count" aria-live="polite">
+                          {editorSearchError ? "!" : editorSearchMatches.length ? `${editorSearchMatchIndex + 1}/${editorSearchMatches.length}` : "0"}
+                        </span>
+                        {editorSearchMatches.length > 1 ? (
+                          <>
+                            <button
+                              className="icon-button small"
+                              type="button"
+                              aria-label="Ocorrência anterior"
+                              title="Ocorrência anterior (Shift+Enter)"
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() => selectEditorSearchMatch(editorSearchMatchIndex - 1)}
+                            ><ChevronUp size={12} /></button>
+                            <button
+                              className="icon-button small"
+                              type="button"
+                              aria-label="Próxima ocorrência"
+                              title="Próxima ocorrência (Enter)"
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() => selectEditorSearchMatch(editorSearchMatchIndex + 1)}
+                            ><ChevronDown size={12} /></button>
+                          </>
+                        ) : null}
+                        <button
+                          className="icon-button small"
+                          type="button"
+                          aria-label="Fechar busca no arquivo"
+                          onClick={() => {
+                            setEditorSearchOpen(false);
+                            setEditorSearchQuery("");
+                          }}
+                        ><X size={12} /></button>
+                      </div>
+                    ) : (
+                      <button
+                        className="icon-button small"
+                        type="button"
+                        aria-label="Pesquisar no arquivo"
+                        title="Pesquisar no arquivo"
+                        disabled={!activeDocument || activeDocument.kind !== "text" || Boolean(activeResourceEditorProvider)}
+                        onClick={() => setEditorSearchOpen(true)}
+                      ><Search size={14} /></button>
+                    )}
                     {editorToolbarItems.map((item) => {
                       const icon = item.icon === "undo" ? <Undo2 size={14} />
                         : item.icon === "diff" ? <Code2 size={14} />
@@ -4829,7 +5154,7 @@ export function App() {
                       type="button"
                       aria-label="Salvar arquivo"
                       title="Salvar arquivo"
-                      disabled={!activeDocument || activeDocument.kind !== "text" || Boolean(activeResourceEditorProvider)}
+                      disabled={!activeDocument || activeDocument.kind !== "text" || activeDocument.readOnly || Boolean(activeResourceEditorProvider)}
                       onClick={() => invoke(saveDocument)}
                     ><Save size={14} /></button>
                   </div>
@@ -4843,7 +5168,10 @@ export function App() {
                     <UnsupportedBinaryEditor document={activeDocument} />
                   ) : (
                     <>
-                  <div className={`editor-canvas${showEditorGutter ? " has-editor-gutter" : ""}${editorSettings.lineNumbers ? " has-line-numbers" : ""}`}>
+                  <div
+                    className={`editor-canvas${showEditorGutter ? " has-editor-gutter" : ""}${editorSettings.lineNumbers ? " has-line-numbers" : ""}${editorNavigationLoading ? " is-symbol-navigation-loading" : ""}`}
+                    aria-busy={editorNavigationLoading}
+                  >
                     {showEditorGutter ? (
                       <div className={`editor-line-ruler${editorSettings.lineNumbers ? "" : " decorations-only"}`}>
                         <pre ref={editorLineRulerRef}>
@@ -4901,7 +5229,7 @@ export function App() {
                         } as React.CSSProperties}
                       />
                     ) : null}
-                    {activeSyntaxHighlighter && activeDocument ? (
+                    {(activeSyntaxHighlighter || activeEditorSearchMatch) && activeDocument ? (
                       <div
                         ref={highlightedEditorScrollRef}
                         className="highlight-editor"
@@ -4921,7 +5249,17 @@ export function App() {
                         }}
                       >
                         <div className="highlight-editor__content">
-                          <pre className="syntax-layer" data-syntax-provider={activeSyntaxHighlighter.id} data-syntax-origin={activeSyntaxHighlighter.origin}><HighlightedSource source={activeDocument.content} provider={activeSyntaxHighlighter} /></pre>
+                          <pre
+                            className="syntax-layer"
+                            data-syntax-provider={activeSyntaxHighlighter?.id}
+                            data-syntax-origin={activeSyntaxHighlighter?.origin}
+                          >
+                            <HighlightedSource
+                              source={activeDocument.content}
+                              {...(activeSyntaxHighlighter ? { provider: activeSyntaxHighlighter } : {})}
+                              {...(activeEditorSearchMatch ? { highlight: activeEditorSearchMatch } : {})}
+                            />
+                          </pre>
                           <DiagnosticLayer
                             diagnostics={diagnostics}
                             source={activeDocument.content}
@@ -4933,9 +5271,24 @@ export function App() {
                             spellCheck={false}
                             wrap="off"
                             value={activeDocument.content}
+                            readOnly={activeDocument.readOnly}
                             onChange={(event) => updateDocument(event.currentTarget)}
                             onKeyDown={handleEditorKeyDown}
+                            onKeyUp={(event) => event.currentTarget.classList.toggle(
+                              "is-navigation-modifier",
+                              event.ctrlKey || event.metaKey,
+                            )}
+                            onMouseMove={(event) => event.currentTarget.classList.toggle(
+                              "is-navigation-modifier",
+                              event.ctrlKey || event.metaKey,
+                            )}
+                            onMouseLeave={(event) => event.currentTarget.classList.remove("is-navigation-modifier")}
                             onSelect={(event) => captureEditorState(event.currentTarget, highlightedEditorScrollRef.current ?? event.currentTarget)}
+                            onClick={(event) => {
+                              if ((!event.ctrlKey && !event.metaKey) || !activeDocument) return;
+                              event.preventDefault();
+                              invoke(() => navigateFromEditor(activeDocument, event.currentTarget));
+                            }}
                             onContextMenu={(event) => {
                               if (!activeDocument) return;
                               event.preventDefault();
@@ -4951,9 +5304,24 @@ export function App() {
                         className="code-editor"
                         spellCheck={false}
                         value={activeDocument?.content ?? ""}
+                        readOnly={activeDocument?.readOnly}
                         onChange={(event) => updateDocument(event.currentTarget)}
                         onKeyDown={handleEditorKeyDown}
+                        onKeyUp={(event) => event.currentTarget.classList.toggle(
+                          "is-navigation-modifier",
+                          event.ctrlKey || event.metaKey,
+                        )}
+                        onMouseMove={(event) => event.currentTarget.classList.toggle(
+                          "is-navigation-modifier",
+                          event.ctrlKey || event.metaKey,
+                        )}
+                        onMouseLeave={(event) => event.currentTarget.classList.remove("is-navigation-modifier")}
                         onSelect={(event) => captureEditorState(event.currentTarget)}
+                        onClick={(event) => {
+                          if ((!event.ctrlKey && !event.metaKey) || !activeDocument) return;
+                          event.preventDefault();
+                          invoke(() => navigateFromEditor(activeDocument, event.currentTarget));
+                        }}
                         onContextMenu={(event) => {
                           if (!activeDocument) return;
                           event.preventDefault();
@@ -5405,7 +5773,7 @@ export function App() {
           <button type="button" onClick={() => invoke(openSingleFile)}><File size={13} /> Abrir arquivo</button>
           <span>{platformSnapshot.plugins.length} plugin(s)</span>
           <span className="status-spacer" />
-          <span>{activeDocument?.kind === "text" && activeDocument.content !== activeDocument.savedContent ? "Modificado" : "Salvo"}</span>
+          <span>{activeDocument?.readOnly ? "Somente leitura" : activeDocument?.kind === "text" && activeDocument.content !== activeDocument.savedContent ? "Modificado" : "Salvo"}</span>
           <span>{activeDocument?.kind === "text" ? "UTF-8" : activeDocument?.mediaType ?? ""}</span>
           <span>{activeResourceEditorProvider?.id ?? activeSyntaxHighlighter?.name ?? (activeDocument?.kind === "image" ? "Imagem" : activeDocument?.kind === "binary" ? "Binário" : "Texto")}</span>
         </footer>

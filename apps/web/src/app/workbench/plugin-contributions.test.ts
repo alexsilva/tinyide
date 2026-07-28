@@ -40,16 +40,22 @@ describe("plugin contribution expansion", () => {
     const secondDispose = vi.fn();
     const firstMount = vi.fn(() => ({ dispose: firstDispose }));
     const secondMount = vi.fn(async () => ({ dispose: secondDispose }));
+    const activityBadge = {
+      snapshot: () => ({ value: 2, label: "2 ativos", tone: "active" as const }),
+      subscribe: vi.fn(() => ({ dispose: vi.fn() })),
+    };
     const contribution = {
       id: "plugin.tool.group",
       pluginId: "plugin.example",
       label: "Ferramentas",
+      activityBadge,
       views: [
         { id: "second", label: "Segundo", order: 2, mount: secondMount },
         { id: "first", label: "Primeiro", order: 1, mount: firstMount },
       ],
     } as WorkbenchToolWindowHookContribution;
     const [expanded] = expandWorkbenchToolWindowContribution(contribution);
+    expect(expanded?.activityBadge).toBe(activityBadge);
     const headerContainer = document.createElement("div");
     const container = document.createElement("div");
     const selected: string[] = [];

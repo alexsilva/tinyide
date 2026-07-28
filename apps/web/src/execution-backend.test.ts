@@ -32,6 +32,7 @@ async function callBackend<Value>(
   const requestBody = body === undefined ? [] : [Buffer.from(JSON.stringify(body))];
   const request = Object.assign(Readable.from(requestBody), {
     method,
+    url: path,
     headers: {} as Record<string, string>,
   });
   return new Promise<BackendResponse<Value>>((resolve, reject) => {
@@ -49,11 +50,72 @@ async function callBackend<Value>(
         }
       },
     };
-    Promise.resolve(handler(request, response, path)).catch(reject);
+    Promise.resolve(handler(request, response, path.split("?", 1)[0]!)).catch(reject);
   });
 }
 
 describe("execution backend sessions", () => {
+  it("streams process output incrementally with bounded retention", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tinyide-execution-stream-"));
+    const backend = createExecutionBackend({
+      workspaceRoot: root,
+      maxOutputChars: 2_048,
+      maxOutputReadChars: 256,
+      maxSnapshotStreamChars: 256,
+      maxSnapshotOutputChars: 512,
+    });
+    let processId: string | undefined;
+    try {
+      const program = "for(let i=0;i<600;i++) process.stdout.write(`line-${i.toString().padStart(4,'0')}\\n`);";
+      const started = await callBackend<{ readonly id: string }>(backend, "POST", "/execution/processes", {
+        executable: process.execPath,
+        arguments: ["-e", program],
+        workingDirectory: root,
+      });
+      processId = started.body.id;
+
+      let cursor = 0;
+      let truncated = false;
+      let output = "";
+      let status = "running";
+      let hasMore = true;
+      for (let attempt = 0; attempt < 100 && (status === "running" || hasMore); attempt += 1) {
+        const delta = (await callBackend<{
+          readonly status: string;
+          readonly cursor: number;
+          readonly endCursor: number;
+          readonly hasMore: boolean;
+          readonly truncated: boolean;
+          readonly chunks: readonly { readonly text: string }[];
+        }>(backend, "GET", `/execution/processes/${processId}/output?cursor=${cursor}`)).body;
+        status = delta.status;
+        cursor = delta.cursor;
+        hasMore = delta.hasMore;
+        truncated ||= delta.truncated;
+        output += delta.chunks.map((chunk) => chunk.text).join("");
+        if (!delta.hasMore) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      const snapshot = (await callBackend<{
+        readonly status: string;
+        readonly stdout: string;
+        readonly output: string;
+        readonly outputStartCursor: number;
+        readonly outputEndCursor: number;
+      }>(backend, "GET", `/execution/processes/${processId}`)).body;
+      expect(snapshot.status).toBe("exited");
+      expect(snapshot.stdout.length).toBeLessThanOrEqual(256);
+      expect(snapshot.output.length).toBeLessThanOrEqual(512);
+      expect(snapshot.outputEndCursor).toBeGreaterThan(snapshot.outputStartCursor);
+      expect(truncated).toBe(true);
+      expect(output).toContain("line-0599");
+    } finally {
+      if (processId) await callBackend(backend, "DELETE", `/execution/processes/${processId}`).catch(() => undefined);
+      await backend.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("lists running processes only in their workspace and preserves presentation for reconnection", async () => {
     const root = await mkdtemp(join(tmpdir(), "tinyide-execution-"));
     const otherRoot = await mkdtemp(join(tmpdir(), "tinyide-execution-other-"));

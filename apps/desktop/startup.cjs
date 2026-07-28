@@ -2,6 +2,17 @@ const { spawnSync } = require("node:child_process");
 
 const DEFAULT_WINDOW_SHOW_TIMEOUT_MS = 3_000;
 const LOGIN_SHELL_ENV_TIMEOUT_MS = 5_000;
+const PRODUCTION_CHROMIUM_SWITCHES = Object.freeze([
+  "disable-extensions",
+  "disable-component-extensions-with-background-pages",
+  "disable-plugins",
+]);
+const DEBUG_CHROMIUM_SWITCHES = Object.freeze([
+  "auto-open-devtools-for-tabs",
+  "remote-debugging-address",
+  "remote-debugging-pipe",
+  "remote-debugging-port",
+]);
 
 function parseNullSeparatedEnvironment(value) {
   const environment = {};
@@ -39,6 +50,53 @@ function applyLoginShellEnvironment(options = {}) {
   const loaded = loginShellEnvironment(options);
   Object.assign(targetEnvironment, loaded);
   return loaded;
+}
+
+function configureProductionChromium(application, { packaged = application.isPackaged } = {}) {
+  if (!packaged) return false;
+  for (const name of DEBUG_CHROMIUM_SWITCHES) application.commandLine.removeSwitch(name);
+  for (const name of PRODUCTION_CHROMIUM_SWITCHES) application.commandLine.appendSwitch(name);
+  return true;
+}
+
+function isDeveloperShortcut(input = {}) {
+  const key = String(input.key ?? "").toLowerCase();
+  if (key === "f12") return true;
+  const commandModifier = input.control === true || input.meta === true;
+  return commandModifier && input.shift === true && ["c", "i", "j"].includes(key);
+}
+
+function installProductionWindowHardening(window, { packaged = true } = {}) {
+  if (!packaged) return { dispose() {} };
+  const onBeforeInputEvent = (event, input) => {
+    if (isDeveloperShortcut(input)) event.preventDefault();
+  };
+  const onDevToolsOpened = () => window.webContents.closeDevTools();
+  window.webContents.on("before-input-event", onBeforeInputEvent);
+  window.webContents.on("devtools-opened", onDevToolsOpened);
+  return {
+    dispose() {
+      window.webContents.removeListener("before-input-event", onBeforeInputEvent);
+      window.webContents.removeListener("devtools-opened", onDevToolsOpened);
+    },
+  };
+}
+
+function disableBrowserExtensions(targetSession) {
+  const extensions = targetSession?.extensions;
+  if (!extensions) return { dispose() {} };
+  const remove = (extension) => {
+    if (!extension?.id) return;
+    try { extensions.removeExtension(extension.id); } catch {}
+  };
+  for (const extension of extensions.getAllExtensions()) remove(extension);
+  const onLoaded = (_event, extension) => remove(extension);
+  extensions.on("extension-loaded", onLoaded);
+  return {
+    dispose() {
+      extensions.removeListener("extension-loaded", onLoaded);
+    },
+  };
 }
 
 function focusExistingWindow(window) {
@@ -113,13 +171,19 @@ function installWindowVisibilityFallback(window, {
 }
 
 module.exports = {
+  DEBUG_CHROMIUM_SWITCHES,
   DEFAULT_WINDOW_SHOW_TIMEOUT_MS,
   LOGIN_SHELL_ENV_TIMEOUT_MS,
+  PRODUCTION_CHROMIUM_SWITCHES,
   applyLoginShellEnvironment,
+  configureProductionChromium,
+  disableBrowserExtensions,
   focusExistingWindow,
   installGracefulShutdown,
+  installProductionWindowHardening,
   installSingleInstanceGuard,
   installWindowVisibilityFallback,
+  isDeveloperShortcut,
   loginShellEnvironment,
   parseNullSeparatedEnvironment,
 };

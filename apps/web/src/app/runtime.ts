@@ -48,6 +48,7 @@ export interface HostProcessSnapshot {
   readonly outputStartCursor?: number;
   readonly outputEndCursor?: number;
   readonly outputTruncated?: boolean;
+  readonly data?: Readonly<Record<string, unknown>>;
   readonly stopRequested: boolean;
   readonly exitCode?: number;
   readonly signal?: string;
@@ -354,6 +355,23 @@ export async function readHostProcess(id: string): Promise<HostProcessSnapshot> 
   const payload = await response.json() as HostProcessSnapshot | { readonly error?: string };
   if (!response.ok) {
     throw new Error("error" in payload && payload.error ? payload.error : "Falha ao consultar processo.");
+  }
+  return payload as HostProcessSnapshot;
+}
+
+export async function updateHostProcessData(
+  id: string,
+  providerId: string,
+  data: unknown,
+): Promise<HostProcessSnapshot> {
+  const response = await fetch(`/core-api/execution/processes/${encodeURIComponent(id)}/data`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ providerId, data }),
+  });
+  const payload = await response.json() as HostProcessSnapshot | { readonly error?: string };
+  if (!response.ok) {
+    throw new Error("error" in payload && payload.error ? payload.error : "Falha ao persistir dados da execução.");
   }
   return payload as HostProcessSnapshot;
 }

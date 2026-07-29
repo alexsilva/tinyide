@@ -84,6 +84,7 @@ interface WorkbenchBinding {
   openWorkspaceResource(request: WorkbenchWorkspaceResourceOpenRequest): Promise<void>;
   executionSnapshot(): WorkbenchExecutionSnapshot;
   subscribeExecution(listener: (snapshot: WorkbenchExecutionSnapshot) => void): Disposable;
+  updateExecutionData(profileId: string, providerId: string, data: unknown): Promise<void>;
   upsertExecutionProfile(
     profile: ExecutionProfile,
     options?: WorkbenchExecutionProfileUpdateOptions,
@@ -142,6 +143,10 @@ class AppWorkbenchApi implements WorkbenchApi {
     subscribe: (listener: (snapshot: WorkbenchExecutionSnapshot) => void): Disposable => {
       if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
       return this.#binding.subscribeExecution(listener);
+    },
+    updateExecutionData: async (profileId: string, providerId: string, data: unknown): Promise<void> => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      await this.#binding.updateExecutionData(profileId, providerId, data);
     },
     upsertProfile: async (
       profile: ExecutionProfile,

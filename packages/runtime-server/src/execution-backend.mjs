@@ -69,6 +69,18 @@ function processPresentation(value) {
   };
 }
 
+function processDataUpdate(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Dados da execução inválidos.");
+  }
+  const providerId = requiredString(value.providerId, "providerId");
+  const serialized = JSON.stringify(value.data);
+  if (serialized === undefined || serialized.length > MAX_BODY_BYTES) {
+    throw new Error("Dados da execução excedem o limite permitido.");
+  }
+  return { providerId, data: JSON.parse(serialized) };
+}
+
 function appendOutput(current, chunk, maxChars) {
   const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
   const next = current + text;
@@ -178,6 +190,7 @@ function processSnapshot(record, snapshotOutputChars = DEFAULT_MAX_SNAPSHOT_OUTP
     outputStartCursor: outputStatus.startCursor,
     outputEndCursor: outputStatus.endCursor,
     outputTruncated: outputStatus.truncated,
+    ...(record.data ? { data: record.data } : {}),
     stopRequested: Boolean(record.stopRequested),
     exitCode: record.exitCode,
     signal: record.signal,
@@ -326,6 +339,7 @@ export function createExecutionBackend({
     const record = {
       id, workspaceRoot, child, status: "running", executable, arguments: args, workingDirectory, presentation,
       stdout: "", stderr: "", output: createProcessOutputBuffer(maxOutputChars),
+      data: undefined,
       exitCode: undefined, signal: undefined, startedAt, finishedAt: undefined,
     };
     processes.set(id, record);
@@ -402,6 +416,22 @@ export function createExecutionBackend({
           200,
           processOutputSnapshot(record, requestUrl.searchParams.get("cursor"), maxOutputReadChars),
         );
+        return;
+      }
+      const dataMatch = /^\/execution\/processes\/([^/]+)\/data$/.exec(relativePath);
+      if (dataMatch) {
+        const record = processes.get(decodeURIComponent(dataMatch[1]));
+        if (!record || record.workspaceRoot !== workspaceRoot) {
+          writeJson(response, 404, { error: "Processo não encontrado." });
+          return;
+        }
+        if (request.method !== "PUT") {
+          writeJson(response, 405, { error: "Método não permitido para dados da execução." });
+          return;
+        }
+        const update = processDataUpdate(await readJson(request));
+        record.data = { ...(record.data ?? {}), [update.providerId]: update.data };
+        writeJson(response, 200, processSnapshot(record, maxSnapshotOutputChars));
         return;
       }
       const match = /^\/execution\/processes\/([^/]+)$/.exec(relativePath);

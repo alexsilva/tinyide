@@ -9,6 +9,7 @@ export interface ProfileExecutionState {
   readonly profile?: ExecutionProfile;
   readonly status: ProfileExecutionStatus;
   readonly output: readonly string[];
+  readonly data?: Readonly<Record<string, unknown>>;
   readonly processId?: string;
   readonly error?: string;
   readonly startedAt?: number;
@@ -161,6 +162,7 @@ export function restoreProfileExecutions(
       profileName: latest.presentation!.sourceName,
       status: statusForProcess(latest),
       output,
+      ...(latest.data ? { data: latest.data } : {}),
       ...(latest.status === "running" ? { processId: latest.id } : {}),
       startedAt: ordered[0]!.startedAt,
       ...(latest.finishedAt ? { finishedAt: latest.finishedAt } : {}),

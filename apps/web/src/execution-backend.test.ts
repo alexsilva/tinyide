@@ -208,6 +208,48 @@ describe("execution backend sessions", () => {
     }
   }, 10_000);
 
+  it("persists provider-owned execution data independently of the bounded output", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tinyide-execution-data-"));
+    const backend = createExecutionBackend({ workspaceRoot: root, maxOutputChars: 1_024 });
+    let processId: string | undefined;
+    try {
+      const started = await callBackend<{ readonly id: string }>(backend, "POST", "/execution/processes", {
+        executable: process.execPath,
+        arguments: ["-e", "setTimeout(() => {}, 2000)"],
+        workingDirectory: root,
+      });
+      processId = started.body.id;
+      const pytestData = {
+        statuses: {
+          "tests/test_user.py::test_create": "passed",
+          "tests/test_user.py::test_delete": "failed",
+        },
+        counts: { passed: 1, failed: 1, skipped: 0 },
+        total: 2,
+      };
+
+      const updated = await callBackend<{ readonly data: Record<string, unknown> }>(
+        backend,
+        "PUT",
+        `/execution/processes/${processId}/data`,
+        { providerId: "tinyide.pytest", data: pytestData },
+      );
+      expect(updated.status).toBe(200);
+      expect(updated.body.data["tinyide.pytest"]).toEqual(pytestData);
+
+      const restored = await callBackend<{ readonly data: Record<string, unknown> }>(
+        backend,
+        "GET",
+        `/execution/processes/${processId}`,
+      );
+      expect(restored.body.data["tinyide.pytest"]).toEqual(pytestData);
+    } finally {
+      if (processId) await callBackend(backend, "DELETE", `/execution/processes/${processId}`).catch(() => undefined);
+      await backend.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.skipIf(process.platform === "win32")("stops the complete process tree created by a profile", async () => {
     const root = await mkdtemp(join(tmpdir(), "tinyide-execution-tree-"));
     const backend = createExecutionBackend({ workspaceRoot: root });

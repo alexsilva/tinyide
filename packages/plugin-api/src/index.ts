@@ -917,6 +917,8 @@ export interface WorkbenchProfileExecutionSnapshot {
   readonly profile?: ExecutionProfile;
   readonly status: WorkbenchProfileExecutionStatus;
   readonly output: readonly string[];
+  /** Provider-owned structured state persisted with the host process. */
+  readonly data?: Readonly<Record<string, unknown>>;
   readonly processId?: string;
   readonly error?: string;
   readonly startedAt?: number;
@@ -939,6 +941,7 @@ export interface WorkbenchExecutionProfileUpdateOptions {
 export interface WorkbenchExecutionApi {
   snapshot(): WorkbenchExecutionSnapshot;
   subscribe(listener: (snapshot: WorkbenchExecutionSnapshot) => void): Disposable;
+  updateExecutionData(profileId: string, providerId: string, data: unknown): Promise<void>;
   upsertProfile(
     profile: ExecutionProfile,
     options?: WorkbenchExecutionProfileUpdateOptions,

@@ -39,6 +39,7 @@ function processSnapshot(input: Partial<HostProcessSnapshot> & {
     stdout: input.stdout ?? "",
     stderr: input.stderr ?? "",
     stopRequested: input.stopRequested ?? false,
+    ...(input.data ? { data: input.data } : {}),
     ...(input.exitCode === undefined ? {} : { exitCode: input.exitCode }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
     startedAt: input.startedAt,
@@ -169,6 +170,28 @@ describe("profile execution state", () => {
     expect(restored.states.node!.output.join("\n")).toContain("NEW-OUTPUT");
     expect(restored.states.node!.output.join("\n")).not.toContain("OLD-OUTPUT");
     expect(restored.states.node!.status).toBe("completed");
+  });
+
+  it("restores provider-owned structured execution data after reload", () => {
+    const data = {
+      "tinyide.pytest": {
+        statuses: { "tests/test_user.py::test_create": "passed" },
+        total: 1,
+      },
+    };
+    const restored = restoreProfileExecutions([
+      processSnapshot({
+        id: "pytest-run",
+        profileId: "pytest",
+        profileName: "Pytest",
+        startedAt: 10,
+        status: "exited",
+        exitCode: 0,
+        data,
+      }),
+    ]);
+
+    expect(restored.states.pytest?.data).toEqual(data);
   });
 
   it("exposes the selected profile status without borrowing another profile output", () => {

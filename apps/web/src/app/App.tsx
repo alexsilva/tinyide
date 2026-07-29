@@ -243,6 +243,7 @@ import {
   readHostContext,
   readHostProcess,
   readHostProcessOutput,
+  updateHostProcessData,
   runExecutionProfile,
   sendDebugCommand,
   startDebugProfile,
@@ -736,6 +737,7 @@ export function App() {
         })),
       } } : {}),
       output: [...execution.output],
+      ...(execution.data ? { data: { ...execution.data } } : {}),
     })),
     ...(debugSessionRef.current ? { debugSession: debugSessionRef.current } : {}),
   });
@@ -1110,6 +1112,22 @@ export function App() {
       executionStateListenersRef.current.add(listener);
       listener(executionSnapshot());
       return { dispose: () => executionStateListenersRef.current.delete(listener) };
+    },
+    async updateExecutionData(profileId, providerId, data) {
+      const state = profileExecutionsRef.current[profileId];
+      if (!state?.processId) return;
+      const process = await updateHostProcessData(state.processId, providerId, data);
+      setProfileExecutions((current) => {
+        const existing = current[profileId];
+        if (!existing) return current;
+        return {
+          ...current,
+          [profileId]: {
+            ...existing,
+            ...(process.data ? { data: process.data } : {}),
+          },
+        };
+      });
     },
     async upsertExecutionProfile(profile, options: WorkbenchExecutionProfileUpdateOptions = {}) {
       const current = profilesStateRef.current;
@@ -1652,6 +1670,7 @@ export function App() {
                     ? "completed"
                     : "failed",
               output: processOutput,
+              ...(process.data ? { data: process.data } : {}),
               ...(process.status === "running" ? { processId: process.id } : {}),
               startedAt: current[resumed.profileId]?.startedAt ?? process.startedAt,
               ...(process.finishedAt ? { finishedAt: process.finishedAt } : {}),

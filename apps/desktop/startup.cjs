@@ -68,16 +68,23 @@ function isDeveloperShortcut(input = {}) {
 
 function installProductionWindowHardening(window, { packaged = true } = {}) {
   if (!packaged) return { dispose() {} };
+  const webContents = window.webContents;
+  let disposed = false;
   const onBeforeInputEvent = (event, input) => {
     if (isDeveloperShortcut(input)) event.preventDefault();
   };
-  const onDevToolsOpened = () => window.webContents.closeDevTools();
-  window.webContents.on("before-input-event", onBeforeInputEvent);
-  window.webContents.on("devtools-opened", onDevToolsOpened);
+  const onDevToolsOpened = () => {
+    if (!webContents.isDestroyed?.()) webContents.closeDevTools();
+  };
+  webContents.on("before-input-event", onBeforeInputEvent);
+  webContents.on("devtools-opened", onDevToolsOpened);
   return {
     dispose() {
-      window.webContents.removeListener("before-input-event", onBeforeInputEvent);
-      window.webContents.removeListener("devtools-opened", onDevToolsOpened);
+      if (disposed) return;
+      disposed = true;
+      if (webContents.isDestroyed?.()) return;
+      webContents.removeListener("before-input-event", onBeforeInputEvent);
+      webContents.removeListener("devtools-opened", onDevToolsOpened);
     },
   };
 }

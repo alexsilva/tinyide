@@ -155,6 +155,24 @@ describe("desktop startup", () => {
     expect(window.webContents.listenerCount("devtools-opened")).toBe(0);
   });
 
+  it("disposes packaged window hardening after BrowserWindow destruction", () => {
+    const window = createWindow();
+    const webContents = window.webContents;
+    webContents.closeDevTools = vi.fn();
+    webContents.isDestroyed = vi.fn(() => true);
+    const hardening = installProductionWindowHardening(window, { packaged: true });
+
+    Object.defineProperty(window, "webContents", {
+      configurable: true,
+      get() {
+        throw new TypeError("Object has been destroyed");
+      },
+    });
+
+    expect(() => hardening.dispose()).not.toThrow();
+    expect(() => hardening.dispose()).not.toThrow();
+  });
+
   it("removes loaded browser extensions and rejects extensions loaded later", () => {
     const extensions = new EventEmitter();
     extensions.getAllExtensions = vi.fn(() => [{ id: "one" }, { id: "two" }]);

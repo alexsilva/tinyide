@@ -59,6 +59,16 @@ function forbiddenGlobalSelectors(path: string): readonly string[] {
   return forbidden;
 }
 
+function declarationsFor(path: string, selector: string): ReadonlyMap<string, string> {
+  const declarations = new Map<string, string>();
+  parseCss(path).walkRules(selector, (rule) => {
+    rule.walkDecls((declaration) => {
+      declarations.set(declaration.prop, declaration.value);
+    });
+  });
+  return declarations;
+}
+
 describe("CSS architecture contract", () => {
   it("keeps a single ordered stylesheet entrypoint", () => {
     const entry = parseCss(entryPath);
@@ -85,5 +95,18 @@ describe("CSS architecture contract", () => {
       const path = resolve(sourceDirectory, importPath);
       expect(forbiddenGlobalSelectors(path), path).toEqual([]);
     }
+  });
+
+  it("contains the welcome screen inside the editor column when sidebars are open", () => {
+    const workbenchPath = resolve(sourceDirectory, "./styles/workbench.css");
+    const screen = declarationsFor(workbenchPath, ".welcome-screen");
+    const actions = declarationsFor(workbenchPath, ".welcome-actions");
+
+    expect(screen.get("min-width")).toBe("0");
+    expect(screen.get("max-width")).toBe("100%");
+    expect(screen.get("overflow")).toBe("hidden");
+    expect(actions.get("max-width")).toBe("100%");
+    expect(actions.get("flex-wrap")).toBe("wrap");
+    expect(actions.get("justify-content")).toBe("center");
   });
 });

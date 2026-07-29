@@ -202,11 +202,11 @@
 .editor-actions select { height: 27px; min-width: 150px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2); color: var(--text); font-size: 11px; }
 .code-editor { width: 100%; height: 100%; resize: none; border: 0; outline: 0; padding: 18px 20px; background: #0f1218; color: #d4d8df; font: 13px/1.65 "JetBrains Mono", "Fira Code", Consolas, monospace; tab-size: 4; }
 
-.welcome-screen { grid-row: 1 / 4; display: grid; place-content: center; justify-items: center; gap: 12px; padding: 40px; text-align: center; }
+.welcome-screen { grid-row: 1 / 4; display: grid; min-width: 0; max-width: 100%; overflow: hidden; place-content: center; justify-items: center; gap: 12px; padding: 40px; text-align: center; }
 .welcome-kicker { color: #9ca6b6; font-size: 12px; }
 .welcome-screen h1 { margin: 0; font-size: 32px; letter-spacing: -.04em; }
 .welcome-screen p { max-width: 470px; margin: 0; color: var(--muted); line-height: 1.55; }
-.welcome-actions { display: flex; gap: 8px; margin-top: 8px; }
+.welcome-actions { display: flex; max-width: 100%; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 8px; }
 .welcome-screen small { margin-top: 4px; color: #778191; font-size: 11px; }
 .architecture-note { display: flex; gap: 8px; margin-top: 12px; padding: 8px 11px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-1); color: var(--muted); font-size: 11px; }
 .architecture-note strong { color: var(--success); }

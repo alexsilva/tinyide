@@ -59,6 +59,33 @@ interface StoredPlugin {
   readonly enabled: boolean;
 }
 
+export function orderPluginsByDependencies<T extends { readonly manifest: PluginManifest }>(
+  entries: readonly T[],
+): readonly T[] {
+  const entriesById = new Map(entries.map((entry) => [entry.manifest.id, entry]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const ordered: T[] = [];
+
+  const visit = (entry: T): void => {
+    const id = entry.manifest.id;
+    if (visited.has(id)) return;
+    if (visiting.has(id)) return;
+
+    visiting.add(id);
+    for (const dependencyId of Object.keys(entry.manifest.dependencies ?? {})) {
+      const dependency = entriesById.get(dependencyId);
+      if (dependency) visit(dependency);
+    }
+    visiting.delete(id);
+    visited.add(id);
+    ordered.push(entry);
+  };
+
+  for (const entry of entries) visit(entry);
+  return ordered;
+}
+
 export interface PluginCatalogEntry {
   readonly manifest: PluginManifest;
   readonly manifestUrl: string;
@@ -464,6 +491,7 @@ export class TinyIdePlatform {
       localStorage.removeItem(STORAGE_KEY);
     }
 
+    const restored: StoredPlugin[] = [];
     for (const entry of stored) {
       try {
         let manifest = entry.manifest;
@@ -481,12 +509,19 @@ export class TinyIdePlatform {
         await this.plugins.install(manifest);
         this.#sourceUrls.set(manifest.id, sourceUrl);
         this.#manifestUrls.set(manifest.id, manifestUrl);
-        if (entry.enabled) {
-          await this.plugins.enable(manifest.id);
-          await this.plugins.activate(manifest.id, pluginContext(this, manifest.id));
-        }
+        restored.push({ manifest, manifestUrl, sourceUrl, enabled: entry.enabled });
       } catch (error) {
         console.warn(`Não foi possível restaurar o plugin ${entry.manifest.id}.`, error);
+      }
+    }
+
+    for (const entry of orderPluginsByDependencies(restored)) {
+      if (!entry.enabled) continue;
+      try {
+        await this.plugins.enable(entry.manifest.id);
+        await this.plugins.activate(entry.manifest.id, pluginContext(this, entry.manifest.id));
+      } catch (error) {
+        console.warn(`Não foi possível reativar o plugin ${entry.manifest.id}.`, error);
       }
     }
     this.#persist();

@@ -115,6 +115,14 @@ describe("browser filesystem", () => {
       .resolves.toMatchObject({ kind: "text" });
   });
 
+  it("does not classify UTF-8 text as binary when the sample ends inside a multibyte character", async () => {
+    const prefix = new Uint8Array(8190).fill(0x61);
+    const arrow = new TextEncoder().encode("→");
+    const file = new File([prefix, arrow, " markdown"], "sample.md");
+
+    await expect(inspectBrowserFile(file)).resolves.toMatchObject({ kind: "text" });
+  });
+
   it("resolves nested directory and file handles from the workspace root", async () => {
     const main = fileHandle("main.py");
     const source = directoryHandle("src", [main]);

@@ -97,7 +97,7 @@ function sampleLooksBinary(bytes: Uint8Array): boolean {
   if (bytes.includes(0)) return true;
   let decoded: string;
   try {
-    decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes, { stream: true });
   } catch {
     return true;
   }

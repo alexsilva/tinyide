@@ -14,12 +14,14 @@ export function IconButton({
   onClick,
   onKeyDown,
   active = false,
+  disabled = false,
 }: {
   readonly label: string;
   readonly children: ReactNode;
   readonly onClick: () => void;
   readonly onKeyDown?: KeyboardEventHandler<HTMLButtonElement>;
   readonly active?: boolean;
+  readonly disabled?: boolean;
 }) {
   return (
     <Tooltip.Root>
@@ -28,6 +30,7 @@ export function IconButton({
           className={`icon-button${active ? " is-active" : ""}`}
           type="button"
           aria-label={label}
+          disabled={disabled}
           onClick={onClick}
           onKeyDown={onKeyDown}
         >
@@ -158,6 +161,8 @@ export function MovableActivityButton({
   item,
   side,
   active,
+  disabled = false,
+  label,
   dragging,
   dragActive,
   onActivate,
@@ -167,6 +172,8 @@ export function MovableActivityButton({
   readonly item: PluginActivityButton;
   readonly side: ActivityBarSide;
   readonly active: boolean;
+  readonly disabled?: boolean;
+  readonly label?: string;
   readonly dragging: boolean;
   readonly dragActive: boolean;
   readonly onActivate: () => void;
@@ -179,7 +186,8 @@ export function MovableActivityButton({
   readonly onDragStateChange: (key?: string) => void;
 }) {
   const badge = useActivityBadge(item.activityBadge);
-  const accessibleLabel = badge ? `${item.label}: ${badge.label}` : item.label;
+  const baseLabel = label ?? item.label;
+  const accessibleLabel = badge ? `${baseLabel}: ${badge.label}` : baseLabel;
   return (
     <div
       className={`activity-button-slot${dragActive ? " is-drag-active" : ""}${dragging ? " is-dragging" : ""}`}
@@ -209,8 +217,10 @@ export function MovableActivityButton({
       <IconButton
         label={accessibleLabel}
         active={active}
+        disabled={disabled}
         onClick={onActivate}
         onKeyDown={(event) => {
+          if (disabled) return;
           if (!event.altKey) return;
           if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
             event.preventDefault();

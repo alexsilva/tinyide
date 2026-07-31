@@ -245,7 +245,8 @@ export function WorkbenchToolWindowHost({
         <button
           className="icon-button small"
           type="button"
-          aria-label={`Fechar painel ${provider.label}`}
+          aria-label={`Ocultar painel ${provider.label}`}
+          title="Ocultar painel"
           onClick={close}
         ><X size={14} /></button>
       </div>

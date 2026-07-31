@@ -754,6 +754,11 @@ export function App() {
   const [editorToolbarItems, setEditorToolbarItems] = useState<readonly WorkbenchEditorToolbarItem[]>([]);
   const activeResourceEditorProvider = resourceEditorProviderFor(activeDocument);
   const activeLanguageProvider = activeResourceEditorProvider ? undefined : languageProviderFor(activeDocument);
+  const openEditorSearch = useCallback(() => {
+    if (activeDocument?.kind !== "text" || activeResourceEditorProvider) return false;
+    setEditorSearchOpen(true);
+    return true;
+  }, [activeDocument?.id, activeDocument?.kind, activeResourceEditorProvider]);
   const editorSearchResult = useMemo(() => {
     if (!editorSearchOpen || activeDocument?.kind !== "text" || activeResourceEditorProvider) return { matches: [] };
     try {
@@ -2556,6 +2561,10 @@ export function App() {
     }
     if (!(event.ctrlKey || event.metaKey)) return;
     const key = event.key.toLocaleLowerCase();
+    if (key === "f" && !event.shiftKey && !event.altKey) {
+      if (openEditorSearch()) event.preventDefault();
+      return;
+    }
     const undo = key === "z" && !event.shiftKey;
     const redo = (key === "z" && event.shiftKey) || key === "y";
     if (!undo && !redo) return;
@@ -4190,11 +4199,10 @@ export function App() {
 
   const toggleToolWindow = (toolWindowId: string) => {
     if (activeToolWindowId === toolWindowId) {
-      setToolWindowVisible((visible) => {
-        const next = !visible;
-        if (next) setPanelVisible(false);
-        return next;
-      });
+      if (!toolWindowVisible) {
+        setPanelVisible(false);
+        setToolWindowVisible(true);
+      }
       return;
     }
     setActiveToolWindowId(toolWindowId);
@@ -5143,7 +5151,7 @@ export function App() {
                         aria-label="Pesquisar no arquivo"
                         title="Pesquisar no arquivo"
                         disabled={!activeDocument || activeDocument.kind !== "text" || Boolean(activeResourceEditorProvider)}
-                        onClick={() => setEditorSearchOpen(true)}
+                        onClick={openEditorSearch}
                       ><Search size={14} /></button>
                     )}
                     {editorToolbarItems.map((item) => {

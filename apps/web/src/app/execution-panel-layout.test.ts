@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+const pluginHostsSource = readFileSync(new URL("./workbench-plugin-hosts.tsx", import.meta.url), "utf8");
+const activityBarSource = readFileSync(new URL("./workbench/WorkbenchActivityBar.tsx", import.meta.url), "utf8");
 const workbenchStyles = readFileSync(new URL("../styles/workbench.css", import.meta.url), "utf8");
 const featureStyles = readFileSync(new URL("../styles/features.css", import.meta.url), "utf8");
 
@@ -43,5 +45,21 @@ describe("execution panel layout", () => {
     expect(appSource).toContain('className="workbench-output-follow execution-panel-toolbar__follow"');
     expect(appSource).not.toContain('className="execution-text-output__toolbar"');
     expect(featureStyles).not.toContain(".execution-text-output__toolbar");
+  });
+
+  it("keeps tool windows visible until the panel X is used", () => {
+    const toggle = appSource.slice(
+      appSource.indexOf("const toggleToolWindow = (toolWindowId: string) => {"),
+      appSource.indexOf("const togglePluginSidebar = (sidebarId: string) => {"),
+    );
+    expect(toggle).toContain("if (!toolWindowVisible)");
+    expect(toggle).not.toContain("const next = !visible");
+    expect(toggle).not.toContain("return next");
+    expect(appSource).toContain("onClose={closeToolWindow}");
+    expect(pluginHostsSource).toContain('aria-label={`Ocultar painel ${provider.label}`}');
+    expect(pluginHostsSource).toContain('title="Ocultar painel"');
+    expect(activityBarSource).toContain('const disabled = pluginItem.kind === "toolWindow" && active;');
+    expect(activityBarSource).toContain('disabled={disabled}');
+    expect(activityBarSource).toContain('`Exibir ${pluginItem.label}`');
   });
 });

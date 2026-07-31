@@ -234,7 +234,7 @@ export function ProfileDialog({
                   if (preset) addPreset(preset);
                   event.currentTarget.value = "";
                 }}>
-                  <option value="" disabled>Adicionar preset...</option>
+                  <option value="" disabled>Adicionar preset</option>
                   {presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
                 </select>
               ) : null}

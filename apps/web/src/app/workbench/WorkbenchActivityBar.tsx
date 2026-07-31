@@ -83,6 +83,10 @@ export function WorkbenchActivityBar({
       {items.map((item) => {
         const pluginItem = pluginItems.find((candidate) => candidate.key === item.key);
         if (pluginItem) {
+          const active = pluginItem.kind === "sidebar"
+            ? activeSidebarId === pluginItem.id
+            : toolWindowVisible && activeToolWindowId === pluginItem.id;
+          const disabled = pluginItem.kind === "toolWindow" && active;
           return (
             <MovableActivityButton
               key={pluginItem.key}
@@ -90,9 +94,13 @@ export function WorkbenchActivityBar({
               side={side}
               dragging={draggingKey === pluginItem.key}
               dragActive={Boolean(draggingKey)}
-              active={pluginItem.kind === "sidebar"
-                ? activeSidebarId === pluginItem.id
-                : toolWindowVisible && activeToolWindowId === pluginItem.id}
+              active={active}
+              disabled={disabled}
+              label={pluginItem.kind === "toolWindow"
+                ? disabled
+                  ? `${pluginItem.label} aberto`
+                  : `Exibir ${pluginItem.label}`
+                : pluginItem.label}
               onActivate={() => onPluginActivate(pluginItem)}
               onMove={onMove}
               onDragStateChange={onDragStateChange}

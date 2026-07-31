@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { startTinyIdeRuntime } from "./index.mjs";
 
@@ -214,6 +214,28 @@ describe("runtime server hardening", () => {
     expect(runtime.workspaceRoot).toBeUndefined();
     const pluginRequest = await fetch(`${runtime.url}/plugin-api/sample/status`);
     expect(pluginRequest.status).toBe(409);
+  });
+
+  it("isolates workspace selection between browser sessions", async () => {
+    const { runtime, root, workspaceRoot } = await fixture();
+    const secondWorkspace = join(root, "second-workspace");
+    await mkdir(secondWorkspace);
+    const select = (sessionId, name, path) => fetch(`${runtime.url}/core-api/workspace`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-tinyide-session-id": sessionId,
+      },
+      body: JSON.stringify({ name, path }),
+    });
+    expect((await select("session-a", basename(workspaceRoot), workspaceRoot)).status).toBe(200);
+    expect((await select("session-b", basename(secondWorkspace), secondWorkspace)).status).toBe(200);
+
+    const context = async (sessionId) => fetch(`${runtime.url}/core-api/context`, {
+      headers: { "x-tinyide-session-id": sessionId },
+    }).then((response) => response.json());
+    await expect(context("session-a")).resolves.toEqual({ workspaceRoot });
+    await expect(context("session-b")).resolves.toEqual({ workspaceRoot: secondWorkspace });
   });
 
   it("opens only workspace directories in the system file manager", async () => {

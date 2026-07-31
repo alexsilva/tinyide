@@ -5,6 +5,7 @@ import type {
   PluginSettingsMap,
 } from "@tinyide/plugin-api";
 import type { DebugPanelLayoutSettings } from "./debug-panel";
+import { projectRuntimeFetch } from "./project-session";
 
 export interface WorkspaceExecutionProfiles {
   readonly profiles: readonly ExecutionProfile[];
@@ -48,7 +49,7 @@ function headers(workspaceRoot: string): HeadersInit {
 }
 
 export async function readWorkspaceSettings(workspaceRoot: string): Promise<WorkspaceSettings> {
-  const response = await fetch("/core-api/workspace/settings", {
+  const response = await projectRuntimeFetch("/core-api/workspace/settings", {
     cache: "no-store",
     headers: headers(workspaceRoot),
   });
@@ -65,7 +66,7 @@ export async function writeWorkspaceSettings(
   workspaceRoot: string,
   settings: WorkspaceSettings,
 ): Promise<WorkspaceSettings> {
-  const response = await fetch("/core-api/workspace/settings", {
+  const response = await projectRuntimeFetch("/core-api/workspace/settings", {
     method: "PUT",
     headers: headers(workspaceRoot),
     body: JSON.stringify(settings),

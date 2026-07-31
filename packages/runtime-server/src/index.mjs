@@ -21,6 +21,8 @@ const CONTENT_TYPES = {
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MANIFEST_CACHE_TTL_MS = 1000;
 const CDN_ORIGIN = "https://cdn.jsdelivr.net";
+const DEFAULT_SESSION_ID = "default";
+const SESSION_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 
 function validInlineScriptHashes(hashes) {
   if (!Array.isArray(hashes)) return [];
@@ -139,13 +141,12 @@ export function createTinyIdeRuntime(options) {
   const pluginsRoot = resolve(options.pluginsRoot ?? join(hostRoot, "plugins"));
   const webRoot = options.webRoot ? resolve(options.webRoot) : undefined;
   const workspaceSearchRoot = resolve(options.workspaceSearchRoot ?? process.env.TINYIDE_WORKSPACES_ROOT ?? dirname(hostRoot));
-  const backendHandlers = new Map();
   async function disposeBackendHandler(handler) {
     if (typeof handler?.dispose === "function") await handler.dispose();
   }
-  async function disposeCachedBackends() {
-    const handlers = [...new Set([...backendHandlers.values()].map((entry) => entry.handler))];
-    backendHandlers.clear();
+  async function disposeCachedBackends(context) {
+    const handlers = [...new Set([...context.backendHandlers.values()].map((entry) => entry.handler))];
+    context.backendHandlers.clear();
     await Promise.allSettled(handlers.map(disposeBackendHandler));
   }
   let manifestCache = { expiresAt: 0, descriptors: [] };
@@ -165,13 +166,41 @@ export function createTinyIdeRuntime(options) {
     return descriptors;
   }
 
-  let activeWorkspaceRoot = options.initialWorkspaceRoot
-    ? resolve(options.initialWorkspaceRoot)
-    : undefined;
-  const executionBackend = createExecutionBackend({ workspaceRoot: () => activeWorkspaceRoot });
+  const sessionContexts = new Map();
+  function createSessionContext(sessionId) {
+    const context = {
+      sessionId,
+      workspaceRoot: sessionId === DEFAULT_SESSION_ID && options.initialWorkspaceRoot
+        ? resolve(options.initialWorkspaceRoot)
+        : undefined,
+      backendHandlers: new Map(),
+      executionBackend: undefined,
+    };
+    context.executionBackend = createExecutionBackend({ workspaceRoot: () => context.workspaceRoot });
+    return context;
+  }
+  function sessionContext(sessionId = DEFAULT_SESSION_ID) {
+    let context = sessionContexts.get(sessionId);
+    if (!context) {
+      context = createSessionContext(sessionId);
+      sessionContexts.set(sessionId, context);
+    }
+    return context;
+  }
+  async function resetExecutionBackend(context) {
+    await context.executionBackend.dispose?.();
+    context.executionBackend = createExecutionBackend({ workspaceRoot: () => context.workspaceRoot });
+  }
+  function requestSessionId(request) {
+    const value = request.headers["x-tinyide-session-id"];
+    const sessionId = Array.isArray(value) ? value[0] : value;
+    if (!sessionId) return DEFAULT_SESSION_ID;
+    if (!SESSION_ID_PATTERN.test(sessionId)) throw new Error("Identificador de sessão inválido.");
+    return sessionId;
+  }
   const openInFileManager = options.openInFileManager ?? openSystemFileManager;
 
-  async function workspaceDirectoryForFileManager(workspacePath) {
+  async function workspaceDirectoryForFileManager(activeWorkspaceRoot, workspacePath) {
     if (!activeWorkspaceRoot) throw new Error("Abra um workspace antes de usar o gerenciador de arquivos.");
     if (typeof workspacePath !== "string" || workspacePath.includes("\0") || isAbsolute(workspacePath)) {
       throw new Error("Caminho de workspace inválido.");
@@ -241,7 +270,8 @@ export function createTinyIdeRuntime(options) {
     return candidate;
   }
 
-  async function resolveBackend(pluginId) {
+  async function resolveBackend(context, pluginId) {
+    const activeWorkspaceRoot = context.workspaceRoot;
     if (!activeWorkspaceRoot) throw new Error("Abra um workspace antes de usar este plugin.");
     for (const { directory, manifest } of cachedPluginDescriptors()) {
       if (manifest.id !== pluginId || !manifest.entrypoints?.backend) continue;
@@ -251,16 +281,16 @@ export function createTinyIdeRuntime(options) {
       }
       const backendMtime = statSync(backendPath).mtimeMs;
       const cacheKey = `${pluginId}:${activeWorkspaceRoot}`;
-      const cached = backendHandlers.get(cacheKey);
+      const cached = context.backendHandlers.get(cacheKey);
       if (cached?.mtime === backendMtime) return cached.handler;
       if (cached) {
-        backendHandlers.delete(cacheKey);
+        context.backendHandlers.delete(cacheKey);
         await disposeBackendHandler(cached.handler);
       }
       const imported = await import(`${pathToFileURL(backendPath).href}?v=${backendMtime}`);
       if (typeof imported.createBackend !== "function") throw new Error(`Plugin backend must export createBackend(): ${pluginId}`);
       const handler = imported.createBackend({workspaceRoot: activeWorkspaceRoot});
-      backendHandlers.set(cacheKey, {mtime: backendMtime, handler});
+      context.backendHandlers.set(cacheKey, {mtime: backendMtime, handler});
       return handler;
     }
     return undefined;
@@ -284,6 +314,13 @@ export function createTinyIdeRuntime(options) {
   }) => {
     applySecurityHeaders(response, cachedPluginDescriptors(), options.inlineScriptHashes);
     const requestUrl = new URL(request.url ?? "/", "http://localhost");
+    let context;
+    try {
+      context = sessionContext(requestSessionId(request));
+    } catch (error) {
+      writeJson(response, 400, {error: error instanceof Error ? error.message : String(error)});
+      return;
+    }
 
     if ((requestUrl.pathname.startsWith("/core-api/") || requestUrl.pathname.startsWith("/plugin-api/"))
       && !requestOriginAllowed(request)) {
@@ -294,11 +331,12 @@ export function createTinyIdeRuntime(options) {
     if (request.method === "POST" && requestUrl.pathname === "/core-api/workspace") {
       void readJson(request).then(async (payload) => {
         const nextWorkspaceRoot = resolveWorkspaceSelection(payload);
-        if (nextWorkspaceRoot !== activeWorkspaceRoot) {
-          await disposeCachedBackends();
-          activeWorkspaceRoot = nextWorkspaceRoot;
+        if (nextWorkspaceRoot !== context.workspaceRoot) {
+          await disposeCachedBackends(context);
+          await resetExecutionBackend(context);
+          context.workspaceRoot = nextWorkspaceRoot;
         }
-        writeJson(response, 200, {workspaceRoot: activeWorkspaceRoot});
+        writeJson(response, 200, {workspaceRoot: context.workspaceRoot});
       }).catch((error) => writeJson(
         response,
         Number.isInteger(error?.statusCode) ? error.statusCode : 400,
@@ -308,8 +346,10 @@ export function createTinyIdeRuntime(options) {
     }
 
     if (request.method === "DELETE" && requestUrl.pathname === "/core-api/workspace") {
-      void disposeCachedBackends().then(() => {
-        activeWorkspaceRoot = undefined;
+      void disposeCachedBackends(context).then(() => {
+        return resetExecutionBackend(context);
+      }).then(() => {
+        context.workspaceRoot = undefined;
         writeJson(response, 204, undefined);
       }).catch((error) => writeJson(response, 500, {error: error instanceof Error ? error.message : String(error)}));
       return;
@@ -317,7 +357,7 @@ export function createTinyIdeRuntime(options) {
 
     if (request.method === "POST" && requestUrl.pathname === "/core-api/workspace/open-in-file-manager") {
       void readJson(request).then(async (payload) => {
-        const directory = await workspaceDirectoryForFileManager(payload.path ?? "");
+        const directory = await workspaceDirectoryForFileManager(context.workspaceRoot, payload.path ?? "");
         await openInFileManager(directory);
         writeJson(response, 200, { directory });
       }).catch((error) => writeJson(
@@ -329,12 +369,12 @@ export function createTinyIdeRuntime(options) {
     }
 
     if (requestUrl.pathname.startsWith("/core-api/")) {
-      void executionBackend(request, response, requestUrl.pathname.slice("/core-api".length));
+      void context.executionBackend(request, response, requestUrl.pathname.slice("/core-api".length));
       return;
     }
 
     if (requestUrl.pathname.startsWith("/plugin-api/")) {
-      if (!activeWorkspaceRoot) {
+      if (!context.workspaceRoot) {
         writeJson(response, 409, {error: "Abra um workspace antes de usar este plugin."});
         return;
       }
@@ -351,7 +391,7 @@ export function createTinyIdeRuntime(options) {
         return;
       }
       const relativePath = `/${segments.join("/")}`;
-      void resolveBackend(pluginId).then((handler) => {
+      void resolveBackend(context, pluginId).then((handler) => {
         if (!handler) {
           writeJson(response, 404, {error: "Plugin backend not found."});
           return;
@@ -408,22 +448,25 @@ export function createTinyIdeRuntime(options) {
     middleware,
     pluginsRoot,
     webRoot,
-    get workspaceRoot() { return activeWorkspaceRoot; },
+    get workspaceRoot() { return sessionContext().workspaceRoot; },
     setWorkspaceRoot(path) {
+      const context = sessionContext();
       const nextWorkspaceRoot = path ? resolve(path) : undefined;
-      if (nextWorkspaceRoot !== activeWorkspaceRoot) {
-        activeWorkspaceRoot = nextWorkspaceRoot;
-        void disposeCachedBackends();
+      if (nextWorkspaceRoot !== context.workspaceRoot) {
+        void resetExecutionBackend(context);
+        context.workspaceRoot = nextWorkspaceRoot;
+        void disposeCachedBackends(context);
       }
-      return activeWorkspaceRoot;
+      return context.workspaceRoot;
     },
-    clearBackendCache() { return disposeCachedBackends(); },
+    clearBackendCache() { return disposeCachedBackends(sessionContext()); },
     clearManifestCache() { manifestCache = { expiresAt: 0, descriptors: [] }; },
     async dispose() {
-      await Promise.allSettled([
-        executionBackend.dispose?.(),
-        disposeCachedBackends(),
-      ]);
+      await Promise.allSettled([...sessionContexts.values()].flatMap((context) => [
+        context.executionBackend.dispose?.(),
+        disposeCachedBackends(context),
+      ]));
+      sessionContexts.clear();
     },
   };
 }

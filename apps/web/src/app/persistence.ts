@@ -18,9 +18,10 @@ import {
   isActivityButtonPlacement,
   type ActivityButtonPlacements,
 } from "./activity-layout";
+import { projectSessionStateKey } from "./project-session";
 
-const SESSION_KEY = "tinyide.react.session.v2";
-const DESKTOP_SESSION_STATE_KEY = "ui-session";
+const SESSION_KEY = () => projectSessionStateKey("tinyide.react.session.v2");
+const DESKTOP_SESSION_STATE_KEY = () => projectSessionStateKey("ui-session");
 
 export type PersistedSidebarView = string;
 
@@ -217,10 +218,10 @@ function normalizeSession(value: unknown): SessionState {
 
 export function readSession(): SessionState {
   try {
-    const raw = localStorage.getItem(SESSION_KEY);
+    const raw = localStorage.getItem(SESSION_KEY());
     return raw ? normalizeSession(JSON.parse(raw)) : defaultSession();
   } catch {
-    localStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem(SESSION_KEY());
     return defaultSession();
   }
 }
@@ -229,7 +230,7 @@ export async function readPersistedSession(): Promise<SessionState> {
   const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
   if (desktop?.readState) {
     try {
-      const stored = await desktop.readState(DESKTOP_SESSION_STATE_KEY);
+      const stored = await desktop.readState(DESKTOP_SESSION_STATE_KEY());
       if (stored !== undefined) return normalizeSession(stored);
     } catch (error) {
       console.warn("Não foi possível restaurar a sessão visual do desktop.", error);
@@ -239,10 +240,10 @@ export async function readPersistedSession(): Promise<SessionState> {
 }
 
 export function writeSession(session: SessionState): void {
-  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  localStorage.setItem(SESSION_KEY(), JSON.stringify(session));
   const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
   if (desktop?.writeState) {
-    void desktop.writeState(DESKTOP_SESSION_STATE_KEY, session).catch((error) => {
+    void desktop.writeState(DESKTOP_SESSION_STATE_KEY(), session).catch((error) => {
       console.warn("Não foi possível persistir a sessão visual do desktop.", error);
     });
   }

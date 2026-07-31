@@ -3,6 +3,7 @@ import type {
   BrowserFileHandle,
   BrowserWritableFileStream,
 } from "../browser-filesystem";
+import { projectRuntimeFetch } from "./project-session";
 
 interface DesktopWorkspaceDescriptor {
   readonly token: string;
@@ -34,12 +35,15 @@ export interface TinyIdeDesktopApi {
   pickDirectory?(): Promise<DesktopWorkspaceDescriptor | undefined>;
   restoreDirectory?(path: string): Promise<DesktopWorkspaceDescriptor | undefined>;
   restoreLastDirectory?(): Promise<DesktopWorkspaceDescriptor | undefined>;
+  openProjectWindow?(path: string, sessionId: string): Promise<boolean>;
   listDirectory?(token: string, path: string): Promise<readonly DesktopWorkspaceEntryDescriptor[]>;
   ensureFile?(token: string, path: string, create: boolean): Promise<boolean>;
   ensureDirectory?(token: string, path: string, create: boolean): Promise<boolean>;
   readFile?(token: string, path: string): Promise<DesktopFilePayload>;
   writeFile?(token: string, path: string, bytes: ArrayBuffer): Promise<boolean>;
   removeEntry?(token: string, path: string, recursive: boolean): Promise<boolean>;
+  copyWorkspaceResources?(workspaceRoot: string, paths: readonly string[]): Promise<boolean>;
+  pasteWorkspaceResources?(workspaceRoot: string, targetPath: string): Promise<readonly DesktopClipboardEntry[]>;
   subscribeWorkspaceChanges?(listener: (change: DesktopWorkspaceChange) => void): () => void;
   openInFileManager?(workspaceRoot: string, path: string): Promise<boolean>;
 }
@@ -195,7 +199,7 @@ export async function openInSystemFileManager(workspaceRoot: string, path = ""):
   if (desktop?.openInFileManager) {
     return await desktop.openInFileManager(workspaceRoot, path);
   }
-  const response = await fetch("/core-api/workspace/open-in-file-manager", {
+  const response = await projectRuntimeFetch("/core-api/workspace/open-in-file-manager", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ path }),
@@ -239,6 +243,12 @@ export async function restoreLastDesktopWorkspaceHandle(
   if (!supportsDesktopWorkspace(desktop) || !desktop.restoreLastDirectory) return undefined;
   const descriptor = await desktop.restoreLastDirectory();
   return descriptor ? new DesktopDirectoryHandleImpl(desktop, descriptor) : undefined;
+}
+
+export async function openDesktopProjectWindow(path: string, sessionId: string): Promise<boolean> {
+  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
+  if (!desktop?.openProjectWindow) return false;
+  return desktop.openProjectWindow(path, sessionId);
 }
 
 function parentPath(path: string): string | undefined {

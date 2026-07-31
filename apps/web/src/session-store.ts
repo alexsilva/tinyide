@@ -1,7 +1,9 @@
 const DATABASE_NAME = "tinyide-state";
 const DATABASE_VERSION = 1;
 const STORE_NAME = "session";
-const SNAPSHOT_KEY = "application-snapshot";
+import { projectSessionStateKey } from "./app/project-session";
+
+const SNAPSHOT_KEY = () => projectSessionStateKey("application-snapshot");
 
 let databasePromise: Promise<IDBDatabase> | undefined;
 
@@ -61,11 +63,11 @@ function openDatabase(): Promise<IDBDatabase> {
 
 export async function readApplicationSnapshot<T>(): Promise<T | undefined> {
   const desktop = window.tinyideDesktop;
-  if (desktop?.readState) return await desktop.readState(SNAPSHOT_KEY) as T | undefined;
+  if (desktop?.readState) return await desktop.readState(SNAPSHOT_KEY()) as T | undefined;
   const database = await openDatabase();
   const transaction = database.transaction(STORE_NAME, "readonly");
   const completed = transactionCompleted(transaction);
-  const value = await requestResult(transaction.objectStore(STORE_NAME).get(SNAPSHOT_KEY));
+  const value = await requestResult(transaction.objectStore(STORE_NAME).get(SNAPSHOT_KEY()));
   await completed;
   return value as T | undefined;
 }
@@ -73,25 +75,62 @@ export async function readApplicationSnapshot<T>(): Promise<T | undefined> {
 export async function writeApplicationSnapshot<T>(snapshot: T): Promise<void> {
   const desktop = window.tinyideDesktop;
   if (desktop?.writeState) {
-    await desktop.writeState(SNAPSHOT_KEY, snapshot);
+    await desktop.writeState(SNAPSHOT_KEY(), snapshot);
     return;
   }
   const database = await openDatabase();
   const transaction = database.transaction(STORE_NAME, "readwrite");
   const completed = transactionCompleted(transaction);
-  await requestResult(transaction.objectStore(STORE_NAME).put(snapshot, SNAPSHOT_KEY));
+  await requestResult(transaction.objectStore(STORE_NAME).put(snapshot, SNAPSHOT_KEY()));
   await completed;
 }
 
 export async function clearApplicationSnapshot(): Promise<void> {
   const desktop = window.tinyideDesktop;
   if (desktop?.removeState) {
-    await desktop.removeState(SNAPSHOT_KEY);
+    await desktop.removeState(SNAPSHOT_KEY());
     return;
   }
   const database = await openDatabase();
   const transaction = database.transaction(STORE_NAME, "readwrite");
   const completed = transactionCompleted(transaction);
-  await requestResult(transaction.objectStore(STORE_NAME).delete(SNAPSHOT_KEY));
+  await requestResult(transaction.objectStore(STORE_NAME).delete(SNAPSHOT_KEY()));
+  await completed;
+}
+
+export async function readStoredState<T>(key: string): Promise<T | undefined> {
+  const desktop = window.tinyideDesktop;
+  if (desktop?.readState) return await desktop.readState(key) as T | undefined;
+  const database = await openDatabase();
+  const transaction = database.transaction(STORE_NAME, "readonly");
+  const completed = transactionCompleted(transaction);
+  const value = await requestResult(transaction.objectStore(STORE_NAME).get(key));
+  await completed;
+  return value as T | undefined;
+}
+
+export async function writeStoredState<T>(key: string, value: T): Promise<void> {
+  const desktop = window.tinyideDesktop;
+  if (desktop?.writeState) {
+    await desktop.writeState(key, value);
+    return;
+  }
+  const database = await openDatabase();
+  const transaction = database.transaction(STORE_NAME, "readwrite");
+  const completed = transactionCompleted(transaction);
+  await requestResult(transaction.objectStore(STORE_NAME).put(value, key));
+  await completed;
+}
+
+export async function removeStoredState(key: string): Promise<void> {
+  const desktop = window.tinyideDesktop;
+  if (desktop?.removeState) {
+    await desktop.removeState(key);
+    return;
+  }
+  const database = await openDatabase();
+  const transaction = database.transaction(STORE_NAME, "readwrite");
+  const completed = transactionCompleted(transaction);
+  await requestResult(transaction.objectStore(STORE_NAME).delete(key));
   await completed;
 }

@@ -61,6 +61,7 @@ import {
 } from "react";
 import { formatCommandLineArguments, parseCommandLineArguments } from "@tinyide/core";
 import { WorkbenchDialogHost } from "./workbench-dialog-host";
+import { ProjectOpenDialog } from "./ProjectOpenDialog";
 import {
   ExecutionViewHost,
   readOpenDocumentBlob,
@@ -274,14 +275,34 @@ import {
   type DebugOutputOffsets,
 } from "./debug-panel";
 import {
+  copyWorkspaceResourcesToSystem,
   openInSystemFileManager,
+  openDesktopProjectWindow,
   isDesktopHost,
   isDesktopWorkspaceHandle,
+  pasteSystemResourcesIntoWorkspace,
   pickWorkspaceDirectory,
   restoreDesktopWorkspaceHandle,
   restoreLastDesktopWorkspaceHandle,
+  supportsSystemResourceClipboard,
   workspaceRootHintForHandle,
 } from "./workspace-host";
+import {
+  classifyOpenedDirectory,
+  readProjectOpenPreference,
+  readRecentProjects,
+  recentProjectHandle,
+  rememberRecentProject,
+  removeRecentProject,
+  writeProjectOpenPreference,
+  type ProjectOpenTarget,
+  type RecentProject,
+} from "./project-history";
+import {
+  createProjectSessionId,
+  projectWindowUrl,
+  requestedProjectReference,
+} from "./project-session";
 import {
   resolvePluginSettingValues,
   updatePluginSettingValue,
@@ -599,6 +620,11 @@ export function App() {
   const [settingsSectionId, setSettingsSectionId] = useState("editor");
   const [pluginSettingsDraft, setPluginSettingsDraft] = useState<PluginSettingValues>({});
   const [workbenchDialog, setWorkbenchDialog] = useState<ActiveWorkbenchDialog>();
+  const [projectOpenDialog, setProjectOpenDialog] = useState(false);
+  const [recentProjects, setRecentProjects] = useState<readonly RecentProject[]>([]);
+  const [projectOpenTarget, setProjectOpenTarget] = useState<Exclude<ProjectOpenTarget, "ask">>("current");
+  const [rememberProjectOpenTarget, setRememberProjectOpenTarget] = useState(false);
+  const [projectOpenBusy, setProjectOpenBusy] = useState(false);
   const [editorLineDecorations, setEditorLineDecorations] = useState<readonly TextEditorLineDecoration[]>([]);
   const [selectedEditorLineDecoration, setSelectedEditorLineDecoration] = useState<TextEditorLineDecoration>();
   const [editorDecorationRevision, setEditorDecorationRevision] = useState(0);
@@ -1468,7 +1494,26 @@ export function App() {
         let restoredWorkspaceName = snapshot?.workspaceName ?? persistedSession.workspaceName;
         let restoredWorkspaceRoot = snapshot?.workspaceRoot ?? persistedSession.workspaceRoot;
         let restoredWorkspaceHandle = isDesktopHost() ? undefined : snapshot?.workspaceHandle;
-        if (isDesktopHost()) {
+        const requestedProject = requestedProjectReference();
+        if (requestedProject) {
+          if (requestedProject.startsWith("path:") && isDesktopHost()) {
+            const requestedPath = requestedProject.slice("path:".length);
+            restoredWorkspaceHandle = await restoreDesktopWorkspaceHandle(requestedPath);
+            restoredWorkspaceRoot = requestedPath;
+          } else {
+            const requestedRecent = (await readRecentProjects()).find((project) => project.id === requestedProject);
+            if (requestedRecent) {
+              restoredWorkspaceHandle = await recentProjectHandle(requestedRecent);
+              restoredWorkspaceRoot = requestedRecent.path;
+            }
+          }
+          if (!restoredWorkspaceHandle) throw new Error("O projeto solicitado não está mais disponível.");
+          restoredWorkspaceName = restoredWorkspaceHandle.name;
+          restoredWorkspaceRoot = restoredWorkspaceRoot ?? await workspaceRootHintForHandle(restoredWorkspaceHandle);
+          const url = new URL(window.location.href);
+          url.searchParams.delete("tinyideOpenProject");
+          window.history.replaceState(null, "", url.href);
+        } else if (isDesktopHost()) {
           if (restoredWorkspaceRoot) {
             restoredWorkspaceHandle = await restoreDesktopWorkspaceHandle(restoredWorkspaceRoot).catch(() => undefined);
           } else {
@@ -1843,18 +1888,178 @@ export function App() {
   };
   updateProfilesRef.current = updateProfiles;
 
-  const openFolder = async () => {
-    const handle = await pickWorkspaceDirectory();
-    const workspaceRootHint = await workspaceRootHintForHandle(handle);
+  const resetProjectDependentState = () => {
+    setDocuments([]);
+    setActiveDocumentId(undefined);
+    setDiagnostics([]);
+    setHoveredDiagnosticLine(undefined);
+    setEditorLineDecorations([]);
+    setSelectedEditorLineDecoration(undefined);
+    setResourceDecorations(new Map());
+    setOutput([]);
+    setExpanded(new Set());
+    setExplorerRevealedHiddenPaths(new Set());
+    setSelectedExplorerPath(undefined);
+    setSelectedExplorerPaths(new Set());
+    setHighlightedExplorerPath(undefined);
+    setExplorerHistory(createExplorerHistoryState());
+    setEnvironmentForm(undefined);
+    setEditingEnvironmentId(undefined);
+    setPackageManagerEnvironmentId(undefined);
+    setEnvironmentPath("");
+    setProfileExecutions({});
+    setResumedProfileProcesses([]);
+    setOpenProfileTabIds([]);
+    setClosingProfileTabIds(new Set());
+    setActiveProcessId(undefined);
+    setResumedProcessId(undefined);
+    setDebugSession(undefined);
+    setDebugAdapter(undefined);
+    setDebugBreakpoints([]);
+    setPanelVisible(false);
+    setToolWindowVisible(false);
+    setActiveToolWindowId(undefined);
+    profileRunCancellationRef.current.clear();
+    profileRunPromiseRef.current.clear();
+    debugRestartPromiseRef.current = undefined;
+  };
+
+  const activateProject = async (handle: BrowserDirectoryHandle, knownRoot?: string): Promise<boolean> => {
+    const dirtyDocuments = documentsRef.current.filter((document) => document.content !== document.savedContent);
+    if (dirtyDocuments.length && !window.confirm(
+      `${dirtyDocuments.length === 1 ? "Há um arquivo não salvo" : `Há ${dirtyDocuments.length} arquivos não salvos`}. Abrir outro projeto na tela atual descartará essas alterações. Continuar?`,
+    )) return false;
+    const rootEntries = await listDirectory(handle);
+    const workspaceRootHint = knownRoot ?? await workspaceRootHintForHandle(handle);
     const hostWorkspace = await setHostWorkspace(handle.name, workspaceRootHint);
     const localSettings = await loadLocalWorkspaceSettings(handle.name, hostWorkspace.workspaceRoot);
+    resetProjectDependentState();
     setWorkspaceHandle(handle);
     setWorkspaceName(handle.name);
     setWorkspaceRoot(hostWorkspace.workspaceRoot);
-    setEntries(await listDirectory(handle));
-    setExpanded(new Set());
+    setEntries(rootEntries);
     setWorkspaceAccess("ready");
     await refreshEnvironments(localSettings.environment?.selectedId, hostWorkspace.workspaceRoot);
+    await rememberRecentProject({
+      handle,
+      ...(workspaceRootHint ? { path: workspaceRootHint } : {}),
+      kind: classifyOpenedDirectory(rootEntries),
+    });
+    setRecentProjects(await readRecentProjects());
+    return true;
+  };
+
+  const persistProjectOpenChoice = async (
+    target: Exclude<ProjectOpenTarget, "ask"> = projectOpenTarget,
+  ) => {
+    if (rememberProjectOpenTarget) await writeProjectOpenPreference(target);
+  };
+
+  const openProjectInTarget = async (
+    handle: BrowserDirectoryHandle,
+    recentProject?: RecentProject,
+    reservedBrowserTab?: Window | null,
+    target: Exclude<ProjectOpenTarget, "ask"> = projectOpenTarget,
+  ) => {
+    const rootEntries = recentProject ? undefined : await listDirectory(handle);
+    const root = recentProject?.path ?? await workspaceRootHintForHandle(handle);
+    const remembered = recentProject ?? await rememberRecentProject({
+      handle,
+      ...(root ? { path: root } : {}),
+      kind: classifyOpenedDirectory(rootEntries ?? []),
+    });
+    await persistProjectOpenChoice(target);
+    if (target === "current") {
+      if (await activateProject(handle, root)) setProjectOpenDialog(false);
+      return;
+    }
+    const sessionId = createProjectSessionId();
+    if (isDesktopHost()) {
+      if (!root) throw new Error("O app empacotado exige o caminho local do projeto.");
+      await openDesktopProjectWindow(root, sessionId);
+    } else {
+      const opened = reservedBrowserTab ?? window.open("about:blank", "_blank");
+      if (!opened) throw new Error("O navegador bloqueou a abertura da nova aba.");
+      opened.opener = null;
+      opened.location.href = projectWindowUrl({ sessionId, pendingProjectId: remembered.id });
+    }
+    setRecentProjects(await readRecentProjects());
+    setProjectOpenDialog(false);
+  };
+
+  const chooseProjectDirectory = async () => {
+    const reservedBrowserTab = projectOpenTarget === "new" && !isDesktopHost()
+      ? window.open("about:blank", "_blank")
+      : undefined;
+    setProjectOpenBusy(true);
+    try {
+      const handle = await pickWorkspaceDirectory();
+      await openProjectInTarget(handle, undefined, reservedBrowserTab);
+    } catch (cause) {
+      reservedBrowserTab?.close();
+      throw cause;
+    } finally {
+      setProjectOpenBusy(false);
+    }
+  };
+
+  const openRecentProject = async (
+    project: RecentProject,
+    target: Exclude<ProjectOpenTarget, "ask"> = projectOpenTarget,
+  ) => {
+    const reservedBrowserTab = target === "new" && !isDesktopHost()
+      ? window.open("about:blank", "_blank")
+      : undefined;
+    setProjectOpenBusy(true);
+    try {
+      if (target === "new") {
+        await persistProjectOpenChoice(target);
+        const sessionId = createProjectSessionId();
+        if (isDesktopHost()) {
+          if (!project.path) throw new Error("O caminho deste projeto recente não está mais disponível.");
+          await openDesktopProjectWindow(project.path, sessionId);
+        } else {
+          if (!reservedBrowserTab) throw new Error("O navegador bloqueou a abertura da nova aba.");
+          reservedBrowserTab.opener = null;
+          reservedBrowserTab.location.href = projectWindowUrl({ sessionId, pendingProjectId: project.id });
+        }
+        setProjectOpenDialog(false);
+        return;
+      }
+      const handle = project.path && isDesktopHost()
+        ? await restoreDesktopWorkspaceHandle(project.path)
+        : await recentProjectHandle(project);
+      if (!handle) throw new Error("O projeto recente não está mais disponível ou perdeu permissão de acesso.");
+      await openProjectInTarget(handle, project, undefined, target);
+    } catch (cause) {
+      reservedBrowserTab?.close();
+      throw cause;
+    } finally {
+      setProjectOpenBusy(false);
+    }
+  };
+
+  const loadProjectOpeningState = async () => {
+    const [recent, preference] = await Promise.all([
+      readRecentProjects(),
+      readProjectOpenPreference(),
+    ]);
+    setRecentProjects(recent);
+    setProjectOpenTarget(preference === "new" ? "new" : "current");
+    setRememberProjectOpenTarget(preference !== "ask");
+  };
+
+  const openProjectDialog = async () => {
+    await loadProjectOpeningState();
+    setProjectOpenDialog(true);
+  };
+
+  const openRecentProjectFromMenu = async (project: RecentProject) => {
+    const preference = await readProjectOpenPreference();
+    const target = preference === "new" ? "new" : "current";
+    setProjectOpenTarget(target);
+    setRememberProjectOpenTarget(preference !== "ask");
+    await openRecentProject(project, target);
   };
 
   const reconnectWorkspace = async () => {
@@ -4609,10 +4814,10 @@ export function App() {
                         ? "O acesso ao workspace precisa ser restaurado."
                         : "O workspace salvo não está mais disponível."}</p>
                       {workspaceAccess === "permission-required" && workspaceHandle
-                        ? <button className="button primary compact" type="button" onClick={() => invoke(reconnectWorkspace)}>Reconectar pasta</button>
+                        ? <button className="button primary compact" type="button" onClick={() => invoke(reconnectWorkspace)}>Reconectar projeto</button>
                         : null}
                       {workspaceAccess === "missing"
-                        ? <button className="button primary compact" type="button" onClick={() => invoke(openFolder)}>Reabrir pasta</button>
+                        ? <button className="button primary compact" type="button" onClick={() => invoke(openProjectDialog)}>Reabrir projeto</button>
                         : null}
                     </div>
                   ) : entries.length || (explorerCreation && explorerCreationParentPath === "") ? (
@@ -4667,7 +4872,7 @@ export function App() {
                     />
                   ) : (
                     <div className="empty-sidebar">
-                      <p>Nenhum arquivo ou pasta aberto.</p>
+                      <p>Nenhum projeto aberto.</p>
                     </div>
                   )}
                 </div>
@@ -4890,6 +5095,42 @@ export function App() {
       <div className="ide-shell">
         <header className="titlebar">
           <div className="app-brand"><img src="/icon.png" alt="tinyIde" /></div>
+          <DropdownMenu.Root onOpenChange={(open) => {
+            if (open) invoke(loadProjectOpeningState);
+          }}>
+            <DropdownMenu.Trigger asChild>
+              <button className="menu-button" type="button">
+                Projeto <ChevronDown size={13} />
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content className="menu-content" align="start" sideOffset={6}>
+                <DropdownMenu.Item className="menu-item" onSelect={() => invoke(openProjectDialog)}>
+                  <FolderOpen size={15} /> Abrir projeto...
+                </DropdownMenu.Item>
+                <DropdownMenu.Separator className="menu-separator" />
+                <DropdownMenu.Item className="menu-item" disabled>
+                  <History size={15} /> Projetos recentes
+                </DropdownMenu.Item>
+                {recentProjects.slice(0, 10).map((project) => (
+                  <DropdownMenu.Item
+                    className="menu-item"
+                    key={project.id}
+                    onSelect={() => invoke(() => openRecentProjectFromMenu(project))}
+                  >
+                    <FolderRoot size={15} />
+                    <span>{project.name}</span>
+                    {project.path ? <span className="menu-item__hint">{project.path}</span> : null}
+                  </DropdownMenu.Item>
+                ))}
+                {!recentProjects.length ? (
+                  <DropdownMenu.Item className="menu-item" disabled>
+                    Nenhum projeto recente
+                  </DropdownMenu.Item>
+                ) : null}
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button className="menu-button" type="button">
@@ -4935,9 +5176,6 @@ export function App() {
                 )}
                 <DropdownMenu.Item className="menu-item" onSelect={() => invoke(openSingleFile)}>
                   <File size={15} /> Abrir arquivo
-                </DropdownMenu.Item>
-                <DropdownMenu.Item className="menu-item" onSelect={() => invoke(openFolder)}>
-                  <FolderOpen size={15} /> Abrir pasta
                 </DropdownMenu.Item>
                 <DropdownMenu.Separator className="menu-separator" />
                 <DropdownMenu.Item className="menu-item" onSelect={() => invoke(saveDocument)}>
@@ -5479,7 +5717,7 @@ export function App() {
                     <button className="button primary" type="button" onClick={() => newDocument()}><FilePlus2 size={16} /> Novo arquivo</button>
                   )}
                   <button className="button secondary" type="button" onClick={() => invoke(openSingleFile)}><File size={16} /> Abrir arquivo</button>
-                  <button className="button secondary" type="button" onClick={() => invoke(openFolder)}><FolderOpen size={16} /> Abrir pasta</button>
+                  <button className="button secondary" type="button" onClick={() => invoke(openProjectDialog)}><FolderOpen size={16} /> Abrir projeto</button>
                 </div>
                 <small>Atalhos: Ctrl+N, Ctrl+O, Ctrl+S e Ctrl+Shift+S</small>
               </div>
@@ -6177,6 +6415,25 @@ export function App() {
               })}
             </div>
           </>
+        ) : null}
+
+        {projectOpenDialog ? (
+          <ProjectOpenDialog
+            recentProjects={recentProjects}
+            target={projectOpenTarget}
+            rememberChoice={rememberProjectOpenTarget}
+            desktop={isDesktopHost()}
+            busy={projectOpenBusy}
+            onTargetChange={setProjectOpenTarget}
+            onRememberChoiceChange={setRememberProjectOpenTarget}
+            onChooseProject={() => invoke(chooseProjectDirectory)}
+            onOpenRecent={(project) => invoke(() => openRecentProject(project))}
+            onRemoveRecent={(project) => invoke(async () => {
+              await removeRecentProject(project.id);
+              setRecentProjects(await readRecentProjects());
+            })}
+            onClose={() => setProjectOpenDialog(false)}
+          />
         ) : null}
 
         {error ? (

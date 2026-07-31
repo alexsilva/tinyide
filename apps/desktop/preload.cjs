@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld("tinyideDesktop", {
   restoreLastDirectory() {
     return ipcRenderer.invoke("tinyide:workspace:restore-last");
   },
+  openProjectWindow(path, sessionId) {
+    return ipcRenderer.invoke("tinyide:workspace:open-window", path, sessionId);
+  },
   listDirectory(token, path) {
     return ipcRenderer.invoke("tinyide:workspace:list", token, path);
   },

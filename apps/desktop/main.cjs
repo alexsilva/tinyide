@@ -22,7 +22,7 @@ let runtime;
 let mainWindow;
 let browserExtensionGuard;
 const desktopWorkspaces = new Map();
-let desktopWorkspaceWatcher;
+const desktopWorkspaceWatchers = new Map();
 const LAST_WORKSPACE_STATE_KEY = "last-workspace";
 
 function desktopStateRoot() {
@@ -61,16 +61,15 @@ async function registerDesktopWorkspace(rootPath, { persist = true } = {}) {
     throw new Error("O diretório selecionado não está disponível.");
   }
   const token = randomUUID();
-  if (desktopWorkspaceWatcher) await desktopWorkspaceWatcher.close();
-  desktopWorkspaces.clear();
   desktopWorkspaces.set(token, root);
-  desktopWorkspaceWatcher = createWorkspaceWatcher(root, (paths) => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    mainWindow.webContents.send("tinyide:workspace:changed", {
-      workspaceRoot: root,
-      paths,
-    });
-  });
+  if (!desktopWorkspaceWatchers.has(root)) {
+    desktopWorkspaceWatchers.set(root, createWorkspaceWatcher(root, (paths) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (window.isDestroyed()) continue;
+        window.webContents.send("tinyide:workspace:changed", { workspaceRoot: root, paths });
+      }
+    }));
+  }
   if (persist) {
     await writeDesktopState(desktopStateRoot(), LAST_WORKSPACE_STATE_KEY, { path: root });
   }
@@ -116,6 +115,19 @@ function installDesktopFileSystemHandlers() {
       await removeDesktopState(stateRoot, LAST_WORKSPACE_STATE_KEY);
       return undefined;
     }
+  });
+
+  ipcMain.handle("tinyide:workspace:open-window", async (_event, rootPath, sessionId) => {
+    if (typeof rootPath !== "string" || !rootPath.trim()) throw new Error("O caminho do projeto é obrigatório.");
+    if (typeof sessionId !== "string" || !/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(sessionId)) {
+      throw new Error("Identificador de sessão inválido.");
+    }
+    const descriptor = await registerDesktopWorkspace(rootPath.trim());
+    const target = new URL(runtime.url);
+    target.searchParams.set("tinyideSession", sessionId);
+    target.searchParams.set("tinyideOpenProject", `path:${descriptor.path}`);
+    createWindow(target.href);
+    return true;
   });
 
   ipcMain.handle("tinyide:workspace:list", async (_event, token, workspacePath) => {
@@ -288,7 +300,8 @@ if (isPrimaryInstance) {
 
   installGracefulShutdown(app, async () => {
     browserExtensionGuard?.dispose();
-    if (desktopWorkspaceWatcher) await desktopWorkspaceWatcher.close();
+    await Promise.allSettled([...desktopWorkspaceWatchers.values()].map((watcher) => watcher.close()));
+    desktopWorkspaceWatchers.clear();
     if (runtime) await runtime.close();
   });
 }

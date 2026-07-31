@@ -33,6 +33,7 @@ import { appendExecutionOutput } from "./execution/execution-output-buffer";
 import { pluginLanguageProviderFor } from "./generic-syntax";
 import { platform } from "./platform";
 import { setActiveHostWorkspaceRoot } from "./host-workspace-state";
+import { projectRuntimeFetch } from "./project-session";
 
 export interface HostProcessSnapshot {
   readonly id: string;
@@ -300,7 +301,7 @@ export async function lintDocument(
 }
 
 export async function readHostContext(): Promise<{ readonly workspaceRoot: string }> {
-  const response = await fetch("/core-api/context", { cache: "no-store" });
+  const response = await projectRuntimeFetch("/core-api/context", { cache: "no-store" });
   if (!response.ok) throw new Error("Não foi possível obter o contexto de execução do host.");
   const context = await response.json() as { readonly workspaceRoot: string };
   setActiveHostWorkspaceRoot(context.workspaceRoot);
@@ -311,7 +312,7 @@ export async function setHostWorkspace(
   workspaceName: string,
   workspaceRootHint?: string,
 ): Promise<{ readonly workspaceRoot: string }> {
-  const response = await fetch("/core-api/workspace", {
+  const response = await projectRuntimeFetch("/core-api/workspace", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -329,7 +330,7 @@ export async function setHostWorkspace(
 
 export async function clearHostWorkspace(): Promise<void> {
   setActiveHostWorkspaceRoot(undefined);
-  const response = await fetch("/core-api/workspace", { method: "DELETE" });
+  const response = await projectRuntimeFetch("/core-api/workspace", { method: "DELETE" });
   if (!response.ok && response.status !== 204) {
     const payload = await response.json().catch(() => undefined) as { readonly error?: string } | undefined;
     throw new Error(payload?.error ?? "Não foi possível limpar o workspace ativo no host.");
@@ -337,7 +338,7 @@ export async function clearHostWorkspace(): Promise<void> {
 }
 
 export async function startHostProcess(request: HostProcessStartRequest): Promise<HostProcessSnapshot> {
-  const response = await fetch("/core-api/execution/processes", {
+  const response = await projectRuntimeFetch("/core-api/execution/processes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
@@ -350,7 +351,7 @@ export async function startHostProcess(request: HostProcessStartRequest): Promis
 }
 
 export async function listHostProcesses(): Promise<readonly HostProcessSnapshot[]> {
-  const response = await fetch("/core-api/execution/processes", { cache: "no-store" });
+  const response = await projectRuntimeFetch("/core-api/execution/processes", { cache: "no-store" });
   const payload = await response.json() as readonly HostProcessSnapshot[] | { readonly error?: string };
   if (!response.ok) {
     const errorPayload = payload as { readonly error?: string };
@@ -360,7 +361,7 @@ export async function listHostProcesses(): Promise<readonly HostProcessSnapshot[
 }
 
 export async function readHostProcess(id: string): Promise<HostProcessSnapshot> {
-  const response = await fetch(`/core-api/execution/processes/${encodeURIComponent(id)}`, {
+  const response = await projectRuntimeFetch(`/core-api/execution/processes/${encodeURIComponent(id)}`, {
     cache: "no-store",
   });
   const payload = await response.json() as HostProcessSnapshot | { readonly error?: string };
@@ -375,7 +376,7 @@ export async function updateHostProcessData(
   providerId: string,
   data: unknown,
 ): Promise<HostProcessSnapshot> {
-  const response = await fetch(`/core-api/execution/processes/${encodeURIComponent(id)}/data`, {
+  const response = await projectRuntimeFetch(`/core-api/execution/processes/${encodeURIComponent(id)}/data`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ providerId, data }),
@@ -388,7 +389,7 @@ export async function updateHostProcessData(
 }
 
 export async function readHostProcessOutput(id: string, cursor: number): Promise<HostProcessOutputDelta> {
-  const response = await fetch(
+  const response = await projectRuntimeFetch(
     `/core-api/execution/processes/${encodeURIComponent(id)}/output?cursor=${Math.max(0, Math.trunc(cursor))}`,
     { cache: "no-store" },
   );
@@ -400,7 +401,7 @@ export async function readHostProcessOutput(id: string, cursor: number): Promise
 }
 
 export async function stopHostProcess(id: string): Promise<void> {
-  const response = await fetch(`/core-api/execution/processes/${encodeURIComponent(id)}`, {
+  const response = await projectRuntimeFetch(`/core-api/execution/processes/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
   if (!response.ok && response.status !== 404) {

@@ -46,17 +46,74 @@ import type {
   WorkspaceFileCreationProvider,
   Disposable,
 } from "@tinyide/plugin-api";
+import { projectRuntimeFetch } from "./project-session";
 import { AppPluginHost } from "./plugin-host";
 import { createOutputFollowControl } from "./output-follow";
+import type { TinyIdeDesktopApi } from "./workspace-host";
 
 const PLATFORM_VERSION = "0.4.0";
 const STORAGE_KEY = "tinyide.react.plugins.v1";
+const DESKTOP_STORAGE_KEY = "plugins";
 
-interface StoredPlugin {
+export interface StoredPlugin {
   readonly manifest: PluginManifest;
   readonly manifestUrl: string;
   readonly sourceUrl: string;
   readonly enabled: boolean;
+}
+
+type PluginLocalStorage = Pick<Storage, "getItem" | "removeItem" | "setItem">;
+type PluginDesktopStorage = Pick<TinyIdeDesktopApi, "readState" | "writeState">;
+
+function parseStoredPlugins(value: unknown): readonly StoredPlugin[] {
+  return Array.isArray(value) ? value as readonly StoredPlugin[] : [];
+}
+
+export async function readStoredPlugins(
+  storage: PluginLocalStorage,
+  desktop?: PluginDesktopStorage,
+): Promise<readonly StoredPlugin[]> {
+  if (desktop?.readState) {
+    const stored = await desktop.readState(DESKTOP_STORAGE_KEY);
+    if (stored !== undefined) return parseStoredPlugins(stored);
+  }
+
+  try {
+    const raw = storage.getItem(STORAGE_KEY);
+    return raw ? parseStoredPlugins(JSON.parse(raw)) : [];
+  } catch {
+    storage.removeItem(STORAGE_KEY);
+    return [];
+  }
+}
+
+export async function writeStoredPlugins(
+  storage: PluginLocalStorage,
+  stored: readonly StoredPlugin[],
+  desktop?: PluginDesktopStorage,
+): Promise<void> {
+  storage.setItem(STORAGE_KEY, JSON.stringify(stored));
+  if (desktop?.writeState) await desktop.writeState(DESKTOP_STORAGE_KEY, stored);
+}
+
+export function rebaseLoopbackPluginUrl(storedUrl: string, currentUrl: string): string {
+  try {
+    const stored = new URL(storedUrl);
+    const current = new URL(currentUrl);
+    const loopbackHosts = new Set(["127.0.0.1", "localhost", "[::1]"]);
+    if (
+      !["http:", "https:"].includes(stored.protocol)
+      || !["http:", "https:"].includes(current.protocol)
+      || !loopbackHosts.has(stored.hostname)
+      || !loopbackHosts.has(current.hostname)
+      || stored.origin === current.origin
+    ) {
+      return storedUrl;
+    }
+    return new URL(`${stored.pathname}${stored.search}${stored.hash}`, current.origin).href;
+  } catch {
+    return storedUrl;
+  }
 }
 
 export function orderPluginsByDependencies<T extends { readonly manifest: PluginManifest }>(
@@ -247,7 +304,7 @@ function pluginBackend(pluginId: string): PluginBackendApi {
       if (suffix.startsWith("//") || pathname.split("/").includes("..")) {
         throw new Error("O caminho do backend do plugin deve ser relativo ao próprio plugin.");
       }
-      const response = await fetch(`/plugin-api/${encodeURIComponent(pluginId)}${suffix}`, {
+      const response = await projectRuntimeFetch(`/plugin-api/${encodeURIComponent(pluginId)}${suffix}`, {
         ...options,
         headers: {
           ...(options.body ? { "Content-Type": "application/json" } : {}),

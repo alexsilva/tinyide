@@ -605,7 +605,35 @@ export interface PluginBooleanSettingDefinition {
   readonly defaultValue: boolean;
 }
 
-export type PluginSettingDefinition = PluginBooleanSettingDefinition;
+export interface PluginNumberSettingDefinition {
+  readonly id: string;
+  readonly type: "number";
+  readonly label: string;
+  readonly description?: string;
+  readonly defaultValue: number;
+  readonly min?: number;
+  readonly max?: number;
+  readonly step?: number;
+}
+
+export interface PluginSelectSettingOption {
+  readonly value: string;
+  readonly label: string;
+}
+
+export interface PluginSelectSettingDefinition {
+  readonly id: string;
+  readonly type: "select";
+  readonly label: string;
+  readonly description?: string;
+  readonly defaultValue: string;
+  readonly options: readonly PluginSelectSettingOption[];
+}
+
+export type PluginSettingDefinition =
+  | PluginBooleanSettingDefinition
+  | PluginNumberSettingDefinition
+  | PluginSelectSettingDefinition;
 
 export interface PluginSettingsProvider {
   readonly id: string;

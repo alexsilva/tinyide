@@ -93,6 +93,7 @@ import type {
   ExecutionProfileTargetKindOption,
   LanguageLintSettings,
   LanguageProvider,
+  PluginSettingValue,
   PluginSettingValues,
   ResourceContext,
   ResourceDecoration,
@@ -4606,7 +4607,7 @@ export function App() {
     }));
   };
 
-  const applyPluginSetting = async (settingId: string, value: boolean) => {
+  const applyPluginSetting = async (settingId: string, value: PluginSettingValue) => {
     if (!activePluginSettingsProvider) return;
     const values = updatePluginSettingValue(
       resolvePluginSettingValues(activePluginSettingsProvider, pluginSettingsDraft),
@@ -6300,20 +6301,47 @@ export function App() {
                       </div>
                       <div className="plugin-setting-list">
                         {activePluginSettingsProvider.settings.map((setting) => (
-                          <label className="plugin-setting" key={setting.id}>
+                          <label className={`plugin-setting plugin-setting--${setting.type}`} key={setting.id}>
                             <span className="plugin-setting__copy">
                               <strong>{setting.label}</strong>
                               {setting.description ? <small>{setting.description}</small> : null}
                             </span>
-                            <span className="settings-switch">
-                              <input
-                                type="checkbox"
-                                checked={pluginSettingsDraft[setting.id] !== false}
+                            {setting.type === "boolean" ? (
+                              <span className="settings-switch">
+                                <input
+                                  type="checkbox"
+                                  checked={pluginSettingsDraft[setting.id] !== false}
+                                  disabled={!workspaceRoot}
+                                  onChange={(event) => invoke(() => applyPluginSetting(setting.id, event.target.checked))}
+                                />
+                                <i aria-hidden="true" />
+                              </span>
+                            ) : setting.type === "select" ? (
+                              <select
+                                className="plugin-setting__control"
+                                value={String(pluginSettingsDraft[setting.id] ?? setting.defaultValue)}
                                 disabled={!workspaceRoot}
-                                onChange={(event) => invoke(() => applyPluginSetting(setting.id, event.target.checked))}
+                                onChange={(event) => invoke(() => applyPluginSetting(setting.id, event.target.value))}
+                              >
+                                {setting.options.map((option) => (
+                                  <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                className="plugin-setting__control plugin-setting__control--number"
+                                type="number"
+                                value={Number(pluginSettingsDraft[setting.id] ?? setting.defaultValue)}
+                                min={setting.min}
+                                max={setting.max}
+                                step={setting.step}
+                                disabled={!workspaceRoot}
+                                onChange={(event) => {
+                                  const value = event.target.valueAsNumber;
+                                  if (Number.isFinite(value)) invoke(() => applyPluginSetting(setting.id, value));
+                                }}
                               />
-                              <i aria-hidden="true" />
-                            </span>
+                            )}
                           </label>
                         ))}
                       </div>

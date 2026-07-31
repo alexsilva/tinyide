@@ -143,6 +143,10 @@
 .plugin-setting__copy { display: grid; min-width: 0; gap: 5px; }
 .plugin-setting strong { color: #dce3ed; font-size: 12px; font-weight: 650; }
 .plugin-setting small { color: #8995a7; font-size: 10px; line-height: 1.5; }
+.plugin-setting__control { width: min(190px, 30vw); height: 30px; border: 1px solid #3a4658; border-radius: 4px; padding: 0 8px; background: #111720; color: #dce3ed; font: inherit; font-size: 11px; }
+.plugin-setting__control:focus-visible { border-color: #5684b7; outline: 2px solid rgb(86 132 183 / 20%); outline-offset: 0; }
+.plugin-setting__control:disabled { cursor: default; }
+.plugin-setting__control--number { width: 92px; }
 .settings-switch { position: relative; display: block; width: 38px; height: 21px; flex: 0 0 auto; }
 .settings-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .settings-switch i { position: absolute; inset: 0; border: 1px solid #465166; border-radius: 999px; background: #242b36; transition: background 140ms ease, border-color 140ms ease; }

@@ -13,16 +13,58 @@ const provider: PluginSettingsProvider = {
       label: "Enabled",
       defaultValue: true,
     },
+    {
+      id: "limit",
+      type: "number",
+      label: "Limit",
+      defaultValue: 80,
+      min: 10,
+      max: 200,
+    },
+    {
+      id: "mode",
+      type: "select",
+      label: "Mode",
+      defaultValue: "content",
+      options: [
+        { value: "content", label: "Content" },
+        { value: "files", label: "Files" },
+      ],
+    },
   ],
 };
 
 describe("plugin settings", () => {
   it("uses provider defaults when the workspace has no value", () => {
-    expect(resolvePluginSettingValues(provider, undefined)).toEqual({ enabled: true });
+    expect(resolvePluginSettingValues(provider, undefined)).toEqual({
+      enabled: true,
+      limit: 80,
+      mode: "content",
+    });
   });
 
-  it("preserves configured boolean values", () => {
-    expect(resolvePluginSettingValues(provider, { enabled: false })).toEqual({ enabled: false });
+  it("preserves configured values for every supported setting type", () => {
+    expect(resolvePluginSettingValues(provider, {
+      enabled: false,
+      limit: 120,
+      mode: "files",
+    })).toEqual({
+      enabled: false,
+      limit: 120,
+      mode: "files",
+    });
+  });
+
+  it("rejects invalid choices and clamps numeric values", () => {
+    expect(resolvePluginSettingValues(provider, {
+      enabled: "no",
+      limit: 500,
+      mode: "unknown",
+    })).toEqual({
+      enabled: true,
+      limit: 200,
+      mode: "content",
+    });
   });
 
   it("updates a setting without mutating the previous map", () => {

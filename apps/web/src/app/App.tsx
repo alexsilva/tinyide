@@ -233,7 +233,8 @@ import { resolveSyntaxHighlighter, type SyntaxHighlighter } from "./generic-synt
 import {
   debugAdapterProviders,
   debugAdapterForProfile,
-  environmentProvider,
+  environmentProviderById,
+  environmentProviders,
   hostProcessOutputLines,
   languageProviderFor,
   lintDocument,
@@ -338,7 +339,7 @@ import { ProfileDialog } from "./execution/ProfileDialog";
 import { EnvironmentPackageManager } from "./execution/EnvironmentPackageManager";
 import { FollowedExecutionOutput } from "./execution/FollowedExecutionOutput";
 import { appendExecutionOutput } from "./execution/execution-output-buffer";
-import { ButtonTooltip, PluginCardIcon } from "./workbench/activity-components";
+import { ButtonTooltip, PluginCardIcon, WorkbenchActivityIconView } from "./workbench/activity-components";
 import { WorkbenchActivityBar } from "./workbench/WorkbenchActivityBar";
 import { ProblemsPanel } from "./workbench/ProblemsPanel";
 import { useWorkbenchContributions } from "./workbench/useWorkbenchContributions";
@@ -556,6 +557,7 @@ export function App() {
   const [editingEnvironmentId, setEditingEnvironmentId] = useState<string>();
   const [environmentPath, setEnvironmentPath] = useState("");
   const [environmentSearch, setEnvironmentSearch] = useState("");
+  const [environmentManagerProviderId, setEnvironmentManagerProviderId] = useState<string>();
   const [packageManagerEnvironmentId, setPackageManagerEnvironmentId] = useState<string>();
   const [environmentBrowserMode, setEnvironmentBrowserMode] = useState<"directory" | "file">();
   const [environmentListing, setEnvironmentListing] = useState<ExecutionEnvironmentDirectoryListing>();
@@ -894,7 +896,7 @@ export function App() {
     { key: "builtin:explorer", defaultOrder: 0, defaultSide: "left", movable: true },
     ...activityButtons.filter((item) => item.kind === "sidebar"),
     { key: "builtin:plugins", defaultOrder: 2_000, defaultSide: "left", movable: true },
-    ...(environmentProvider()
+    ...(environmentProviders().length
       ? [{ key: "builtin:environments", defaultOrder: 3_000, defaultSide: "left" as const, movable: true }]
       : []),
     { key: "builtin:left-spacer", defaultOrder: 10_000, defaultSide: "left" },
@@ -2732,6 +2734,24 @@ export function App() {
     updateExplorerHistory(transition.state);
   };
 
+  useEffect(() => {
+    if (!workspaceRoot) return;
+    const subscribe = window.tinyideDesktop?.subscribeWorkspaceChanges;
+    if (!subscribe) return;
+    return subscribe((change) => {
+      if (change.workspaceRoot !== workspaceRoot) return;
+      void platform.events.emit<WorkspaceResourcesChangedEvent>(
+        WORKSPACE_RESOURCES_CHANGED_EVENT,
+        {
+          source: "desktop-workspace-watcher",
+          reason: "external",
+          workspaceRoot,
+          paths: change.paths,
+        },
+      );
+    });
+  }, [platform.events, workspaceRoot]);
+
   useEffect(() => platform.events.on<WorkspaceResourcesChangedEvent>(
     WORKSPACE_RESOURCES_CHANGED_EVENT,
     async (event) => {
@@ -3833,7 +3853,7 @@ export function App() {
     path?: string,
     includeHidden = environmentBrowserHidden,
   ) => {
-    const provider = environmentProvider();
+    const provider = environmentProviderById(environmentManagerProviderId);
     if (!provider?.browse) throw new Error("O gerenciador não oferece navegação de arquivos.");
     setEnvironmentListing(await provider.browse({
       ...(path ? { path } : {}),
@@ -3865,7 +3885,7 @@ export function App() {
     const selection = environmentBrowserSelection;
     const mode = environmentBrowserMode;
     if (!selection || !mode) return;
-    const provider = environmentProvider();
+    const provider = environmentProviderById(environmentManagerProviderId);
     if (mode === "file" && environmentBrowserExecutableOnly) {
       if (!provider?.validateExecutable) throw new Error("O gerenciador não valida executáveis deste tipo.");
       await provider.validateExecutable(selection);
@@ -3887,7 +3907,7 @@ export function App() {
 
   const submitEnvironmentForm = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const provider = environmentProvider();
+    const provider = environmentProviderById(environmentManagerProviderId);
     if (!provider || !environmentForm) throw new Error("Nenhum gerenciador de ambientes instalado.");
     const data = new FormData(event.currentTarget);
     setEnvironmentBusy(true);
@@ -3945,7 +3965,8 @@ export function App() {
   };
 
   const removeEnvironment = async (id: string) => {
-    const provider = environmentProvider();
+    const environment = environments.find((candidate) => candidate.id === id);
+    const provider = environmentProviderById(environment?.providerId);
     if (!provider) throw new Error("Nenhum gerenciador de ambientes instalado.");
     setEnvironmentBusy(true);
     try {
@@ -4275,6 +4296,9 @@ export function App() {
   const packageManagerEnvironment = packageManagerEnvironmentId
     ? environments.find((environment) => environment.id === packageManagerEnvironmentId)
     : undefined;
+  const registeredEnvironmentProviders = environmentProviders();
+  const activeEnvironmentManagerProvider = environmentProviderById(environmentManagerProviderId)
+    ?? registeredEnvironmentProviders[0];
   const visibleEnvironments = environments.filter((environment) => {
     const query = environmentSearch.trim().toLocaleLowerCase();
     if (!query) return true;
@@ -4707,10 +4731,10 @@ export function App() {
 
               {view === "environments" ? (
                 <div className="sidebar-content environment-manager">
-                  {packageManagerEnvironment && environmentProvider() ? (
+                  {packageManagerEnvironment && environmentProviderById(packageManagerEnvironment.providerId) ? (
                     <EnvironmentPackageManager
                       environment={packageManagerEnvironment}
-                      provider={environmentProvider()!}
+                      provider={environmentProviderById(packageManagerEnvironment.providerId)!}
                       onClose={() => setPackageManagerEnvironmentId(undefined)}
                       onEnvironmentChanged={() => refreshEnvironments(packageManagerEnvironment.id)}
                     />
@@ -4718,13 +4742,35 @@ export function App() {
                   <>
                   <div className="environment-manager__intro">
                     <div>
-                      <strong>{environmentProvider()?.name ?? "Ambientes de execução"}</strong>
+                      <strong>Ambientes de execução</strong>
                       <p>Gerencie intérpretes, ambientes e pacotes do workspace atual.</p>
                     </div>
                     <ButtonTooltip label="Atualizar ambientes" side="left">
                       <button className="icon-button small" type="button" aria-label="Atualizar ambientes" onClick={() => invoke(refreshEnvironments)}><RefreshCw size={14} /></button>
                     </ButtonTooltip>
                   </div>
+                  {registeredEnvironmentProviders.length > 1 ? (
+                    <div className="environment-manager__toolbar" role="tablist" aria-label="Provedores de ambientes">
+                      {registeredEnvironmentProviders.map((provider) => (
+                        <button
+                          className={`button compact ${activeEnvironmentManagerProvider?.id === provider.id ? "primary" : "secondary"}`}
+                          key={provider.id}
+                          type="button"
+                          role="tab"
+                          aria-selected={activeEnvironmentManagerProvider?.id === provider.id}
+                          onClick={() => {
+                            setEnvironmentManagerProviderId(provider.id);
+                            setEnvironmentForm(undefined);
+                            setEditingEnvironmentId(undefined);
+                            setEnvironmentPath("");
+                          }}
+                        >
+                          <WorkbenchActivityIconView icon={provider.icon} />
+                          {provider.name}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="environment-manager__summary">
                     <span><CheckCircle2 size={13} /> {environments.length} ambientes</span>
                     <span><Package size={13} /> {managedEnvironmentCount} gerenciados</span>
@@ -4737,13 +4783,13 @@ export function App() {
                   </label>
                   <div className="environment-manager__toolbar">
                     <ButtonTooltip label="Criar ambiente">
-                      <button className="button primary compact" type="button" aria-label="Criar ambiente" onClick={() => { setEnvironmentForm("createEnvironment"); setEnvironmentPath(""); }}><Plus size={14} /><span className="responsive-action__label">Criar</span></button>
+                      <button className="button primary compact" type="button" aria-label="Criar ambiente" onClick={() => { setEnvironmentManagerProviderId(activeEnvironmentManagerProvider?.id); setEnvironmentForm("createEnvironment"); setEnvironmentPath(""); }}><Plus size={14} /><span className="responsive-action__label">Criar</span></button>
                     </ButtonTooltip>
                     <ButtonTooltip label="Importar ambiente">
-                      <button className="button secondary compact" type="button" aria-label="Importar ambiente" onClick={() => { setEnvironmentForm("importEnvironment"); setEnvironmentPath(""); }}><FolderOpen size={14} /><span className="responsive-action__label">Importar</span></button>
+                      <button className="button secondary compact" type="button" aria-label="Importar ambiente" onClick={() => { setEnvironmentManagerProviderId(activeEnvironmentManagerProvider?.id); setEnvironmentForm("importEnvironment"); setEnvironmentPath(""); }}><FolderOpen size={14} /><span className="responsive-action__label">Importar</span></button>
                     </ButtonTooltip>
-                    <ButtonTooltip label="Adicionar executável Python">
-                      <button className="button secondary compact" type="button" aria-label="Adicionar executável Python" onClick={() => { setEnvironmentForm("addExecutable"); setEnvironmentPath(""); }}><Terminal size={14} /><span className="responsive-action__label">Executável</span></button>
+                    <ButtonTooltip label={`Adicionar executável em ${activeEnvironmentManagerProvider?.name ?? "ambientes"}`}>
+                      <button className="button secondary compact" type="button" aria-label="Adicionar executável" onClick={() => { setEnvironmentManagerProviderId(activeEnvironmentManagerProvider?.id); setEnvironmentForm("addExecutable"); setEnvironmentPath(""); }}><Terminal size={14} /><span className="responsive-action__label">Executável</span></button>
                     </ButtonTooltip>
                   </div>
 
@@ -4765,7 +4811,7 @@ export function App() {
                       {environmentForm === "createEnvironment" ? (
                         <>
                           <label>Nome<input name="name" defaultValue=".venv" /></label>
-                          <label>Executável de origem<select name="baseExecutable" defaultValue={environments.find((environment) => environment.executable)?.executable ?? ""}><option value="">Selecione</option>{environments.filter((environment) => environment.executable).map((environment) => <option key={environment.id} value={environment.executable}>{environment.name}</option>)}</select></label>
+                          <label>Executável de origem<select name="baseExecutable" defaultValue={environments.find((environment) => environment.providerId === activeEnvironmentManagerProvider?.id && environment.executable)?.executable ?? ""}><option value="">Selecione</option>{environments.filter((environment) => environment.providerId === activeEnvironmentManagerProvider?.id && environment.executable).map((environment) => <option key={environment.id} value={environment.executable}>{environment.name}</option>)}</select></label>
                           <label>Diretório opcional<input name="path" /></label>
                         </>
                       ) : null}
@@ -4797,9 +4843,9 @@ export function App() {
                           <ButtonTooltip label={selectedEnvironmentId === environment.id ? "Ambiente selecionado" : `Selecionar ${environment.name}`}>
                             <button className="button secondary compact" aria-label={selectedEnvironmentId === environment.id ? "Ambiente selecionado" : `Selecionar ${environment.name}`} disabled={selectedEnvironmentId === environment.id} type="button" onClick={() => selectEnvironment(environment.id)}><Check size={13} /><span className="responsive-action__label">{selectedEnvironmentId === environment.id ? "Selecionado" : "Selecionar"}</span></button>
                           </ButtonTooltip>
-                          {environmentProvider()?.update ? (
+                          {environmentProviderById(environment.providerId)?.update ? (
                             <ButtonTooltip label={`Editar ${environment.name}`}>
-                              <button className="button secondary compact" type="button" aria-label={`Editar ${environment.name}`} onClick={() => { setEditingEnvironmentId(environment.id); setEnvironmentPath(environment.type === "venv" ? environment.path ?? "" : environment.executable ?? ""); setEnvironmentForm("edit"); }}><Settings2 size={13} /><span className="responsive-action__label">Editar</span></button>
+                              <button className="button secondary compact" type="button" aria-label={`Editar ${environment.name}`} onClick={() => { setEnvironmentManagerProviderId(environment.providerId); setEditingEnvironmentId(environment.id); setEnvironmentPath(environment.type === "venv" ? environment.path ?? "" : environment.executable ?? ""); setEnvironmentForm("edit"); }}><Settings2 size={13} /><span className="responsive-action__label">Editar</span></button>
                             </ButtonTooltip>
                           ) : null}
                           {environment.type === "venv" ? (
@@ -4997,8 +5043,8 @@ export function App() {
               toolWindowVisible={toolWindowVisible}
               activeToolWindowId={activeToolWindowId}
               draggingKey={draggingActivityButtonKey}
-              environmentLabel={environmentProvider()?.name ?? "Ambientes"}
-              environmentIcon={environmentProvider()?.icon}
+              environmentLabel="Ambientes de execução"
+              environmentIcon="box"
               executionCount={profileOutputTabs.length}
               runningExecutionCount={runningProfileOutputCount}
               executionActive={executionPanelActive}
@@ -5470,8 +5516,8 @@ export function App() {
               toolWindowVisible={toolWindowVisible}
               activeToolWindowId={activeToolWindowId}
               draggingKey={draggingActivityButtonKey}
-              environmentLabel={environmentProvider()?.name ?? "Ambientes"}
-              environmentIcon={environmentProvider()?.icon}
+              environmentLabel="Ambientes de execução"
+              environmentIcon="box"
               executionCount={profileOutputTabs.length}
               runningExecutionCount={runningProfileOutputCount}
               executionActive={executionPanelActive}

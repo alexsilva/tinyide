@@ -16,11 +16,13 @@ const {
   installWindowVisibilityFallback,
 } = require("./startup.cjs");
 const { readDesktopState, removeDesktopState, writeDesktopState } = require("./state-store.cjs");
+const { createWorkspaceWatcher } = require("./workspace-watcher.cjs");
 
 let runtime;
 let mainWindow;
 let browserExtensionGuard;
 const desktopWorkspaces = new Map();
+let desktopWorkspaceWatcher;
 const LAST_WORKSPACE_STATE_KEY = "last-workspace";
 
 function desktopStateRoot() {
@@ -59,8 +61,16 @@ async function registerDesktopWorkspace(rootPath, { persist = true } = {}) {
     throw new Error("O diretório selecionado não está disponível.");
   }
   const token = randomUUID();
+  if (desktopWorkspaceWatcher) await desktopWorkspaceWatcher.close();
   desktopWorkspaces.clear();
   desktopWorkspaces.set(token, root);
+  desktopWorkspaceWatcher = createWorkspaceWatcher(root, (paths) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send("tinyide:workspace:changed", {
+      workspaceRoot: root,
+      paths,
+    });
+  });
   if (persist) {
     await writeDesktopState(desktopStateRoot(), LAST_WORKSPACE_STATE_KEY, { path: root });
   }
@@ -278,6 +288,7 @@ if (isPrimaryInstance) {
 
   installGracefulShutdown(app, async () => {
     browserExtensionGuard?.dispose();
+    if (desktopWorkspaceWatcher) await desktopWorkspaceWatcher.close();
     if (runtime) await runtime.close();
   });
 }

@@ -138,6 +138,17 @@ export function environmentProvider(): ExecutionEnvironmentProvider | undefined 
   return platform.capabilities.getAll<ExecutionEnvironmentProvider>("execution.environment")[0];
 }
 
+export function environmentProviders(): readonly ExecutionEnvironmentProvider[] {
+  return platform.capabilities.getAll<ExecutionEnvironmentProvider>("execution.environment");
+}
+
+export function environmentProviderById(
+  providerId: string | undefined,
+): ExecutionEnvironmentProvider | undefined {
+  if (!providerId) return undefined;
+  return environmentProviders().find((provider) => provider.id === providerId);
+}
+
 export function pluginSettingsProviders(): readonly PluginSettingsProvider[] {
   return platform.capabilities.getAll<PluginSettingsProvider>("plugin.settings");
 }

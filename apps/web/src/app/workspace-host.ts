@@ -20,6 +20,11 @@ interface DesktopFilePayload {
   readonly lastModified: number;
 }
 
+export interface DesktopWorkspaceChange {
+  readonly workspaceRoot: string;
+  readonly paths: readonly string[];
+}
+
 export interface TinyIdeDesktopApi {
   readState?(key: string): Promise<unknown>;
   writeState?(key: string, value: unknown): Promise<boolean>;
@@ -35,6 +40,7 @@ export interface TinyIdeDesktopApi {
   readFile?(token: string, path: string): Promise<DesktopFilePayload>;
   writeFile?(token: string, path: string, bytes: ArrayBuffer): Promise<boolean>;
   removeEntry?(token: string, path: string, recursive: boolean): Promise<boolean>;
+  subscribeWorkspaceChanges?(listener: (change: DesktopWorkspaceChange) => void): () => void;
   openInFileManager?(workspaceRoot: string, path: string): Promise<boolean>;
 }
 

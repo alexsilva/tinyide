@@ -40,6 +40,11 @@ contextBridge.exposeInMainWorld("tinyideDesktop", {
   removeEntry(token, path, recursive) {
     return ipcRenderer.invoke("tinyide:workspace:remove", token, path, recursive);
   },
+  subscribeWorkspaceChanges(listener) {
+    const handleChange = (_event, change) => listener(change);
+    ipcRenderer.on("tinyide:workspace:changed", handleChange);
+    return () => ipcRenderer.removeListener("tinyide:workspace:changed", handleChange);
+  },
   openInFileManager(rootPath, path) {
     return ipcRenderer.invoke("tinyide:workspace:open-in-file-manager", rootPath, path);
   },

@@ -2288,9 +2288,9 @@ export function App() {
         icon: "copy",
         enabled: Boolean(workspaceAbsolutePath(workspaceRoot)),
       },
-      ...(explorerClipboard ? [{
+      ...(explorerClipboard || supportsSystemResourceClipboard() ? [{
         id: "core.root.paste",
-        label: explorerPasteLabel(explorerClipboard),
+        label: supportsSystemResourceClipboard() ? "Colar" : explorerPasteLabel(explorerClipboard!),
         command: "core.root.paste",
         group: "clipboard",
         order: 120,
@@ -2387,9 +2387,9 @@ export function App() {
         icon: "copy" as const,
         enabled: Boolean(workspaceAbsolutePath(workspaceRoot, entry.path)),
       }] : []),
-      ...(!isBulkSelection && explorerClipboard ? [{
+      ...(!isBulkSelection && (explorerClipboard || supportsSystemResourceClipboard()) ? [{
         id: "core.resource.paste",
-        label: explorerPasteLabel(explorerClipboard),
+        label: supportsSystemResourceClipboard() ? "Colar" : explorerPasteLabel(explorerClipboard!),
         command: "core.resource.paste",
         group: "clipboard",
         order: 120,
@@ -3378,7 +3378,7 @@ export function App() {
     setSelectedExplorerPaths(new Set());
   };
 
-  const copyExplorerEntries = (sourceEntries: readonly WorkspaceEntry[]) => {
+  const copyExplorerEntries = async (sourceEntries: readonly WorkspaceEntry[]) => {
     const clipboard = topLevelWorkspacePaths(sourceEntries.map((entry) => entry.path))
       .map((path) => sourceEntries.find((entry) => entry.path === path))
       .filter((entry): entry is WorkspaceEntry => Boolean(entry))
@@ -3386,16 +3386,29 @@ export function App() {
     if (clipboard.length === 0) return;
     explorerClipboardRef.current = clipboard;
     setExplorerClipboard(clipboard);
+    if (workspaceRoot && supportsSystemResourceClipboard()) {
+      await copyWorkspaceResourcesToSystem(workspaceRoot, clipboard.map((entry) => entry.path));
+    }
   };
 
   const pasteExplorerEntries = async (targetDirectoryPath: string) => {
-    const sources = explorerClipboardRef.current;
-    if (!sources?.length || !workspaceHandle) return;
-    const nextPaths = await copyWorkspaceEntries(
-      workspaceHandle,
-      topLevelWorkspacePaths(sources.map((source) => source.path)),
-      targetDirectoryPath,
-    );
+    if (!workspaceHandle) return;
+    let nextPaths: readonly string[] = [];
+    if (workspaceRoot && supportsSystemResourceClipboard()) {
+      const pasted = await pasteSystemResourcesIntoWorkspace(workspaceRoot, targetDirectoryPath);
+      nextPaths = pasted.map((entry) => entry.path);
+    }
+    if (!nextPaths.length) {
+      const sources = explorerClipboardRef.current;
+      if (!sources?.length) {
+        throw new Error("O clipboard do sistema não contém arquivos ou pastas para colar.");
+      }
+      nextPaths = await copyWorkspaceEntries(
+        workspaceHandle,
+        topLevelWorkspacePaths(sources.map((source) => source.path)),
+        targetDirectoryPath,
+      );
+    }
     const nextExpanded = new Set(expanded);
     if (targetDirectoryPath) nextExpanded.add(targetDirectoryPath);
     setExpanded(nextExpanded);
@@ -3410,6 +3423,7 @@ export function App() {
       const target = event.target;
       if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
         || (target instanceof HTMLElement && target.isContentEditable)) return;
+      if (!(target instanceof Element) || !target.closest(".explorer-content")) return;
       const selectedPath = selectedExplorerPath;
       if (event.key.toLocaleLowerCase() === "c") {
         const paths = selectedExplorerPaths.size > 0
@@ -3420,10 +3434,12 @@ export function App() {
           .filter((entry): entry is WorkspaceEntry => Boolean(entry));
         if (selectedEntries.length === 0) return;
         event.preventDefault();
-        copyExplorerEntries(selectedEntries);
+        void copyExplorerEntries(selectedEntries)
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
         return;
       }
-      if (event.key.toLocaleLowerCase() !== "v" || !explorerClipboardRef.current) return;
+      if (event.key.toLocaleLowerCase() !== "v"
+        || (!explorerClipboardRef.current && !supportsSystemResourceClipboard())) return;
       const selected = selectedPath ? findWorkspaceEntry(entries, selectedPath) : undefined;
       const targetDirectoryPath = selected
         ? selected.kind === "directory" ? selected.path : workspacePathParent(selected.path)
@@ -3433,7 +3449,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [entries, selectedExplorerPath, selectedExplorerPaths, workspaceHandle, expanded]);
+  }, [entries, selectedExplorerPath, selectedExplorerPaths, workspaceHandle, workspaceRoot, expanded]);
 
   const toggleBreakpoint = (path: string, line: number) => {
     const exists = debugBreakpoints.some((breakpoint) => breakpoint.path === path && breakpoint.line === line);
@@ -3878,7 +3894,7 @@ export function App() {
         const selectedEntries = topLevelWorkspacePaths(paths)
           .map((path) => findWorkspaceEntry(entries, path))
           .filter((candidate): candidate is WorkspaceEntry => Boolean(candidate));
-        copyExplorerEntries(selectedEntries);
+        await copyExplorerEntries(selectedEntries);
         setSelectedExplorerPath(entry.path);
         setSelectedExplorerPaths(new Set(selectedEntries.map((candidate) => candidate.path)));
         return;

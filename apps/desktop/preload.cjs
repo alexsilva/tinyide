@@ -43,6 +43,12 @@ contextBridge.exposeInMainWorld("tinyideDesktop", {
   removeEntry(token, path, recursive) {
     return ipcRenderer.invoke("tinyide:workspace:remove", token, path, recursive);
   },
+  copyWorkspaceResources(rootPath, paths) {
+    return ipcRenderer.invoke("tinyide:workspace:clipboard-copy", rootPath, paths);
+  },
+  pasteWorkspaceResources(rootPath, targetPath) {
+    return ipcRenderer.invoke("tinyide:workspace:clipboard-paste", rootPath, targetPath);
+  },
   subscribeWorkspaceChanges(listener) {
     const handleChange = (_event, change) => listener(change);
     ipcRenderer.on("tinyide:workspace:changed", handleChange);

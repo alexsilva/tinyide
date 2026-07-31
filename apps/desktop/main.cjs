@@ -1,10 +1,11 @@
-const { app, BrowserWindow, dialog, ipcMain, session, shell } = require("electron");
+const { app, BrowserWindow, clipboard, dialog, ipcMain, session, shell } = require("electron");
 const { randomUUID } = require("node:crypto");
 const { existsSync, statSync } = require("node:fs");
 const { mkdir, readFile, readdir, rm, stat, writeFile } = require("node:fs/promises");
 const { basename, dirname, join, resolve } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { openInSystemFileManager } = require("./file-manager.cjs");
+const { copyExternalEntries, readFileClipboard, writeFileClipboard } = require("./file-clipboard.cjs");
 const { allowedExternalUrl, safeWorkspacePath: resolveSafeWorkspacePath, sameOriginUrl } = require("./security.cjs");
 const {
   applyLoginShellEnvironment,
@@ -187,6 +188,25 @@ function installDesktopFileSystemHandlers() {
     const target = await safeWorkspacePath(token, workspacePath);
     await rm(target, { recursive: recursive === true, force: false });
     return true;
+  });
+
+  ipcMain.handle("tinyide:workspace:clipboard-copy", async (_event, rootPath, workspacePaths) => {
+    if (!Array.isArray(workspacePaths) || !workspacePaths.length) return false;
+    const paths = await Promise.all(workspacePaths.map((workspacePath) => (
+      safeRegisteredWorkspacePath(rootPath, workspacePath)
+    )));
+    return writeFileClipboard(clipboard, paths);
+  });
+
+  ipcMain.handle("tinyide:workspace:clipboard-paste", async (_event, rootPath, workspacePath) => {
+    const sources = readFileClipboard(clipboard);
+    if (!sources.length) return [];
+    const target = await safeRegisteredWorkspacePath(rootPath, workspacePath);
+    const copied = await copyExternalEntries(sources, target);
+    return copied.map((entry) => ({
+      ...entry,
+      path: workspacePath ? `${workspacePath}/${entry.name}` : entry.name,
+    }));
   });
 
   ipcMain.handle("tinyide:workspace:open-in-file-manager", async (_event, rootPath, workspacePath) => {

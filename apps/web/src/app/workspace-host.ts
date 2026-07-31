@@ -26,6 +26,12 @@ export interface DesktopWorkspaceChange {
   readonly paths: readonly string[];
 }
 
+export interface DesktopClipboardEntry {
+  readonly path: string;
+  readonly name: string;
+  readonly kind: "file" | "directory";
+}
+
 export interface TinyIdeDesktopApi {
   readState?(key: string): Promise<unknown>;
   writeState?(key: string, value: unknown): Promise<boolean>;
@@ -207,6 +213,27 @@ export async function openInSystemFileManager(workspaceRoot: string, path = ""):
   if (response.ok) return true;
   const payload = await response.json().catch(() => undefined);
   throw new Error(typeof payload?.error === "string" ? payload.error : "Não foi possível abrir o gerenciador de arquivos.");
+}
+
+export async function copyWorkspaceResourcesToSystem(
+  workspaceRoot: string,
+  paths: readonly string[],
+): Promise<boolean> {
+  const copy = typeof window === "undefined" ? undefined : window.tinyideDesktop?.copyWorkspaceResources;
+  return copy ? await copy(workspaceRoot, paths) : false;
+}
+
+export async function pasteSystemResourcesIntoWorkspace(
+  workspaceRoot: string,
+  targetPath: string,
+): Promise<readonly DesktopClipboardEntry[]> {
+  const paste = typeof window === "undefined" ? undefined : window.tinyideDesktop?.pasteWorkspaceResources;
+  return paste ? await paste(workspaceRoot, targetPath) : [];
+}
+
+export function supportsSystemResourceClipboard(): boolean {
+  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
+  return Boolean(desktop?.copyWorkspaceResources && desktop.pasteWorkspaceResources);
 }
 
 export function isDesktopWorkspaceHandle(

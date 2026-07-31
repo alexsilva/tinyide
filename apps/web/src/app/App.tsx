@@ -360,6 +360,10 @@ import { ProfileDialog } from "./execution/ProfileDialog";
 import { EnvironmentPackageManager } from "./execution/EnvironmentPackageManager";
 import { FollowedExecutionOutput } from "./execution/FollowedExecutionOutput";
 import { appendExecutionOutput } from "./execution/execution-output-buffer";
+import {
+  TEXT_CONTEXT_MENU_EVENT,
+  type TextContextMenuDetail,
+} from "./text-context-menu";
 import { ButtonTooltip, PluginCardIcon, WorkbenchActivityIconView } from "./workbench/activity-components";
 import { WorkbenchActivityBar } from "./workbench/WorkbenchActivityBar";
 import { ProblemsPanel } from "./workbench/ProblemsPanel";
@@ -376,7 +380,8 @@ type ContextMenuTarget =
   | { readonly kind: "root" }
   | { readonly kind: "entry"; readonly entry: WorkspaceEntry }
   | { readonly kind: "document"; readonly document: OpenDocument }
-  | { readonly kind: "editor"; readonly context: TextEditorContextMenuContext };
+  | { readonly kind: "editor"; readonly context: TextEditorContextMenuContext }
+  | { readonly kind: "text"; readonly text: string };
 
 interface ContextMenuState {
   readonly target: ContextMenuTarget;
@@ -648,6 +653,26 @@ export function App() {
   const [selectedExplorerPath, setSelectedExplorerPath] = useState<string>();
   const [selectedExplorerPaths, setSelectedExplorerPaths] = useState<ReadonlySet<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState>();
+  useEffect(() => {
+    const openTextContextMenu = (event: Event) => {
+      const { text, x, y } = (event as CustomEvent<TextContextMenuDetail>).detail;
+      if (!text) return;
+      setContextMenu({
+        target: { kind: "text", text },
+        x,
+        y,
+        items: [{
+          id: "core.text.copy",
+          label: "Copiar",
+          command: "core.text.copy",
+          group: "clipboard",
+          icon: "copy",
+        }],
+      });
+    };
+    document.addEventListener(TEXT_CONTEXT_MENU_EVENT, openTextContextMenu);
+    return () => document.removeEventListener(TEXT_CONTEXT_MENU_EVENT, openTextContextMenu);
+  }, []);
   const [draggingExplorerPaths, setDraggingExplorerPaths] = useState<ReadonlySet<string>>(new Set());
   const [dropTargetExplorerPath, setDropTargetExplorerPath] = useState<string>();
   const [explorerHistory, setExplorerHistory] = useState<ExplorerHistoryState>(createExplorerHistoryState);
@@ -2526,8 +2551,15 @@ export function App() {
       column: selectionStart - lineStart + 1,
     };
     const providers = platform.capabilities.getAll<TextEditorContextMenuProvider>("textEditor.contextMenu");
-    const items = (await Promise.all(providers.map((provider) => provider.provideItems(context))))
-      .flat()
+    const copyItems: ResourceContextMenuItem[] = selectionEnd > selectionStart ? [{
+      id: "core.editor.copySelection",
+      label: "Copiar",
+      command: "core.editor.copySelection",
+      group: "clipboard",
+      icon: "copy",
+      order: -100,
+    }] : [];
+    const items = [...copyItems, ...(await Promise.all(providers.map((provider) => provider.provideItems(context)))).flat()]
       .filter((item) => item.enabled !== false)
       .sort((left, right) => (left.order ?? 0) - (right.order ?? 0));
     if (items.length) setContextMenu({ target: { kind: "editor", context }, x, y, items });
@@ -3825,7 +3857,20 @@ export function App() {
 
   const executeContextMenuItem = async (item: ResourceContextMenuItem, target: ContextMenuTarget) => {
     setContextMenu(undefined);
+    if (target.kind === "text") {
+      if (item.command !== "core.text.copy") throw new Error(`A ação '${item.id}' não possui executor.`);
+      if (!navigator.clipboard?.writeText) throw new Error("A área de transferência não está disponível.");
+      await navigator.clipboard.writeText(target.text);
+      return;
+    }
     if (target.kind === "editor") {
+      if (item.command === "core.editor.copySelection") {
+        if (!navigator.clipboard?.writeText) throw new Error("A área de transferência não está disponível.");
+        await navigator.clipboard.writeText(
+          target.context.document.content.slice(target.context.selectionStart, target.context.selectionEnd),
+        );
+        return;
+      }
       if (!item.command) throw new Error(`A ação '${item.id}' não possui executor.`);
       await platform.commands.execute(item.command, target.context);
       return;
@@ -6398,7 +6443,9 @@ export function App() {
                   ? contextMenu.target.entry.name
                   : contextMenu.target.kind === "document"
                     ? contextMenu.target.document.name
-                    : contextMenu.target.context.document.name}`}
+                    : contextMenu.target.kind === "editor"
+                      ? contextMenu.target.context.document.name
+                      : "texto selecionado"}`}
               style={{ left: contextMenu.x, top: contextMenu.y }}
             >
               {contextMenu.items.map((item, index) => {

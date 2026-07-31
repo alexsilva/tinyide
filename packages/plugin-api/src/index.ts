@@ -495,7 +495,7 @@ export interface ResourceDecorationProvider {
 
 export const RESOURCE_DECORATION_CAPABILITY = "resource.decoration";
 
-export type ResourceContextMenuIcon = "file" | "folder" | "play" | "copy" | "terminal" | "save" | "close" | "diff" | "plus" | "undo";
+export type ResourceContextMenuIcon = "file" | "folder" | "play" | "copy" | "terminal" | "save" | "close" | "diff" | "plus" | "undo" | "preview";
 
 export type ResourceContextMenuAction = "runScript";
 
@@ -1038,6 +1038,7 @@ export interface WorkbenchResourceEditorProvider {
   readonly pluginId: string;
   readonly priority?: number;
   canOpen(resource: WorkbenchResourceDescriptor): boolean;
+  onDidChange?(listener: () => void): Disposable;
   mount(
     context: WorkbenchResourceEditorMountContext,
   ): void | Disposable | Promise<void | Disposable>;

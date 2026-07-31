@@ -806,7 +806,11 @@ export function App() {
 
   const activeDocument = documents.find((document) => document.id === activeDocumentId);
   const [editorToolbarItems, setEditorToolbarItems] = useState<readonly WorkbenchEditorToolbarItem[]>([]);
-  const activeResourceEditorProvider = resourceEditorProviderFor(activeDocument);
+  const [resourceEditorRevision, setResourceEditorRevision] = useState(0);
+  const activeResourceEditorProvider = useMemo(
+    () => resourceEditorProviderFor(activeDocument),
+    [activeDocument, platformSnapshot.plugins, resourceEditorRevision],
+  );
   const activeLanguageProvider = activeResourceEditorProvider ? undefined : languageProviderFor(activeDocument);
   const openEditorSearch = useCallback(() => {
     if (activeDocument?.kind !== "text" || activeResourceEditorProvider) return false;
@@ -860,7 +864,7 @@ export function App() {
       setEditorToolbarItems(items.flat().filter((item) => item.enabled !== false).sort((a, b) => (a.order ?? 0) - (b.order ?? 0)));
     });
     return () => { cancelled = true; };
-  }, [activeDocument, platformSnapshot]);
+  }, [activeDocument, platformSnapshot, resourceEditorRevision]);
   const activeToolWindow = workbenchToolWindows.find((toolWindow) => toolWindow.id === activeToolWindowId);
   const selectedProfile = profilesState.profiles.find((profile) => profile.id === profilesState.selectedId);
   const selectedProfileDebugAdapter = selectedProfile
@@ -1254,6 +1258,14 @@ export function App() {
   useEffect(() => {
     const subscriptions = resourceDecorationProviders()
       .map((provider) => provider.onDidChange?.(() => setResourceDecorationRevision((current) => current + 1)))
+      .filter((subscription): subscription is { dispose(): void } => Boolean(subscription));
+    return () => subscriptions.forEach((subscription) => subscription.dispose());
+  }, [platformSnapshot.plugins]);
+
+  useEffect(() => {
+    const subscriptions = platform.capabilities
+      .getAll<WorkbenchResourceEditorProvider>("workbench.resourceEditor")
+      .map((provider) => provider.onDidChange?.(() => setResourceEditorRevision((current) => current + 1)))
       .filter((subscription): subscription is { dispose(): void } => Boolean(subscription));
     return () => subscriptions.forEach((subscription) => subscription.dispose());
   }, [platformSnapshot.plugins]);
@@ -5503,6 +5515,7 @@ export function App() {
                     {editorToolbarItems.map((item) => {
                       const icon = item.icon === "undo" ? <Undo2 size={14} />
                         : item.icon === "diff" ? <Code2 size={14} />
+                          : item.icon === "preview" ? <Eye size={14} />
                           : item.icon === "plus" ? <Plus size={14} />
                             : <File size={14} />;
                       return (

@@ -1,8 +1,17 @@
 import type {
+  PluginBooleanSettingDefinition,
   PluginSettingValue,
   PluginSettingValues,
   PluginSettingsProvider,
 } from "@tinyide/plugin-api";
+
+export function resolvePluginBooleanSettingValue(
+  setting: PluginBooleanSettingDefinition,
+  configured: PluginSettingValues | undefined,
+): boolean {
+  const value = configured?.[setting.id];
+  return typeof value === "boolean" ? value : setting.defaultValue;
+}
 
 export function resolvePluginSettingValues(
   provider: PluginSettingsProvider,
@@ -12,9 +21,7 @@ export function resolvePluginSettingValues(
   for (const setting of provider.settings) {
     const configuredValue = configured?.[setting.id];
     if (setting.type === "boolean") {
-      values[setting.id] = typeof configuredValue === "boolean"
-        ? configuredValue
-        : setting.defaultValue;
+      values[setting.id] = resolvePluginBooleanSettingValue(setting, configured);
       continue;
     }
     if (setting.type === "select") {

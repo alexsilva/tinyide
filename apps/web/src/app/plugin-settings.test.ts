@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { PluginSettingsProvider } from "@tinyide/plugin-api";
-import { resolvePluginSettingValues, updatePluginSettingValue } from "./plugin-settings";
+import {
+  resolvePluginBooleanSettingValue,
+  resolvePluginSettingValues,
+  updatePluginSettingValue,
+} from "./plugin-settings";
 
 const provider: PluginSettingsProvider = {
   id: "settings",
@@ -53,6 +57,23 @@ describe("plugin settings", () => {
       limit: 120,
       mode: "files",
     });
+  });
+
+  it("uses a boolean descriptor default without overriding an explicit false", () => {
+    const disabledByDefault = {
+      id: "disabledByDefault",
+      type: "boolean" as const,
+      label: "Disabled",
+      defaultValue: false,
+    };
+    expect(resolvePluginBooleanSettingValue(disabledByDefault, undefined)).toBe(false);
+    expect(resolvePluginBooleanSettingValue(disabledByDefault, { disabledByDefault: true })).toBe(true);
+    expect(resolvePluginBooleanSettingValue({
+      id: "enabled",
+      type: "boolean",
+      label: "Enabled",
+      defaultValue: true,
+    }, { enabled: false })).toBe(false);
   });
 
   it("rejects invalid choices and clamps numeric values", () => {

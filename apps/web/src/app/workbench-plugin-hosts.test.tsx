@@ -5,15 +5,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   WorkbenchExecutionViewProvider,
   WorkbenchExecutionViewTarget,
+  WorkbenchResourceEditorProvider,
   WorkbenchSidebarContribution,
   WorkbenchStateApi,
   WorkbenchToolWindowContribution,
 } from "@tinyide/plugin-api";
 import {
   ExecutionViewHost,
+  ResourceEditorHost,
   WorkbenchSidebarHost,
   WorkbenchToolWindowHost,
 } from "./workbench-plugin-hosts";
+import type { OpenDocument } from "../browser-filesystem";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -39,6 +42,44 @@ function render(element: React.ReactNode): void {
 }
 
 describe("workbench plugin hosts", () => {
+  it("aborts an asynchronous resource editor mount when the document changes", () => {
+    const signals: AbortSignal[] = [];
+    const provider: WorkbenchResourceEditorProvider = {
+      id: "resource-preview",
+      pluginId: "example",
+      canOpen: () => true,
+      mount({ signal }) {
+        if (signal) signals.push(signal);
+      },
+    };
+    const first: OpenDocument = {
+      id: "first",
+      name: "first.html",
+      kind: "text",
+      mediaType: "text/html",
+      size: 5,
+      content: "first",
+      savedContent: "first",
+      selectionStart: 0,
+      selectionEnd: 0,
+      scrollTop: 0,
+      scrollLeft: 0,
+    };
+
+    render(<ResourceEditorHost provider={provider} document={first} />);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(false);
+
+    render(<ResourceEditorHost provider={provider} document={{ ...first, id: "second", name: "second.html" }} />);
+    expect(signals).toHaveLength(2);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+
+    act(() => root?.unmount());
+    root = undefined;
+    expect(signals[1]?.aborted).toBe(true);
+  });
+
   it("keeps sidebar plugin content mounted when only onClose changes", () => {
     const dispose = vi.fn();
     const mount = vi.fn(({ container }: { container: HTMLElement }) => {

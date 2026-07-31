@@ -32,6 +32,7 @@ import type {
   WorkbenchExecutionSnapshot,
   WorkbenchExecutionViewProvider,
   WorkbenchExplorerFilterProvider,
+  WorkbenchHtmlPreviewProvider,
   WorkbenchWorkspaceResourceOpenRequest,
   WorkbenchTextEditorReplaceContentRequest,
   WorkbenchTextEditorSaveRequest,
@@ -49,6 +50,7 @@ import type {
 import { projectRuntimeFetch } from "./project-session";
 import { AppPluginHost } from "./plugin-host";
 import { createOutputFollowControl } from "./output-follow";
+import { installNativeHtmlPreview } from "./html-preview";
 import type { TinyIdeDesktopApi } from "./workspace-host";
 
 const PLATFORM_VERSION = "0.4.0";
@@ -166,6 +168,7 @@ interface WorkbenchBinding {
   saveEditorDocument(request: WorkbenchTextEditorSaveRequest): Promise<void>;
   highlightText(request: WorkbenchTextHighlightRequest): WorkbenchTextHighlightResult;
   openWorkspaceResource(request: WorkbenchWorkspaceResourceOpenRequest): Promise<void>;
+  readWorkspaceResource(path: string): Promise<Blob>;
   executionSnapshot(): WorkbenchExecutionSnapshot;
   subscribeExecution(listener: (snapshot: WorkbenchExecutionSnapshot) => void): Disposable;
   updateExecutionData(profileId: string, providerId: string, data: unknown): Promise<void>;
@@ -212,6 +215,10 @@ class AppWorkbenchApi implements WorkbenchApi {
     openResource: async (request: WorkbenchWorkspaceResourceOpenRequest): Promise<void> => {
       if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
       await this.#binding.openWorkspaceResource(request);
+    },
+    readResource: async (path: string): Promise<Blob> => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      return this.#binding.readWorkspaceResource(path);
     },
   };
 
@@ -358,6 +365,7 @@ function pluginContext(platform: TinyIdePlatform, pluginId: string): PluginConte
       registerWorkbenchEditorToolbarProvider: (provider: WorkbenchEditorToolbarProvider) => platform.capabilities.register("workbench.editorToolbar", provider),
       registerTextEditorLineDecorationProvider: (provider: TextEditorLineDecorationProvider) => platform.capabilities.register("textEditor.lineDecoration", provider),
       registerWorkbenchResourceEditorProvider: (provider: WorkbenchResourceEditorProvider) => platform.capabilities.register("workbench.resourceEditor", provider),
+      registerWorkbenchHtmlPreviewProvider: (provider: WorkbenchHtmlPreviewProvider) => platform.capabilities.register("workbench.htmlPreview", provider),
       registerWorkbenchExecutionViewProvider: (provider: WorkbenchExecutionViewProvider) => platform.capabilities.register("workbench.executionView", provider),
     },
     subscriptions: [],
@@ -408,6 +416,7 @@ export class TinyIdePlatform {
     this.capabilities.register("core.commands", this.commands);
     this.capabilities.register("core.events", this.events);
     this.capabilities.register("core.plugins", this.plugins);
+    installNativeHtmlPreview(this.capabilities, this.commands);
   }
 
   snapshot(): PlatformSnapshot {

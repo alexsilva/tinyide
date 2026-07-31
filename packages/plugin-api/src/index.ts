@@ -125,6 +125,7 @@ export interface PluginExtensionApi {
   registerWorkbenchEditorToolbarProvider(provider: WorkbenchEditorToolbarProvider): Disposable;
   registerTextEditorLineDecorationProvider(provider: TextEditorLineDecorationProvider): Disposable;
   registerWorkbenchResourceEditorProvider(provider: WorkbenchResourceEditorProvider): Disposable;
+  registerWorkbenchHtmlPreviewProvider(provider: WorkbenchHtmlPreviewProvider): Disposable;
   registerWorkbenchExecutionViewProvider(provider: WorkbenchExecutionViewProvider): Disposable;
 }
 
@@ -495,7 +496,7 @@ export interface ResourceDecorationProvider {
 
 export const RESOURCE_DECORATION_CAPABILITY = "resource.decoration";
 
-export type ResourceContextMenuIcon = "file" | "folder" | "play" | "copy" | "terminal" | "save" | "close" | "diff" | "plus" | "undo" | "preview";
+export type ResourceContextMenuIcon = "file" | "folder" | "play" | "copy" | "terminal" | "save" | "close" | "diff" | "plus" | "undo" | "preview" | "history" | "back" | "forward";
 
 export type ResourceContextMenuAction = "runScript";
 
@@ -915,6 +916,8 @@ export interface WorkbenchWorkspaceResourceOpenRequest {
 
 export interface WorkbenchWorkspaceApi {
   openResource(request: WorkbenchWorkspaceResourceOpenRequest): Promise<void>;
+  /** Reads a workspace-relative file without opening it in the editor. */
+  readResource(path: string): Promise<Blob>;
 }
 
 export interface WorkbenchOutputFollowOptions {
@@ -1031,13 +1034,19 @@ export interface WorkbenchResourceEditorMountContext {
   readonly container: HTMLElement;
   readonly resource: WorkbenchResourceDescriptor;
   read(): Promise<Blob>;
+  /** Sinaliza que a montagem foi substituída ou removida antes de concluir. */
+  readonly signal?: AbortSignal;
+  /** Linha (1-based, fracionária) visível no topo do editor de texto ao abrir a visualização. */
+  readonly topLine?: number | undefined;
+  /** Reposiciona o editor de texto para exibir a linha informada no topo. */
+  revealLine?(line: number): void;
 }
 
 export interface WorkbenchResourceEditorProvider {
   readonly id: string;
   readonly pluginId: string;
   readonly priority?: number;
-  canOpen(resource: WorkbenchResourceDescriptor): boolean;
+  canOpen(resource: WorkbenchResourceDescriptor, settings?: PluginSettingValues): boolean;
   onDidChange?(listener: () => void): Disposable;
   mount(
     context: WorkbenchResourceEditorMountContext,
@@ -1045,6 +1054,50 @@ export interface WorkbenchResourceEditorProvider {
 }
 
 export const WORKBENCH_RESOURCE_EDITOR_CAPABILITY = "workbench.resourceEditor";
+
+export type WorkbenchHtmlPreviewSandboxPermission =
+  | "allow-downloads"
+  | "allow-forms"
+  | "allow-modals"
+  | "allow-popups";
+
+export interface WorkbenchHtmlPreviewRequest {
+  readonly resource: WorkbenchResourceDescriptor;
+  readonly html: string;
+  readonly sandbox: readonly WorkbenchHtmlPreviewSandboxPermission[];
+}
+
+export interface WorkbenchHtmlPreviewResult {
+  readonly html?: string;
+  readonly sandbox?: readonly WorkbenchHtmlPreviewSandboxPermission[];
+  /**
+   * Permite executar scripts da prévia. Perigoso: só produz efeito quando
+   * `unsafeSkipSanitize` também é explicitamente verdadeiro.
+   */
+  readonly unsafeAllowScripts?: true;
+  /**
+   * Ignora a sanitização final do core. Perigoso: só produz efeito quando
+   * `unsafeAllowScripts` também é explicitamente verdadeiro.
+   */
+  readonly unsafeSkipSanitize?: true;
+}
+
+/**
+ * Customiza a prévia HTML nativa. Providers são compostos por prioridade;
+ * os de maior prioridade são aplicados por último.
+ */
+export interface WorkbenchHtmlPreviewProvider {
+  readonly id: string;
+  readonly pluginId: string;
+  readonly priority?: number;
+  canHandle?(resource: WorkbenchResourceDescriptor): boolean;
+  previewByDefault?(resource: WorkbenchResourceDescriptor): boolean | undefined;
+  providePreview?(
+    request: WorkbenchHtmlPreviewRequest,
+  ): WorkbenchHtmlPreviewResult | undefined | Promise<WorkbenchHtmlPreviewResult | undefined>;
+}
+
+export const WORKBENCH_HTML_PREVIEW_CAPABILITY = "workbench.htmlPreview";
 
 export type WorkbenchExecutionViewMode = "run" | "debug";
 
@@ -1105,6 +1158,7 @@ export interface TextEditorDocumentSnapshot {
   readonly name: string;
   readonly path?: string;
   readonly workspaceRoot?: string;
+  readonly mediaType?: string;
   readonly content: string;
   readonly isDirty?: boolean;
 }

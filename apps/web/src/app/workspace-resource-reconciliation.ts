@@ -6,6 +6,18 @@ import {
 } from "../browser-filesystem";
 import { replaceWorkspacePathPrefix, workspacePathName } from "./explorer";
 
+export function isSafeWorkspaceResourcePath(path: string): boolean {
+  if (!path || path.includes("\\")) return false;
+  const segments = path.split("/");
+  return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+export function assertWorkspaceResourcePath(path: string): void {
+  if (!isSafeWorkspaceResourcePath(path)) {
+    throw new Error("Caminho de recurso inválido.");
+  }
+}
+
 export interface WorkspaceResourceRename {
   readonly from: string;
   readonly to: string;

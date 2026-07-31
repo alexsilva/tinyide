@@ -4,6 +4,7 @@ import * as Tabs from "@radix-ui/react-tabs";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   ArrowLeft,
+  ArrowRight,
   ArrowUpCircle,
   Bug,
   Box,
@@ -167,6 +168,7 @@ export function editorToolbarDocumentSnapshot(document: OpenDocument): TextEdito
     name: document.name,
     ...(document.path ? { path: document.path } : {}),
     ...(document.workspaceRoot ? { workspaceRoot: document.workspaceRoot } : {}),
+    mediaType: document.mediaType,
     content: document.content,
     isDirty: document.content !== document.savedContent,
   };
@@ -212,7 +214,10 @@ import {
   recordExplorerHistory,
   type ExplorerHistoryState,
 } from "./explorer-history";
-import { reconcileOpenDocumentsAfterWorkspaceChange } from "./workspace-resource-reconciliation";
+import {
+  assertWorkspaceResourcePath,
+  reconcileOpenDocumentsAfterWorkspaceChange,
+} from "./workspace-resource-reconciliation";
 import { platform, resolvePluginIconUrl } from "./platform";
 import {
   moveActivityButton,
@@ -305,6 +310,7 @@ import {
   requestedProjectReference,
 } from "./project-session";
 import {
+  resolvePluginBooleanSettingValue,
   resolvePluginSettingValues,
   updatePluginSettingValue,
 } from "./plugin-settings";
@@ -808,8 +814,12 @@ export function App() {
   const [editorToolbarItems, setEditorToolbarItems] = useState<readonly WorkbenchEditorToolbarItem[]>([]);
   const [resourceEditorRevision, setResourceEditorRevision] = useState(0);
   const activeResourceEditorProvider = useMemo(
-    () => resourceEditorProviderFor(activeDocument),
-    [activeDocument, platformSnapshot.plugins, resourceEditorRevision],
+    () => resourceEditorProviderFor(
+      activeDocument,
+      workspaceSettings.plugins,
+      { settingsResolved: restorationComplete },
+    ),
+    [activeDocument, platformSnapshot.plugins, resourceEditorRevision, restorationComplete, workspaceSettings.plugins],
   );
   const activeLanguageProvider = activeResourceEditorProvider ? undefined : languageProviderFor(activeDocument);
   const openEditorSearch = useCallback(() => {
@@ -861,7 +871,7 @@ export function App() {
     const providers = platform.capabilities.getAll<WorkbenchEditorToolbarProvider>("workbench.editorToolbar");
     void Promise.all(providers.map((provider) => provider.provideItems(snapshot))).then((items) => {
       if (cancelled) return;
-      setEditorToolbarItems(items.flat().filter((item) => item.enabled !== false).sort((a, b) => (a.order ?? 0) - (b.order ?? 0)));
+      setEditorToolbarItems(items.flat().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)));
     });
     return () => { cancelled = true; };
   }, [activeDocument, platformSnapshot, resourceEditorRevision]);
@@ -1169,6 +1179,12 @@ export function App() {
     },
     async openWorkspaceResource(request) {
       await openWorkspaceResourceRef.current(request);
+    },
+    async readWorkspaceResource(path) {
+      if (!workspaceHandle) throw new Error("Abra ou reconecte um workspace antes de ler este arquivo.");
+      assertWorkspaceResourcePath(path);
+      const handle = await resolveFileHandle(workspaceHandle, path);
+      return handle.getFile();
     },
     executionSnapshot,
     subscribeExecution(listener) {
@@ -2162,6 +2178,10 @@ export function App() {
 
   const editorScrollTopForLine = (line: number) => Math.max(0, 18 + (line - 1) * 21.45 - 120);
 
+  const editorScrollTopForTopLine = (line: number) => Math.max(0, 18 + (line - 1) * 21.45);
+
+  const editorTopLineForScrollTop = (scrollTop: number) => Math.max(1, (scrollTop - 18) / 21.45 + 1);
+
   const revealEditorLocation = (
     line: number,
     selectionStart?: number,
@@ -2858,7 +2878,7 @@ export function App() {
       scrollContainer.scrollLeft = activeDocument.scrollLeft;
       syncEditorLineRuler(activeDocument.scrollTop);
     });
-  }, [activeDocumentId, editorSettings.lineNumbers, editorSearchOpen]);
+  }, [activeDocumentId, editorSettings.lineNumbers, editorSearchOpen, activeResourceEditorProvider?.id]);
 
   const downloadDocument = (openDocument: OpenDocument) => {
     const url = URL.createObjectURL(new Blob([openDocument.content], { type: "text/plain;charset=utf-8" }));
@@ -5029,24 +5049,26 @@ export function App() {
                     </ButtonTooltip>
                   </div>
                   {registeredEnvironmentProviders.length > 1 ? (
-                    <div className="environment-manager__toolbar" role="tablist" aria-label="Provedores de ambientes">
+                    <div className="environment-manager__tabs" role="tablist" aria-label="Provedores de ambientes">
                       {registeredEnvironmentProviders.map((provider) => (
-                        <button
-                          className={`button compact ${activeEnvironmentManagerProvider?.id === provider.id ? "primary" : "secondary"}`}
-                          key={provider.id}
-                          type="button"
-                          role="tab"
-                          aria-selected={activeEnvironmentManagerProvider?.id === provider.id}
-                          onClick={() => {
-                            setEnvironmentManagerProviderId(provider.id);
-                            setEnvironmentForm(undefined);
-                            setEditingEnvironmentId(undefined);
-                            setEnvironmentPath("");
-                          }}
-                        >
-                          <WorkbenchActivityIconView icon={provider.icon} />
-                          {provider.name}
-                        </button>
+                        <ButtonTooltip label={provider.name} key={provider.id}>
+                          <button
+                            className={`button compact ${activeEnvironmentManagerProvider?.id === provider.id ? "primary" : "secondary"}`}
+                            type="button"
+                            role="tab"
+                            aria-label={provider.name}
+                            aria-selected={activeEnvironmentManagerProvider?.id === provider.id}
+                            onClick={() => {
+                              setEnvironmentManagerProviderId(provider.id);
+                              setEnvironmentForm(undefined);
+                              setEditingEnvironmentId(undefined);
+                              setEnvironmentPath("");
+                            }}
+                          >
+                            <WorkbenchActivityIconView icon={provider.icon} />
+                            <span className="responsive-action__label">{provider.name}</span>
+                          </button>
+                        </ButtonTooltip>
                       ))}
                     </div>
                   ) : null}
@@ -5515,6 +5537,9 @@ export function App() {
                     {editorToolbarItems.map((item) => {
                       const icon = item.icon === "undo" ? <Undo2 size={14} />
                         : item.icon === "diff" ? <Code2 size={14} />
+                          : item.icon === "back" ? <ArrowLeft size={14} />
+                            : item.icon === "forward" ? <ArrowRight size={14} />
+                          : item.icon === "history" ? <History size={14} />
                           : item.icon === "preview" ? <Eye size={14} />
                           : item.icon === "plus" ? <Plus size={14} />
                             : <File size={14} />;
@@ -5525,6 +5550,7 @@ export function App() {
                           type="button"
                           aria-label={item.label}
                           title={item.label}
+                          disabled={item.enabled === false}
                           onClick={() => invoke(() => {
                             if (!activeDocument) return Promise.resolve();
                             return platform.commands.execute(item.command, editorToolbarDocumentSnapshot(activeDocument));
@@ -5547,7 +5573,14 @@ export function App() {
                 </div>
                 <div className="editor-stack">
                   {activeDocument && activeResourceEditorProvider ? (
-                    <ResourceEditorHost provider={activeResourceEditorProvider} document={activeDocument} />
+                    <ResourceEditorHost
+                      provider={activeResourceEditorProvider}
+                      document={activeDocument}
+                      topLine={editorTopLineForScrollTop(activeDocument.scrollTop)}
+                      onRevealLine={(line) => setDocuments((current) => current.map((document) => document.id === activeDocument.id
+                        ? { ...document, scrollTop: editorScrollTopForTopLine(line) }
+                        : document))}
+                    />
                   ) : activeDocument?.kind === "image" ? (
                     <NativeImageEditor document={activeDocument} />
                   ) : activeDocument?.kind === "binary" ? (
@@ -6323,7 +6356,7 @@ export function App() {
                               <span className="settings-switch">
                                 <input
                                   type="checkbox"
-                                  checked={pluginSettingsDraft[setting.id] !== false}
+                                  checked={resolvePluginBooleanSettingValue(setting, pluginSettingsDraft)}
                                   disabled={!workspaceRoot}
                                   onChange={(event) => invoke(() => applyPluginSetting(setting.id, event.target.checked))}
                                 />

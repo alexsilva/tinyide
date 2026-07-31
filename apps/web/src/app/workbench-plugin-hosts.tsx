@@ -300,17 +300,25 @@ export async function readOpenDocumentBlob(document: OpenDocument): Promise<Blob
 export function ResourceEditorHost({
   provider,
   document,
+  topLine,
+  onRevealLine,
 }: {
   readonly provider: WorkbenchResourceEditorProvider;
   readonly document: OpenDocument;
+  readonly topLine?: number;
+  readonly onRevealLine?: (line: number) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const documentRef = useRef(document);
   documentRef.current = document;
+  const topLineRef = useRef(topLine);
+  const revealLineRef = useRef(onRevealLine);
+  revealLineRef.current = onRevealLine;
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    const controller = new AbortController();
     let disposed = false;
     let mountedDisposable: void | Disposable;
     try {
@@ -319,6 +327,9 @@ export function ResourceEditorHost({
           container,
           resource: workbenchResourceDescriptor(document),
           read: () => readOpenDocumentBlob(documentRef.current),
+          signal: controller.signal,
+          topLine: topLineRef.current,
+          revealLine: (line: number) => revealLineRef.current?.(line),
         }),
         container,
         () => disposed,
@@ -329,6 +340,7 @@ export function ResourceEditorHost({
     }
     return () => {
       disposed = true;
+      controller.abort();
       mountedDisposable?.dispose();
       container.replaceChildren();
     };

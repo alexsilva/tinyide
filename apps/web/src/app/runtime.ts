@@ -15,6 +15,7 @@ import type {
   LanguageProvider,
   LanguageLintSettings,
   ProcessExecutionRequest,
+  PluginSettingsMap,
   PluginSettingsProvider,
   ResourceContext,
   ResourceDecorationProvider,
@@ -198,7 +199,10 @@ export function workbenchResourceDescriptor(document: OpenDocument): WorkbenchRe
 
 export function resourceEditorProviderFor(
   document: OpenDocument | undefined,
+  pluginSettings: PluginSettingsMap = {},
+  options: { readonly settingsResolved?: boolean } = {},
 ): WorkbenchResourceEditorProvider | undefined {
+  if (options.settingsResolved === false) return undefined;
   if (!document) return undefined;
   const resource = workbenchResourceDescriptor(document);
   return platform.capabilities
@@ -207,7 +211,7 @@ export function resourceEditorProviderFor(
     .sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0) || left.id.localeCompare(right.id))
     .find((provider) => {
       try {
-        return provider.canOpen(resource);
+        return provider.canOpen(resource, pluginSettings[provider.pluginId] ?? {});
       } catch {
         return false;
       }

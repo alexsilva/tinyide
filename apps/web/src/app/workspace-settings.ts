@@ -21,6 +21,11 @@ export interface WorkspaceEditorSettings {
   readonly lineNumbers?: boolean;
 }
 
+export interface WorkspaceWatcherSettings {
+  /** Extra directory names ignored by the desktop file watcher, in addition to the built-in defaults. */
+  readonly extraIgnoredDirectories?: readonly string[];
+}
+
 export interface WorkspaceSettings {
   readonly version: 1;
   /** Project-specific execution profiles, equivalent to IDE run configurations. */
@@ -33,6 +38,8 @@ export interface WorkspaceSettings {
   readonly environment?: WorkspaceEnvironmentSettings;
   /** Native editor preferences owned by the tinyIde workbench. */
   readonly editor?: WorkspaceEditorSettings;
+  /** Desktop file watcher preferences owned by the tinyIde workbench. */
+  readonly watcher?: WorkspaceWatcherSettings;
   /** Project-local execution/debug panel layout and output preferences. */
   readonly debugPanel?: DebugPanelLayoutSettings;
   /** Reserved namespace for project-local plugin settings. */

@@ -17,13 +17,14 @@ const {
   installWindowVisibilityFallback,
 } = require("./startup.cjs");
 const { readDesktopState, removeDesktopState, writeDesktopState } = require("./state-store.cjs");
-const { createWorkspaceWatcher } = require("./workspace-watcher.cjs");
+const { createWorkspaceWatcher, DEFAULT_IGNORED_DIRECTORIES } = require("./workspace-watcher.cjs");
 
 let runtime;
 let mainWindow;
 let browserExtensionGuard;
 const desktopWorkspaces = new Map();
 const desktopWorkspaceWatchers = new Map();
+const desktopWorkspaceWatcherIgnores = new Map();
 const LAST_WORKSPACE_STATE_KEY = "last-workspace";
 
 function desktopStateRoot() {
@@ -56,6 +57,15 @@ async function safeRegisteredWorkspacePath(rootPath, workspacePath = "") {
   return resolveSafeWorkspacePath(registeredWorkspaceRoot(rootPath), workspacePath);
 }
 
+function startWorkspaceWatcher(root, extraIgnoredDirectories = []) {
+  return createWorkspaceWatcher(root, (paths) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (window.isDestroyed()) continue;
+      window.webContents.send("tinyide:workspace:changed", { workspaceRoot: root, paths });
+    }
+  }, { extraIgnoredDirectories });
+}
+
 async function registerDesktopWorkspace(rootPath, { persist = true } = {}) {
   const root = resolve(rootPath);
   if (!existsSync(root) || !statSync(root).isDirectory()) {
@@ -64,12 +74,7 @@ async function registerDesktopWorkspace(rootPath, { persist = true } = {}) {
   const token = randomUUID();
   desktopWorkspaces.set(token, root);
   if (!desktopWorkspaceWatchers.has(root)) {
-    desktopWorkspaceWatchers.set(root, createWorkspaceWatcher(root, (paths) => {
-      for (const window of BrowserWindow.getAllWindows()) {
-        if (window.isDestroyed()) continue;
-        window.webContents.send("tinyide:workspace:changed", { workspaceRoot: root, paths });
-      }
-    }));
+    desktopWorkspaceWatchers.set(root, startWorkspaceWatcher(root, desktopWorkspaceWatcherIgnores.get(root)));
   }
   if (persist) {
     await writeDesktopState(desktopStateRoot(), LAST_WORKSPACE_STATE_KEY, { path: root });
@@ -79,6 +84,10 @@ async function registerDesktopWorkspace(rootPath, { persist = true } = {}) {
 
 function installDesktopFileSystemHandlers() {
   const stateRoot = desktopStateRoot();
+
+  ipcMain.on("tinyide:workspace:watcher:defaults", (event) => {
+    event.returnValue = DEFAULT_IGNORED_DIRECTORIES;
+  });
 
   ipcMain.handle("tinyide:state:read", async (_event, key) => readDesktopState(stateRoot, key));
   ipcMain.handle("tinyide:state:write", async (_event, key, value) => {
@@ -213,6 +222,18 @@ function installDesktopFileSystemHandlers() {
     const target = await safeRegisteredWorkspacePath(rootPath, workspacePath);
     const targetInfo = await stat(target);
     return openInSystemFileManager(shell, target, targetInfo);
+  });
+
+  ipcMain.handle("tinyide:workspace:watcher:configure", async (_event, rootPath, extraIgnoredDirectories) => {
+    const root = registeredWorkspaceRoot(rootPath);
+    const list = Array.isArray(extraIgnoredDirectories)
+      ? extraIgnoredDirectories.filter((name) => typeof name === "string" && name.trim())
+      : [];
+    desktopWorkspaceWatcherIgnores.set(root, list);
+    const existing = desktopWorkspaceWatchers.get(root);
+    if (existing) await existing.close();
+    desktopWorkspaceWatchers.set(root, startWorkspaceWatcher(root, list));
+    return true;
   });
 }
 

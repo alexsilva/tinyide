@@ -1,5 +1,6 @@
 import type { BrowserDirectoryHandle, WorkspaceEntry } from "../browser-filesystem";
 import { readStoredState, removeStoredState, writeStoredState } from "../session-store";
+import { isDesktopWorkspaceHandle } from "./workspace-host";
 
 const RECENT_PROJECTS_KEY = "recent-projects";
 const PROJECT_OPEN_PREFERENCE_KEY = "project-open-preference";
@@ -71,7 +72,12 @@ export async function rememberRecentProject(input: {
     ...(input.path ? { path: input.path } : {}),
     lastOpenedAt: Date.now(),
   };
-  await writeStoredState(`recent-project-handle.${id}`, input.handle);
+  // Desktop workspace handles wrap live IPC bridge functions and cannot survive
+  // Electron's structured-clone based IPC (throws "An object could not be cloned.").
+  // They are reconstructed from `project.path` via restoreDesktopWorkspaceHandle instead.
+  if (!isDesktopWorkspaceHandle(input.handle)) {
+    await writeStoredState(`recent-project-handle.${id}`, input.handle);
+  }
   await writeStoredState(RECENT_PROJECTS_KEY, [project, ...recent.filter((item) => item.id !== id)].slice(0, MAX_RECENT_PROJECTS));
   return project;
 }

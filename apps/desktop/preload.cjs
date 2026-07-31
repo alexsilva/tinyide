@@ -1,6 +1,10 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("tinyideDesktop", {
+  watcherDefaultIgnoredDirectories: ipcRenderer.sendSync("tinyide:workspace:watcher:defaults"),
+  configureWorkspaceWatcher(rootPath, extraIgnoredDirectories) {
+    return ipcRenderer.invoke("tinyide:workspace:watcher:configure", rootPath, extraIgnoredDirectories);
+  },
   readState(key) {
     return ipcRenderer.invoke("tinyide:state:read", key);
   },

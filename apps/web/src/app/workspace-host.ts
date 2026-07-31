@@ -52,6 +52,8 @@ export interface TinyIdeDesktopApi {
   pasteWorkspaceResources?(workspaceRoot: string, targetPath: string): Promise<readonly DesktopClipboardEntry[]>;
   subscribeWorkspaceChanges?(listener: (change: DesktopWorkspaceChange) => void): () => void;
   openInFileManager?(workspaceRoot: string, path: string): Promise<boolean>;
+  readonly watcherDefaultIgnoredDirectories?: readonly string[];
+  configureWorkspaceWatcher?(workspaceRoot: string, extraIgnoredDirectories: readonly string[]): Promise<boolean>;
 }
 
 type DesktopWorkspaceApi = TinyIdeDesktopApi & Required<Pick<TinyIdeDesktopApi,
@@ -234,6 +236,26 @@ export async function pasteSystemResourcesIntoWorkspace(
 export function supportsSystemResourceClipboard(): boolean {
   const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
   return Boolean(desktop?.copyWorkspaceResources && desktop.pasteWorkspaceResources);
+}
+
+const FALLBACK_WATCHER_DEFAULT_IGNORED_DIRECTORIES: readonly string[] = [
+  ".cache", ".git", ".idea", ".mypy_cache", ".next", ".nuxt", ".pytest_cache", ".svelte-kit",
+  ".tox", ".tinyide", ".venv", "__pycache__", "build", "coverage", "dist", "node_modules",
+  "release", "site", "target", "venv",
+];
+
+export function desktopWatcherDefaultIgnoredDirectories(): readonly string[] {
+  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
+  return desktop?.watcherDefaultIgnoredDirectories ?? FALLBACK_WATCHER_DEFAULT_IGNORED_DIRECTORIES;
+}
+
+export async function configureDesktopWorkspaceWatcher(
+  workspaceRoot: string,
+  extraIgnoredDirectories: readonly string[],
+): Promise<boolean> {
+  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
+  if (!desktop?.configureWorkspaceWatcher) return false;
+  return desktop.configureWorkspaceWatcher(workspaceRoot, extraIgnoredDirectories);
 }
 
 export function isDesktopWorkspaceHandle(

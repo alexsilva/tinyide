@@ -281,7 +281,9 @@ import {
   type DebugOutputOffsets,
 } from "./debug-panel";
 import {
+  configureDesktopWorkspaceWatcher,
   copyWorkspaceResourcesToSystem,
+  desktopWatcherDefaultIgnoredDirectories,
   openInSystemFileManager,
   openDesktopProjectWindow,
   isDesktopHost,
@@ -631,6 +633,8 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSectionId, setSettingsSectionId] = useState("editor");
   const [pluginSettingsDraft, setPluginSettingsDraft] = useState<PluginSettingValues>({});
+  const [watcherIgnoredDraft, setWatcherIgnoredDraft] = useState("");
+  const [watcherDraftDirectories, setWatcherDraftDirectories] = useState<readonly string[]>([]);
   const [workbenchDialog, setWorkbenchDialog] = useState<ActiveWorkbenchDialog>();
   const [projectOpenDialog, setProjectOpenDialog] = useState(false);
   const [recentProjects, setRecentProjects] = useState<readonly RecentProject[]>([]);
@@ -1518,6 +1522,7 @@ export function App() {
     setDebugInspectorWidth(debugLayout.inspectorWidth);
     setDebugOutputWrap(debugLayout.outputWrap);
     setDebugOutputFollowTail(debugLayout.outputFollowTail);
+    void configureDesktopWorkspaceWatcher(root, settings.watcher?.extraIgnoredDirectories ?? []);
     return settings;
   }, [replaceWorkspaceSettings]);
 
@@ -4618,6 +4623,7 @@ export function App() {
     setPluginSettingsDraft(provider
       ? resolvePluginSettingValues(provider, workspaceSettings.plugins?.[provider.pluginId])
       : {});
+    setWatcherDraftDirectories(workspaceSettings.watcher?.extraIgnoredDirectories ?? []);
     setSettingsOpen(true);
   };
 
@@ -4637,6 +4643,35 @@ export function App() {
         lineNumbers,
       },
     }));
+  };
+
+  const applyWatcherExtraIgnoredDirectories = async (extraIgnoredDirectories: readonly string[]) => {
+    await updateWorkspaceSettings((current) => ({
+      ...current,
+      watcher: {
+        ...current.watcher,
+        extraIgnoredDirectories,
+      },
+    }));
+    if (workspaceRoot) await configureDesktopWorkspaceWatcher(workspaceRoot, extraIgnoredDirectories);
+  };
+
+  const addWatcherIgnoredDirectory = () => {
+    const name = watcherIgnoredDraft.trim();
+    if (!name) return;
+    setWatcherDraftDirectories((current) => (current.includes(name) ? current : [...current, name]));
+    setWatcherIgnoredDraft("");
+  };
+
+  const removeWatcherDraftDirectory = (name: string) => {
+    setWatcherDraftDirectories((current) => current.filter((entry) => entry !== name));
+  };
+
+  const commitWatcherDraftDirectories = async () => {
+    const current = workspaceSettings.watcher?.extraIgnoredDirectories ?? [];
+    const next = watcherDraftDirectories;
+    const changed = current.length !== next.length || current.some((entry, index) => entry !== next[index]);
+    if (changed) await applyWatcherExtraIgnoredDirectories(next);
   };
 
   const applyPluginSetting = async (settingId: string, value: PluginSettingValue) => {
@@ -6260,7 +6295,13 @@ export function App() {
           </Dialog.Portal>
         </Dialog.Root>
 
-        <Dialog.Root open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <Dialog.Root
+          open={settingsOpen}
+          onOpenChange={(open) => {
+            if (!open) setWatcherDraftDirectories(workspaceSettings.watcher?.extraIgnoredDirectories ?? []);
+            setSettingsOpen(open);
+          }}
+        >
           <Dialog.Portal>
             <Dialog.Overlay className="dialog-overlay" />
             <Dialog.Content className="settings-dialog">
@@ -6292,6 +6333,14 @@ export function App() {
                   >
                     <Code2 size={15} />
                     <span>Editor</span>
+                  </button>
+                  <button
+                    className={settingsSectionId === "watcher" ? "is-active" : ""}
+                    type="button"
+                    onClick={() => selectSettingsSection("watcher")}
+                  >
+                    <Eye size={15} />
+                    <span>Vigia de arquivos</span>
                   </button>
                   {settingsProviders.length ? <span className="settings-navigation__label">Plugins</span> : null}
                   {settingsProviders.map((provider) => (
@@ -6333,6 +6382,72 @@ export function App() {
                             <i aria-hidden="true" />
                           </span>
                         </label>
+                      </div>
+                    </>
+                  ) : settingsSectionId === "watcher" ? (
+                    <>
+                      <div className="settings-section-heading">
+                        <span className="settings-section-heading__icon"><Eye size={18} /></span>
+                        <div>
+                          <span className="eyebrow">NATIVO</span>
+                          <h3>Vigia de arquivos</h3>
+                          <p>Diretórios ignorados ao observar mudanças no workspace no app desktop.</p>
+                        </div>
+                      </div>
+                      <div className="plugin-setting-list">
+                        <div className="plugin-setting-note">
+                          <strong>Padrões</strong>
+                          <small>Sempre ignorados, para evitar travamentos com diretórios pesados.</small>
+                        </div>
+                        <div className="watcher-ignored-chips">
+                          {desktopWatcherDefaultIgnoredDirectories().map((name) => (
+                            <span className="watcher-ignored-chip watcher-ignored-chip--default" key={name}>{name}</span>
+                          ))}
+                        </div>
+                        <div className="plugin-setting-note">
+                          <strong>Personalizados</strong>
+                          <small>Adicione outros nomes de diretório para ignorar neste projeto. Use * como coringa, ex.: .* para ignorar tudo que começa com ponto.</small>
+                        </div>
+                        {watcherDraftDirectories.length ? (
+                          <div className="watcher-ignored-chips">
+                            {watcherDraftDirectories.map((name) => (
+                              <span className="watcher-ignored-chip" key={name}>
+                                {name}
+                                <button
+                                  type="button"
+                                  aria-label={`Remover ${name}`}
+                                  disabled={!workspaceRoot}
+                                  onClick={() => removeWatcherDraftDirectory(name)}
+                                >
+                                  <X size={12} />
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                        <div className="watcher-ignored-add">
+                          <input
+                            type="text"
+                            placeholder="ex.: .cache-local ou .*"
+                            value={watcherIgnoredDraft}
+                            disabled={!workspaceRoot}
+                            onChange={(event) => setWatcherIgnoredDraft(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                invoke(() => addWatcherIgnoredDirectory());
+                              }
+                            }}
+                          />
+                          <button
+                            className="button"
+                            type="button"
+                            disabled={!workspaceRoot || !watcherIgnoredDraft.trim()}
+                            onClick={() => invoke(() => addWatcherIgnoredDirectory())}
+                          >
+                            <Plus size={14} /> Adicionar
+                          </button>
+                        </div>
                       </div>
                     </>
                   ) : activePluginSettingsProvider ? (
@@ -6400,10 +6515,21 @@ export function App() {
               <div className="settings-dialog__footer">
                 {!workspaceRoot ? (
                   <p className="settings-scope-note"><CircleAlert size={14} /> Abra um workspace para alterar configurações locais.</p>
+                ) : settingsSectionId === "watcher" ? (
+                  <p className="settings-scope-note"><Check size={14} /> Alterações só são aplicadas ao clicar em "Concluir".</p>
                 ) : (
                   <p className="settings-scope-note"><Check size={14} /> Alterações salvas automaticamente em <code>.tinyide/settings.json</code>.</p>
                 )}
-                <button className="button primary" type="button" onClick={() => setSettingsOpen(false)}>Concluir</button>
+                <button
+                  className="button primary"
+                  type="button"
+                  onClick={() => invoke(async () => {
+                    await commitWatcherDraftDirectories();
+                    setSettingsOpen(false);
+                  })}
+                >
+                  Concluir
+                </button>
               </div>
             </Dialog.Content>
           </Dialog.Portal>

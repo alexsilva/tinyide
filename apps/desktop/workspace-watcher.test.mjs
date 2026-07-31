@@ -18,6 +18,20 @@ describe("desktop workspace watcher", () => {
     expect(ignoredWorkspacePath("/workspace", "/workspace/src/main.ts")).toBe(false);
   });
 
+  it("ignores heavy dependency/build directories", () => {
+    expect(ignoredWorkspacePath("/workspace", "/workspace/node_modules/pkg/index.js")).toBe(true);
+    expect(ignoredWorkspacePath("/workspace", "/workspace/dist/bundle.js")).toBe(true);
+    expect(ignoredWorkspacePath("/workspace", "/workspace/.venv/lib/site-packages/x.py")).toBe(true);
+    expect(ignoredWorkspacePath("/workspace", "/workspace/src/node_modules_helper.ts")).toBe(false);
+  });
+
+  it("supports wildcard patterns in extra ignored directories", () => {
+    const extraIgnored = new Set([".*"]);
+    expect(ignoredWorkspacePath("/workspace", "/workspace/.directory/x.txt", extraIgnored)).toBe(true);
+    expect(ignoredWorkspacePath("/workspace", "/workspace/.env", extraIgnored)).toBe(true);
+    expect(ignoredWorkspacePath("/workspace", "/workspace/src/main.ts", extraIgnored)).toBe(false);
+  });
+
   it("batches external file changes and stops cleanly", async () => {
     vi.useFakeTimers();
     const watcher = new EventEmitter();

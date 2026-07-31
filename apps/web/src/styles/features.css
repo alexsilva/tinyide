@@ -154,6 +154,18 @@
 .settings-switch input:checked + i { border-color: #5b82c2; background: #345d9c; }
 .settings-switch input:checked + i::after { transform: translateX(17px); background: #f0f4fb; }
 .settings-switch input:focus-visible + i { outline: 2px solid #7398d2; outline-offset: 2px; }
+.plugin-setting-note { display: grid; gap: 5px; padding: 0 2px; }
+.plugin-setting-note strong { color: #dce3ed; font-size: 12px; font-weight: 650; }
+.plugin-setting-note small { color: #8995a7; font-size: 10px; line-height: 1.5; }
+.watcher-ignored-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.watcher-ignored-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 999px; border: 1px solid #3a4658; background: #1b222d; color: #aebbd0; font-size: 10px; font-family: var(--mono-font, monospace); }
+.watcher-ignored-chip--default { color: #8995a7; }
+.watcher-ignored-chip button { display: flex; border: none; background: transparent; color: inherit; padding: 0; cursor: pointer; }
+.watcher-ignored-chip button:disabled { cursor: default; opacity: .6; }
+.watcher-ignored-add { display: flex; gap: 8px; }
+.watcher-ignored-add input { flex: 1; min-width: 0; height: 30px; border: 1px solid #3a4658; border-radius: 4px; padding: 0 8px; background: #111720; color: #dce3ed; font: inherit; font-size: 11px; }
+.watcher-ignored-add input:focus-visible { border-color: #5684b7; outline: 2px solid rgb(86 132 183 / 20%); outline-offset: 0; }
+.watcher-ignored-add .button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .settings-dialog__footer { display: flex; align-items: center; justify-content: space-between; min-height: 58px; gap: 16px; padding: 11px 18px; border-top: 1px solid #293241; background: #11161e; }
 .lint-rule-list { display: grid; gap: 8px; margin: 18px 0; }
 .lint-rule { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); }

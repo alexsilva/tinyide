@@ -516,7 +516,7 @@ export class TinyIdePlatform {
     this.#manifestUrls.set(manifest.id, absoluteManifestUrl);
     await this.plugins.enable(manifest.id);
     await this.plugins.activate(manifest.id, pluginContext(this, manifest.id));
-    this.#persist();
+    await this.#persist();
     this.#notify();
   }
 
@@ -527,7 +527,7 @@ export class TinyIdePlatform {
     } else {
       await this.plugins.disable(id);
     }
-    this.#persist();
+    await this.#persist();
     this.#notify();
   }
 
@@ -535,25 +535,19 @@ export class TinyIdePlatform {
     await this.plugins.uninstall(id);
     this.#sourceUrls.delete(id);
     this.#manifestUrls.delete(id);
-    this.#persist();
+    await this.#persist();
     this.#notify();
   }
 
   async #restore(): Promise<void> {
-    let stored: readonly StoredPlugin[] = [];
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      stored = raw ? (JSON.parse(raw) as readonly StoredPlugin[]) : [];
-    } catch {
-      localStorage.removeItem(STORAGE_KEY);
-    }
+    const stored = await readStoredPlugins(localStorage, window.tinyideDesktop);
 
     const restored: StoredPlugin[] = [];
     for (const entry of stored) {
       try {
         let manifest = entry.manifest;
-        let manifestUrl = entry.manifestUrl;
-        let sourceUrl = entry.sourceUrl;
+        let manifestUrl = rebaseLoopbackPluginUrl(entry.manifestUrl, window.location.href);
+        let sourceUrl = rebaseLoopbackPluginUrl(entry.sourceUrl, window.location.href);
         try {
           const response = await fetch(manifestUrl, { headers: { Accept: "application/json" }, cache: "no-store" });
           if (response.ok) {
@@ -581,10 +575,10 @@ export class TinyIdePlatform {
         console.warn(`Não foi possível reativar o plugin ${entry.manifest.id}.`, error);
       }
     }
-    this.#persist();
+    await this.#persist();
   }
 
-  #persist(): void {
+  async #persist(): Promise<void> {
     const stored = this.plugins.list().flatMap((plugin): StoredPlugin[] => {
       const sourceUrl = this.#sourceUrls.get(plugin.manifest.id);
       const manifestUrl = this.#manifestUrls.get(plugin.manifest.id);
@@ -596,7 +590,7 @@ export class TinyIdePlatform {
         enabled: plugin.state === "active" || plugin.state === "enabled",
       }];
     });
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+    await writeStoredPlugins(localStorage, stored, window.tinyideDesktop);
   }
 
   #notify(): void {

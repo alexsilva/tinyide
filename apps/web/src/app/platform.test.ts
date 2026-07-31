@@ -1,6 +1,12 @@
 import type { PluginManifest } from "@tinyide/plugin-api";
-import { describe, expect, it } from "vitest";
-import { orderPluginsByDependencies } from "./platform";
+import { describe, expect, it, vi } from "vitest";
+import {
+  orderPluginsByDependencies,
+  readStoredPlugins,
+  rebaseLoopbackPluginUrl,
+  type StoredPlugin,
+  writeStoredPlugins,
+} from "./platform";
 
 function plugin(id: string, name: string, dependencies?: Readonly<Record<string, string>>) {
   const manifest: PluginManifest = {
@@ -43,5 +49,70 @@ describe("plugin restoration order", () => {
       service,
       application,
     ]);
+  });
+});
+
+function storedPlugin(id: string, enabled: boolean): StoredPlugin {
+  return {
+    manifest: plugin(id, id).manifest,
+    manifestUrl: `http://127.0.0.1/plugin/${id}/manifest.json`,
+    sourceUrl: `http://127.0.0.1/plugin/${id}/index.js`,
+    enabled,
+  };
+}
+
+function localStorageWith(value?: readonly StoredPlugin[]) {
+  const values = new Map<string, string>();
+  if (value) values.set("tinyide.react.plugins.v1", JSON.stringify(value));
+  return {
+    getItem: vi.fn((key: string) => values.get(key) ?? null),
+    removeItem: vi.fn((key: string) => values.delete(key)),
+    setItem: vi.fn((key: string, next: string) => values.set(key, next)),
+  };
+}
+
+describe("plugin state persistence", () => {
+  it("uses desktop state instead of origin-scoped local storage", async () => {
+    const local = [storedPlugin("local", true)];
+    const desktop = [storedPlugin("desktop", false)];
+    const storage = localStorageWith(local);
+    const readState = vi.fn(async () => desktop);
+
+    await expect(readStoredPlugins(storage, { readState })).resolves.toEqual(desktop);
+    expect(readState).toHaveBeenCalledWith("plugins");
+    expect(storage.getItem).not.toHaveBeenCalled();
+  });
+
+  it("migrates local plugin state when desktop state does not exist yet", async () => {
+    const local = [storedPlugin("local", false)];
+    const storage = localStorageWith(local);
+    const readState = vi.fn(async () => undefined);
+
+    await expect(readStoredPlugins(storage, { readState })).resolves.toEqual(local);
+  });
+
+  it("writes plugin state to durable desktop storage", async () => {
+    const stored = [storedPlugin("python", false)];
+    const storage = localStorageWith();
+    const writeState = vi.fn(async () => true);
+
+    await writeStoredPlugins(storage, stored, { writeState });
+
+    expect(writeState).toHaveBeenCalledWith("plugins", stored);
+    expect(storage.setItem).toHaveBeenCalledWith("tinyide.react.plugins.v1", JSON.stringify(stored));
+  });
+
+  it("rebases packaged plugin URLs when the local runtime port changes", () => {
+    expect(rebaseLoopbackPluginUrl(
+      "http://127.0.0.1:41821/dev-plugins/python/plugin.json",
+      "http://127.0.0.1:43990/",
+    )).toBe("http://127.0.0.1:43990/dev-plugins/python/plugin.json");
+  });
+
+  it("does not rewrite remote plugin URLs", () => {
+    expect(rebaseLoopbackPluginUrl(
+      "https://plugins.example.com/python/plugin.json",
+      "http://127.0.0.1:43990/",
+    )).toBe("https://plugins.example.com/python/plugin.json");
   });
 });

@@ -22,7 +22,7 @@ function provider(id: string, extensions: readonly string[], marker: string): La
 
 describe("generic syntax highlighting", () => {
   it("detects common file families from extension, special name and media type", () => {
-    expect(genericSyntaxKindFor({ fileName: "component.html" })).toBe("markup");
+    expect(genericSyntaxKindFor({ fileName: "component.html" })).toBe("plain");
     expect(genericSyntaxKindFor({ fileName: "theme.scss" })).toBe("stylesheet");
     expect(genericSyntaxKindFor({ fileName: "settings.yaml" })).toBe("data");
     expect(genericSyntaxKindFor({ fileName: ".env.local" })).toBe("config");
@@ -57,6 +57,12 @@ describe("generic syntax highlighting", () => {
     const broad = provider("broad", [".js"], "broad");
     const specific = provider("specific", [".test.js"], "specific");
     expect(pluginLanguageProviderFor({ fileName: "module.test.js" }, [broad, specific])?.id).toBe("specific");
+  });
+
+  it("lets a plugin replace a lower-priority module provider", () => {
+    const moduleProvider = { ...provider("module-html", [".html"], "module"), priority: -1000 };
+    const pluginProvider = provider("plugin-html", [".html"], "plugin");
+    expect(pluginLanguageProviderFor({ fileName: "index.html" }, [moduleProvider, pluginProvider])?.id).toBe("plugin-html");
   });
 
   it("returns a stable generic provider id through the shared resolver", () => {

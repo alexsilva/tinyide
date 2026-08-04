@@ -4,54 +4,32 @@ import {
   EventBus,
   PluginManager,
 } from "@tinyide/core";
+import { builtinModules } from "@tinyide/modules";
 import type {
-  DebugAdapterProvider,
   DebugSessionSnapshot,
-  ExecutionEnvironmentProvider,
   ExecutionProfile,
-  ExecutionProfileContributionProvider,
-  InteractiveSessionHookProvider,
-  InteractiveSessionProvider,
-  LanguageProvider,
+  ModuleContext,
   PluginContext,
   PluginBackendRequestOptions,
   PluginBackendApi,
   PluginManifest,
   PluginRecord,
-  PluginSettingsProvider,
-  ResourceContextMenuProvider,
-  ResourceDecorationProvider,
-  ResourceIconProvider,
-  ScriptExecutionContribution,
-  TextEditorContextMenuProvider,
-  TextEditorNavigationProvider,
-  TextEditorLineDecorationProvider,
   WorkbenchApi,
   WorkbenchDialogContribution,
   WorkbenchExecutionProfileUpdateOptions,
   WorkbenchExecutionSnapshot,
-  WorkbenchExecutionViewProvider,
-  WorkbenchExplorerFilterProvider,
-  WorkbenchHtmlPreviewProvider,
   WorkbenchWorkspaceResourceOpenRequest,
   WorkbenchTextEditorReplaceContentRequest,
   WorkbenchTextEditorSaveRequest,
   WorkbenchTextHighlightRequest,
   WorkbenchTextHighlightResult,
-  WorkbenchPanelHook,
-  WorkbenchResourceEditorProvider,
-  WorkbenchSidebarHook,
-  WorkbenchEditorToolbarProvider,
-  WorkbenchStatusbarContribution,
-  WorkbenchTitlebarContribution,
-  WorkbenchToolWindowHook,
-  WorkspaceFileCreationProvider,
   Disposable,
 } from "@tinyide/plugin-api";
 import { projectRuntimeFetch } from "./project-session";
 import { AppPluginHost } from "./plugin-host";
 import { createOutputFollowControl } from "./output-follow";
-import { installNativeHtmlPreview } from "./html-preview";
+import { createExtensionApi } from "./extension-api";
+import { AppModuleHost } from "./module-host";
 import type { TinyIdeDesktopApi } from "./workspace-host";
 
 const PLATFORM_VERSION = "0.4.0";
@@ -342,34 +320,17 @@ function pluginContext(platform: TinyIdePlatform, pluginId: string): PluginConte
     commands: platform.commands,
     events: platform.events,
     workbench: platform.workbench,
-    extensions: {
-      registerLanguageProvider: (provider: LanguageProvider) => platform.capabilities.register("language.provider", provider),
-      registerResourceIconProvider: (provider: ResourceIconProvider) => platform.capabilities.register("resource.icon", provider),
-      registerResourceDecorationProvider: (provider: ResourceDecorationProvider) => platform.capabilities.register("resource.decoration", provider),
-      registerWorkspaceFileCreationProvider: (provider: WorkspaceFileCreationProvider) => platform.capabilities.register("workspace.fileCreation", provider),
-      registerExecutionEnvironmentProvider: (provider: ExecutionEnvironmentProvider) => platform.capabilities.register("execution.environment", provider),
-      registerExecutionProfileContributionProvider: (provider: ExecutionProfileContributionProvider) => platform.capabilities.register("execution.profile.contribution", provider),
-      registerDebugAdapterProvider: (provider: DebugAdapterProvider) => platform.capabilities.register("execution.debugAdapter", provider),
-      registerScriptExecution: (contribution: ScriptExecutionContribution) => platform.capabilities.register("execution.script", contribution),
-      registerResourceContextMenuProvider: (provider: ResourceContextMenuProvider) => platform.capabilities.register("resource.contextMenu", provider),
-      registerTextEditorContextMenuProvider: (provider: TextEditorContextMenuProvider) => platform.capabilities.register("textEditor.contextMenu", provider),
-      registerTextEditorNavigationProvider: (provider: TextEditorNavigationProvider) => platform.capabilities.register("textEditor.navigation", provider),
-      registerInteractiveSessionHook: (provider: InteractiveSessionHookProvider) => platform.capabilities.register("interactive.session.hook", provider),
-      registerInteractiveSessionProvider: (provider: InteractiveSessionProvider) => platform.capabilities.register("interactive.session", provider),
-      getInteractiveSessionHooks: () => platform.capabilities.getAll<InteractiveSessionHookProvider>("interactive.session.hook"),
-      registerPluginSettingsProvider: (provider: PluginSettingsProvider) => platform.capabilities.register("plugin.settings", provider),
-      registerWorkbenchSidebarHook: (hook: WorkbenchSidebarHook) => platform.capabilities.register("workbench.sidebar.hook", hook),
-      registerWorkbenchPanelHook: (hook: WorkbenchPanelHook) => platform.capabilities.register("workbench.panel.hook", hook),
-      registerWorkbenchToolWindowHook: (hook: WorkbenchToolWindowHook) => platform.capabilities.register("workbench.toolWindow.hook", hook),
-      registerWorkbenchTitlebarContribution: (contribution: WorkbenchTitlebarContribution) => platform.capabilities.register("workbench.titlebar", contribution),
-      registerWorkbenchStatusbarContribution: (contribution: WorkbenchStatusbarContribution) => platform.capabilities.register("workbench.statusbar", contribution),
-      registerWorkbenchExplorerFilterProvider: (provider: WorkbenchExplorerFilterProvider) => platform.capabilities.register("workbench.explorerFilter", provider),
-      registerWorkbenchEditorToolbarProvider: (provider: WorkbenchEditorToolbarProvider) => platform.capabilities.register("workbench.editorToolbar", provider),
-      registerTextEditorLineDecorationProvider: (provider: TextEditorLineDecorationProvider) => platform.capabilities.register("textEditor.lineDecoration", provider),
-      registerWorkbenchResourceEditorProvider: (provider: WorkbenchResourceEditorProvider) => platform.capabilities.register("workbench.resourceEditor", provider),
-      registerWorkbenchHtmlPreviewProvider: (provider: WorkbenchHtmlPreviewProvider) => platform.capabilities.register("workbench.htmlPreview", provider),
-      registerWorkbenchExecutionViewProvider: (provider: WorkbenchExecutionViewProvider) => platform.capabilities.register("workbench.executionView", provider),
-    },
+    extensions: createExtensionApi(platform),
+    subscriptions: [],
+  };
+}
+
+function moduleContext(platform: TinyIdePlatform): ModuleContext {
+  return {
+    commands: platform.commands,
+    events: platform.events,
+    extensions: createExtensionApi(platform),
+    workbench: platform.workbench,
     subscriptions: [],
   };
 }
@@ -379,6 +340,7 @@ export class TinyIdePlatform {
   readonly events = new EventBus();
   readonly capabilities = new CapabilityRegistry();
   readonly workbench = new AppWorkbenchApi();
+  readonly modules = new AppModuleHost(() => moduleContext(this));
 
   readonly #sourceUrls = new Map<string, string>();
   readonly #manifestUrls = new Map<string, string>();
@@ -418,7 +380,6 @@ export class TinyIdePlatform {
     this.capabilities.register("core.commands", this.commands);
     this.capabilities.register("core.events", this.events);
     this.capabilities.register("core.plugins", this.plugins);
-    installNativeHtmlPreview(this.capabilities, this.commands);
   }
 
   snapshot(): PlatformSnapshot {
@@ -446,6 +407,7 @@ export class TinyIdePlatform {
     if (this.#initializationPromise) return this.#initializationPromise;
 
     this.#initializationPromise = (async () => {
+      if (!this.modules.list().length) await this.modules.initialize(builtinModules);
       await this.#restore();
       await this.discoverPlugins();
       await this.#installBundledPlugins();

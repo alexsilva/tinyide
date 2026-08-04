@@ -101,6 +101,29 @@ export interface PluginContext {
   readonly subscriptions: Disposable[];
 }
 
+/** Contexto público entregue a implementações básicas distribuídas com a IDE. */
+export interface ModuleContext {
+  readonly commands: CommandRegistryApi;
+  readonly events: EventBusApi;
+  readonly extensions: PluginExtensionApi;
+  readonly workbench: WorkbenchApi;
+  readonly subscriptions: Disposable[];
+}
+
+/**
+ * Implementação básica carregada automaticamente pela IDE.
+ *
+ * Módulos não possuem estado de instalação, ativação ou habilitação. Eles usam
+ * exclusivamente contratos públicos e podem ser substituídos por providers de
+ * plugins com prioridade superior.
+ */
+export interface TinyIdeModule {
+  readonly id: string;
+  readonly version: string;
+  init(context: ModuleContext): void | Promise<void>;
+  dispose?(): void | Promise<void>;
+}
+
 export interface PluginExtensionApi {
   registerLanguageProvider(provider: LanguageProvider): Disposable;
   registerResourceIconProvider(provider: ResourceIconProvider): Disposable;
@@ -127,6 +150,7 @@ export interface PluginExtensionApi {
   registerTextEditorLineDecorationProvider(provider: TextEditorLineDecorationProvider): Disposable;
   registerWorkbenchResourceEditorProvider(provider: WorkbenchResourceEditorProvider): Disposable;
   registerWorkbenchHtmlPreviewProvider(provider: WorkbenchHtmlPreviewProvider): Disposable;
+  getWorkbenchHtmlPreviewProviders(): readonly WorkbenchHtmlPreviewProvider[];
   registerWorkbenchExecutionViewProvider(provider: WorkbenchExecutionViewProvider): Disposable;
 }
 
@@ -406,6 +430,8 @@ export interface LanguageProvider {
   readonly id: string;
   readonly name: string;
   readonly extensions: readonly string[];
+  /** Maior prioridade vence. Módulos devem usar prioridade negativa para permitir substituição por plugins. */
+  readonly priority?: number;
   readonly lintRules?: readonly LanguageLintRule[];
   highlight(source: string): readonly SyntaxToken[];
   lint(

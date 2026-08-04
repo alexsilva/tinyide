@@ -1,0 +1,11 @@
+{
+  "name": "@tinyide/modules",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@tinyide/module-html": "0.1.0",
+    "@tinyide/plugin-api": "0.1.0"
+  }
+}

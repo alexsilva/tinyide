@@ -8,7 +8,7 @@ import type {
   WorkbenchResourceDescriptor,
 } from "@tinyide/plugin-api";
 import {
-  createNativeHtmlPreviewFeature,
+  createHtmlPreviewFeature,
   htmlPreviewSettingsProvider,
   htmlTopLevelBlockLines,
   previewOffsetForLine,
@@ -45,7 +45,7 @@ function testContainer(): { readonly dom: JSDOM; readonly container: HTMLElement
 }
 
 async function mountPreview(
-  feature: ReturnType<typeof createNativeHtmlPreviewFeature>,
+  feature: ReturnType<typeof createHtmlPreviewFeature>,
   html: string,
   options: {
     readonly signal?: AbortSignal;
@@ -70,7 +70,7 @@ async function mountPreview(
 describe("native HTML preview", () => {
   it("registers an HTML setting enabled by default", () => {
     expect(htmlPreviewSettingsProvider).toMatchObject({
-      pluginId: "core.html",
+      pluginId: "module.html",
       title: "HTML",
       settings: [{
         id: "openInPreview",
@@ -81,14 +81,14 @@ describe("native HTML preview", () => {
   });
 
   it("resolves initial mode as manual choice, plugin default, setting, then true", () => {
-    const disabled = createNativeHtmlPreviewFeature();
+    const disabled = createHtmlPreviewFeature();
     expect(disabled.resourceEditorProvider.canOpen(resource, { openInPreview: false })).toBe(false);
     disabled.toggle(document);
     expect(disabled.resourceEditorProvider.canOpen(resource, { openInPreview: false })).toBe(true);
     disabled.toggle(document);
     expect(disabled.resourceEditorProvider.canOpen(resource, { openInPreview: true })).toBe(false);
 
-    const pluginEnabled = createNativeHtmlPreviewFeature(() => [{
+    const pluginEnabled = createHtmlPreviewFeature(() => [{
       id: "enable",
       pluginId: "example",
       previewByDefault: () => true,
@@ -97,14 +97,14 @@ describe("native HTML preview", () => {
     pluginEnabled.toggle(document);
     expect(pluginEnabled.resourceEditorProvider.canOpen(resource, { openInPreview: true })).toBe(false);
 
-    const pluginDisabled = createNativeHtmlPreviewFeature(() => [{
+    const pluginDisabled = createHtmlPreviewFeature(() => [{
       id: "disable",
       pluginId: "example",
       previewByDefault: () => false,
     }]);
     expect(pluginDisabled.resourceEditorProvider.canOpen(resource, { openInPreview: true })).toBe(false);
 
-    const defaultFeature = createNativeHtmlPreviewFeature();
+    const defaultFeature = createHtmlPreviewFeature();
     expect(defaultFeature.resourceEditorProvider.canOpen(resource)).toBe(true);
   });
 
@@ -154,7 +154,7 @@ describe("native HTML preview", () => {
         }),
       },
     ];
-    const feature = createNativeHtmlPreviewFeature(() => providers);
+    const feature = createHtmlPreviewFeature(() => providers);
     const { iframe, disposable } = await mountPreview(feature, "<h1>Hello</h1>");
 
     expect(iframe.srcdoc).toContain("<h1");
@@ -166,7 +166,7 @@ describe("native HTML preview", () => {
   });
 
   it("requires both explicit unsafe flags before executing unsanitized HTML", async () => {
-    const partial = createNativeHtmlPreviewFeature(() => [{
+    const partial = createHtmlPreviewFeature(() => [{
       id: "partial",
       pluginId: "partial",
       providePreview: () => ({
@@ -179,7 +179,7 @@ describe("native HTML preview", () => {
     expect(partialMount.iframe.getAttribute("sandbox")).toBe("");
     partialMount.disposable.dispose();
 
-    const unsafe = createNativeHtmlPreviewFeature(() => [{
+    const unsafe = createHtmlPreviewFeature(() => [{
       id: "unsafe",
       pluginId: "unsafe",
       providePreview: () => ({
@@ -197,10 +197,10 @@ describe("native HTML preview", () => {
   });
 
   it("uses the real media type for toolbar detection", () => {
-    const feature = createNativeHtmlPreviewFeature();
+    const feature = createHtmlPreviewFeature();
     const extensionless = { ...document, name: "preview", path: "preview", mediaType: "text/html" };
     expect(feature.toolbarProvider.provideItems(extensionless)).toEqual([expect.objectContaining({
-      command: "core.html.togglePreview",
+      command: "module.html.togglePreview",
     })]);
     feature.toggle(extensionless);
     expect(feature.resourceEditorProvider.canOpen({ ...resource, name: "preview", path: "preview" })).toBe(true);
@@ -209,7 +209,7 @@ describe("native HTML preview", () => {
   it("does not mutate the DOM when an asynchronous mount is cancelled", async () => {
     let resolveRead: ((blob: Blob) => void) | undefined;
     const read = new Promise<Blob>((resolve) => { resolveRead = resolve; });
-    const feature = createNativeHtmlPreviewFeature();
+    const feature = createHtmlPreviewFeature();
     const { container } = testContainer();
     const controller = new AbortController();
     const mounting = feature.resourceEditorProvider.mount({
@@ -227,7 +227,7 @@ describe("native HTML preview", () => {
   });
 
   it("disposes the mounted iframe and its scroll listener", async () => {
-    const feature = createNativeHtmlPreviewFeature();
+    const feature = createHtmlPreviewFeature();
     const { iframe, disposable } = await mountPreview(feature, "<p>one</p>\n<p>two</p>");
     const view = iframe.contentWindow!;
     const removeListener = vi.spyOn(view, "removeEventListener");
@@ -253,7 +253,7 @@ describe("native HTML preview", () => {
   });
 
   it("restores topLine in the iframe and continuously reports preview scrolling", async () => {
-    const feature = createNativeHtmlPreviewFeature();
+    const feature = createHtmlPreviewFeature();
     const revealLine = vi.fn();
     const mounted = await mountPreview(
       feature,
@@ -302,7 +302,7 @@ describe("native HTML preview", () => {
   });
 
   it("ignores non-HTML documents", () => {
-    const feature = createNativeHtmlPreviewFeature();
+    const feature = createHtmlPreviewFeature();
     expect(feature.toolbarProvider.provideItems({
       ...document,
       name: "notes.txt",

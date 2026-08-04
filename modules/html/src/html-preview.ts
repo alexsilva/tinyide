@@ -1,8 +1,7 @@
 import createDOMPurify from "dompurify";
 import type {
-  CapabilityRegistryApi,
-  CommandRegistryApi,
   Disposable,
+  ModuleContext,
   PluginSettingsProvider,
   PluginSettingValues,
   TextEditorDocumentSnapshot,
@@ -12,10 +11,10 @@ import type {
   WorkbenchResourceDescriptor,
   WorkbenchResourceEditorProvider,
 } from "@tinyide/plugin-api";
-import { resolvePluginBooleanSettingValue } from "./plugin-settings";
 
 const HTML_EXTENSIONS = [".html", ".htm"];
-const CORE_HTML_PLUGIN_ID = "core.html";
+export const HTML_MODULE_ID = "html";
+export const HTML_MODULE_OWNER_ID = "module.html";
 const SOURCE_LINE_ATTRIBUTE = "data-tinyide-source-line";
 const ALLOWED_SANDBOX_PERMISSIONS = new Set<WorkbenchHtmlPreviewSandboxPermission>([
   "allow-downloads",
@@ -39,12 +38,20 @@ const openInPreviewSetting = {
 } as const;
 
 export const htmlPreviewSettingsProvider: PluginSettingsProvider = {
-  id: "core.html.settings",
-  pluginId: CORE_HTML_PLUGIN_ID,
+  id: "module.html.settings",
+  pluginId: HTML_MODULE_OWNER_ID,
   title: "HTML",
   description: "Configura o modo inicial dos documentos HTML.",
   settings: [openInPreviewSetting],
 };
+
+function resolveBooleanSettingValue(
+  setting: typeof openInPreviewSetting,
+  configured: PluginSettingValues | undefined,
+): boolean {
+  const value = configured?.[setting.id];
+  return typeof value === "boolean" ? value : setting.defaultValue;
+}
 
 function htmlResource(resource: Pick<WorkbenchResourceDescriptor, "name" | "path" | "mediaType" | "kind">): boolean {
   if (resource.kind !== "text") return false;
@@ -280,7 +287,7 @@ function synchronizePreviewScroll(input: {
   };
 }
 
-export interface NativeHtmlPreviewFeature {
+export interface HtmlPreviewFeature {
   readonly resourceEditorProvider: WorkbenchResourceEditorProvider;
   readonly toolbarProvider: WorkbenchEditorToolbarProvider;
   readonly settingsProvider: PluginSettingsProvider;
@@ -288,9 +295,9 @@ export interface NativeHtmlPreviewFeature {
   dispose(): void;
 }
 
-export function createNativeHtmlPreviewFeature(
+export function createHtmlPreviewFeature(
   getProviders: () => readonly WorkbenchHtmlPreviewProvider[] = () => [],
-): NativeHtmlPreviewFeature {
+): HtmlPreviewFeature {
   const previewModes = new Map<string, boolean>();
   const previewSnapshots = new Map<string, TextEditorDocumentSnapshot>();
   const listeners = new Set<() => void>();
@@ -299,13 +306,13 @@ export function createNativeHtmlPreviewFeature(
   const emitChange = () => listeners.forEach((listener) => listener());
 
   const resourceEditorProvider: WorkbenchResourceEditorProvider = {
-    id: "core.html.preview",
-    pluginId: CORE_HTML_PLUGIN_ID,
-    priority: -100,
+    id: "module.html.preview",
+    pluginId: HTML_MODULE_OWNER_ID,
+    priority: -1000,
     canOpen(resource, settings: PluginSettingValues = {}) {
       if (!htmlResource(resource)) return false;
       if (!previewModes.has(resource.id)) {
-        let previewByDefault = resolvePluginBooleanSettingValue(openInPreviewSetting, settings);
+        let previewByDefault = resolveBooleanSettingValue(openInPreviewSetting, settings);
         const providers = providersFor(resource).slice().reverse();
         for (const provider of providers) {
           try {
@@ -383,15 +390,15 @@ export function createNativeHtmlPreviewFeature(
   };
 
   const toolbarProvider: WorkbenchEditorToolbarProvider = {
-    id: "core.html.toolbar",
+    id: "module.html.toolbar",
     provideItems(document) {
       const resource = resourceFromDocument(document);
       if (!htmlResource(resource)) return [];
       const previewing = previewModes.get(document.id) === true;
       return [{
-        id: "core.html.preview",
+        id: "module.html.preview",
         label: previewing ? "Editar HTML" : "Visualizar HTML",
-        command: "core.html.togglePreview",
+        command: "module.html.togglePreview",
         icon: previewing ? "diff" : "preview",
         order: 20,
       }];
@@ -421,18 +428,15 @@ export function createNativeHtmlPreviewFeature(
   };
 }
 
-export function installNativeHtmlPreview(
-  capabilities: CapabilityRegistryApi,
-  commands: CommandRegistryApi,
-): Disposable {
-  const feature = createNativeHtmlPreviewFeature(
-    () => capabilities.getAll<WorkbenchHtmlPreviewProvider>("workbench.htmlPreview"),
+export function installHtmlModule(context: ModuleContext): Disposable {
+  const feature = createHtmlPreviewFeature(
+    () => context.extensions.getWorkbenchHtmlPreviewProviders(),
   );
   const subscriptions = [
-    capabilities.register("plugin.settings", feature.settingsProvider),
-    capabilities.register("workbench.resourceEditor", feature.resourceEditorProvider),
-    capabilities.register("workbench.editorToolbar", feature.toolbarProvider),
-    commands.register("core.html.togglePreview", (document) => {
+    context.extensions.registerPluginSettingsProvider(feature.settingsProvider),
+    context.extensions.registerWorkbenchResourceEditorProvider(feature.resourceEditorProvider),
+    context.extensions.registerWorkbenchEditorToolbarProvider(feature.toolbarProvider),
+    context.commands.register("module.html.togglePreview", (document) => {
       feature.toggle(document as TextEditorDocumentSnapshot);
     }),
   ];

@@ -6,7 +6,8 @@
   "include": [
     "apps/**/*.ts",
     "apps/**/*.tsx",
-    "packages/**/*.ts"
+    "packages/**/*.ts",
+    "modules/**/*.ts"
   ],
   "exclude": [
     "apps/web/src/main.ts"

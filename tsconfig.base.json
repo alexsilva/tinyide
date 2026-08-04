@@ -24,6 +24,12 @@
       ],
       "@tinyide/core": [
         "./packages/core/src/index.ts"
+      ],
+      "@tinyide/modules": [
+        "./modules/builtin/src/index.ts"
+      ],
+      "@tinyide/module-html": [
+        "./modules/html/src/index.ts"
       ]
     }
   }

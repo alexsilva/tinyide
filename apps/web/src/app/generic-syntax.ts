@@ -32,7 +32,7 @@ const SOURCE_EXTENSIONS = new Set([
   ".java", ".js", ".jsx", ".kt", ".kts", ".lua", ".m", ".php", ".pl", ".py", ".r",
   ".rb", ".rs", ".scala", ".sql", ".swift", ".ts", ".tsx", ".vb",
 ]);
-const MARKUP_EXTENSIONS = new Set([".astro", ".htm", ".html", ".svg", ".vue", ".xhtml", ".xml"]);
+const MARKUP_EXTENSIONS = new Set([".astro", ".svg", ".vue", ".xhtml", ".xml"]);
 const STYLESHEET_EXTENSIONS = new Set([".css", ".less", ".sass", ".scss", ".styl"]);
 const DATA_EXTENSIONS = new Set([".json", ".json5", ".jsonc", ".yaml", ".yml"]);
 const CONFIG_EXTENSIONS = new Set([
@@ -216,7 +216,7 @@ export function genericSyntaxKindFor(context: Pick<SyntaxHighlightContext, "file
 
   if (lowerName === "dockerfile" || lowerName === "makefile" || lowerName.endsWith(".dockerfile")) return "shell";
   if (lowerName === ".env" || lowerName.startsWith(".env.")) return "config";
-  if (MARKUP_EXTENSIONS.has(extension) || mediaType.includes("html") || mediaType.includes("xml") || mediaType.includes("svg")) return "markup";
+  if (MARKUP_EXTENSIONS.has(extension) || mediaType.includes("xml") || mediaType.includes("svg")) return "markup";
   if (STYLESHEET_EXTENSIONS.has(extension) || mediaType.includes("css")) return "stylesheet";
   if (MARKDOWN_EXTENSIONS.has(extension) || mediaType.includes("markdown")) return "markdown";
   if (DATA_EXTENSIONS.has(extension) || mediaType.includes("json") || mediaType.includes("yaml")) return "data";
@@ -255,7 +255,11 @@ export function pluginLanguageProviderFor(
   return providers
     .map((provider, index) => ({ provider, index, extension: matchingExtension(provider, context.fileName) }))
     .filter((item): item is { provider: LanguageProvider; index: number; extension: string } => Boolean(item.extension))
-    .sort((left, right) => right.extension.length - left.extension.length || left.index - right.index)[0]?.provider;
+    .sort((left, right) =>
+      (right.provider.priority ?? 0) - (left.provider.priority ?? 0)
+      || right.extension.length - left.extension.length
+      || left.index - right.index
+    )[0]?.provider;
 }
 
 const GENERIC_NAMES: Readonly<Record<GenericSyntaxKind, string>> = {

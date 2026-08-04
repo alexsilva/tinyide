@@ -244,6 +244,8 @@
 
 .statusbar { display: flex; align-items: center; gap: 12px; border-top: 1px solid #263047; background: #243760; color: #e8eeff; padding: 0 8px; font-size: 10px; }
 .statusbar button { color: inherit; font-size: 10px; }
+.statusbar-plugin-item { display: flex; min-width: 0; align-items: center; }
+.statusbar-plugin-item:empty { display: none; }
 .status-spacer { flex: 1; }
 
 .menu-content, .tooltip, .dialog-content { z-index: 50; }

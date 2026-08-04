@@ -121,6 +121,7 @@ export interface PluginExtensionApi {
   registerWorkbenchPanelHook(hook: WorkbenchPanelHook): Disposable;
   registerWorkbenchToolWindowHook(hook: WorkbenchToolWindowHook): Disposable;
   registerWorkbenchTitlebarContribution(contribution: WorkbenchTitlebarContribution): Disposable;
+  registerWorkbenchStatusbarContribution(contribution: WorkbenchStatusbarContribution): Disposable;
   registerWorkbenchExplorerFilterProvider(provider: WorkbenchExplorerFilterProvider): Disposable;
   registerWorkbenchEditorToolbarProvider(provider: WorkbenchEditorToolbarProvider): Disposable;
   registerTextEditorLineDecorationProvider(provider: TextEditorLineDecorationProvider): Disposable;
@@ -831,6 +832,15 @@ export interface WorkbenchTitlebarContribution {
 
 export const WORKBENCH_TITLEBAR_CAPABILITY = "workbench.titlebar";
 
+export interface WorkbenchStatusbarContribution {
+  readonly id: string;
+  readonly pluginId: string;
+  readonly order?: number;
+  mount(context: WorkbenchPanelMountContext): void | Disposable | Promise<void | Disposable>;
+}
+
+export const WORKBENCH_STATUSBAR_CAPABILITY = "workbench.statusbar";
+
 export interface WorkbenchEditorToolbarItem {
   readonly id: string;
   readonly label: string;
@@ -1014,6 +1024,8 @@ export interface WorkbenchExplorerFilterProvider {
   filter(
     request: WorkbenchExplorerFilterRequest,
   ): WorkbenchExplorerFilterResult | Promise<WorkbenchExplorerFilterResult>;
+  /** Notifies the host that an active query should be evaluated again. */
+  subscribe?(listener: () => void): Disposable;
 }
 
 export const WORKBENCH_EXPLORER_FILTER_CAPABILITY = "workbench.explorerFilter";
@@ -1181,7 +1193,7 @@ export const TEXT_EDITOR_DOCUMENT_SAVED_EVENT = "textEditor.document.saved";
 
 export interface WorkspaceResourcesChangedEvent {
   readonly source: string;
-  readonly reason: "source-control" | "external";
+  readonly reason: "source-control" | "external" | "workspace";
   readonly operation?: string;
   readonly workspaceRoot?: string;
   readonly paths?: readonly string[];

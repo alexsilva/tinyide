@@ -69,6 +69,7 @@ import {
   ResourceEditorHost,
   WorkbenchPanelHost,
   WorkbenchSidebarHost,
+  WorkbenchStatusbarHost,
   WorkbenchTitlebarHost,
   WorkbenchToolWindowHost,
   type WorkbenchToolWindowViewRequest,
@@ -690,6 +691,7 @@ export function App() {
   const [explorerFilterOpen, setExplorerFilterOpen] = useState(false);
   const [explorerFilterQuery, setExplorerFilterQuery] = useState("");
   const [explorerFilterResult, setExplorerFilterResult] = useState<ExplorerFilterResultState>();
+  const [explorerFilterRevision, setExplorerFilterRevision] = useState(0);
   const [editorSearchOpen, setEditorSearchOpen] = useState(false);
   const [editorSearchQuery, setEditorSearchQuery] = useState("");
   const [editorSearchMatchIndex, setEditorSearchMatchIndex] = useState(0);
@@ -863,6 +865,7 @@ export function App() {
     toolWindows: workbenchToolWindows,
     activityButtons,
     titlebar: workbenchTitlebarContributions,
+    statusbar: workbenchStatusbarContributions,
     explorerFilter: explorerFilterProvider,
   } = useWorkbenchContributions(platformSnapshot);
   const activePluginSidebar = workbenchSidebars.find((sidebar) => sidebar.id === sidebarView);
@@ -3137,6 +3140,13 @@ export function App() {
   }, [explorerFilterProvider, workspaceHandle]);
 
   useEffect(() => {
+    const subscription = explorerFilterProvider?.subscribe?.(() => {
+      setExplorerFilterRevision((current) => current + 1);
+    });
+    return () => subscription?.dispose();
+  }, [explorerFilterProvider]);
+
+  useEffect(() => {
     const query = explorerFilterQuery.trim();
     if (!explorerFilterProvider || !query) {
       setExplorerFilterResult(undefined);
@@ -3170,7 +3180,7 @@ export function App() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [explorerFilterQuery, explorerFilterProvider]);
+  }, [explorerFilterQuery, explorerFilterProvider, explorerFilterRevision]);
 
   useEffect(() => {
     if (!workspaceHandle) return;
@@ -6252,6 +6262,9 @@ export function App() {
         <footer className="statusbar">
           <button type="button" onClick={() => invoke(openSingleFile)}><File size={13} /> Abrir arquivo</button>
           <span>{platformSnapshot.plugins.length} plugin(s)</span>
+          {workbenchStatusbarContributions.map((provider) => (
+            <WorkbenchStatusbarHost key={provider.id} provider={provider} state={workbenchState} />
+          ))}
           <span className="status-spacer" />
           <span>{activeDocument?.readOnly ? "Somente leitura" : activeDocument?.kind === "text" && activeDocument.content !== activeDocument.savedContent ? "Modificado" : "Salvo"}</span>
           <span>{activeDocument?.kind === "text" ? "UTF-8" : activeDocument?.mediaType ?? ""}</span>

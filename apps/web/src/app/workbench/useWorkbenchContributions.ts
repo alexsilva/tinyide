@@ -3,6 +3,7 @@ import type {
   WorkbenchExplorerFilterProvider,
   WorkbenchPanelHook,
   WorkbenchSidebarHook,
+  WorkbenchStatusbarContribution,
   WorkbenchTitlebarContribution,
   WorkbenchToolWindowHook,
 } from "@tinyide/plugin-api";
@@ -64,6 +65,11 @@ export function useWorkbenchContributions(revision: unknown) {
     .slice()
     .sort((left, right) => (left.order ?? 0) - (right.order ?? 0) || left.id.localeCompare(right.id)), [revision]);
 
+  const statusbar = useMemo(() => platform.capabilities
+    .getAll<WorkbenchStatusbarContribution>("workbench.statusbar")
+    .slice()
+    .sort((left, right) => (left.order ?? 0) - (right.order ?? 0) || left.id.localeCompare(right.id)), [revision]);
+
   const explorerFilter = useMemo(() => platform.capabilities
     .getAll<WorkbenchExplorerFilterProvider>("workbench.explorerFilter")
     .slice()
@@ -76,6 +82,7 @@ export function useWorkbenchContributions(revision: unknown) {
     toolWindows,
     activityButtons,
     titlebar,
+    statusbar,
     explorerFilter,
   };
 }

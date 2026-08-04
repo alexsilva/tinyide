@@ -12,6 +12,7 @@ import type {
   WorkbenchResourceEditorProvider,
   WorkbenchSidebarContribution,
   WorkbenchStateApi,
+  WorkbenchStatusbarContribution,
   WorkbenchTabApi,
   WorkbenchTitlebarContribution,
   WorkbenchToolWindowContribution,
@@ -287,6 +288,40 @@ export function WorkbenchTitlebarHost({
   }, [provider, state]);
 
   return <div className="titlebar-plugin-actions" data-titlebar-contribution={provider.id} ref={containerRef} />;
+}
+
+export function WorkbenchStatusbarHost({
+  provider,
+  state,
+}: {
+  readonly provider: WorkbenchStatusbarContribution;
+  readonly state: WorkbenchStateApi;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    let disposed = false;
+    let mountedDisposable: void | Disposable;
+    try {
+      mountResult(
+        provider.mount({ container, state }),
+        container,
+        () => disposed,
+        (value) => { mountedDisposable = value; },
+      );
+    } catch (cause) {
+      container.textContent = cause instanceof Error ? cause.message : String(cause);
+    }
+    return () => {
+      disposed = true;
+      mountedDisposable?.dispose();
+      container.replaceChildren();
+    };
+  }, [provider, state]);
+
+  return <div className="statusbar-plugin-item" data-statusbar-contribution={provider.id} ref={containerRef} />;
 }
 
 export async function readOpenDocumentBlob(document: OpenDocument): Promise<Blob> {

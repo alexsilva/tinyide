@@ -1,6 +1,10 @@
 import type { DebugAdapterProvider, DebugSessionSnapshot } from "@tinyide/plugin-api";
 import { describe, expect, it, vi } from "vitest";
-import { restoreActiveDebugSession, workspaceRelativeDebugPath } from "./debug-session-state";
+import {
+  restoreActiveDebugSession,
+  sameDebugSessionSnapshot,
+  workspaceRelativeDebugPath,
+} from "./debug-session-state";
 
 function session(id: string, startedAt: number, status: DebugSessionSnapshot["status"] = "paused"): DebugSessionSnapshot {
   return {
@@ -79,5 +83,17 @@ describe("debug source paths", () => {
   it("does not expose sources outside the workspace", () => {
     expect(workspaceRelativeDebugPath("/usr/lib/python3.12/pathlib.py", "/workspace/project")).toBeUndefined();
     expect(workspaceRelativeDebugPath("<string>", "/workspace/project")).toBeUndefined();
+  });
+});
+
+describe("debug session snapshots", () => {
+  it("ignores polling responses that do not change visible debug state", () => {
+    const current = session("current", 20, "running");
+    expect(sameDebugSessionSnapshot(current, { ...current })).toBe(true);
+    expect(sameDebugSessionSnapshot(current, { ...current, stdout: "new output" })).toBe(false);
+    expect(sameDebugSessionSnapshot(current, {
+      ...current,
+      frames: [{ id: "0", name: "task", path: "/workspace/task.py", line: 42 }],
+    })).toBe(false);
   });
 });

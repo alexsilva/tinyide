@@ -15,15 +15,32 @@ export function resolveEditorSettings(settings: WorkspaceSettings): ResolvedEdit
 }
 
 export function editorLineNumbers(source: string): readonly string[] {
-  const count = source.split("\n").length;
+  const count = editorDocumentMetrics(source).lineCount;
   const width = Math.max(2, String(count).length);
   return Array.from({ length: count }, (_, index) => String(index + 1).padStart(width, "0"));
 }
 
 export function editorGutterWidth(source: string): number {
-  const lineCount = source.split("\n").length;
-  const digits = Math.max(2, String(lineCount).length);
-  return Math.max(52, 30 + digits * 8);
+  return editorDocumentMetrics(source).gutterWidth;
+}
+
+export interface EditorDocumentMetrics {
+  readonly lineCount: number;
+  readonly lineNumberWidth: number;
+  readonly gutterWidth: number;
+}
+
+export function editorDocumentMetrics(source: string): EditorDocumentMetrics {
+  let lineCount = 1;
+  for (let index = 0; index < source.length; index += 1) {
+    if (source.charCodeAt(index) === 10) lineCount += 1;
+  }
+  const lineNumberWidth = Math.max(2, String(lineCount).length);
+  return {
+    lineCount,
+    lineNumberWidth,
+    gutterWidth: Math.max(52, 30 + lineNumberWidth * 8),
+  };
 }
 
 export interface EditorVisibleLineRange {

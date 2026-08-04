@@ -12,6 +12,38 @@ export interface DebugSessionRestoration {
   readonly errors: readonly Error[];
 }
 
+export function debugSessionFingerprint(session: DebugSessionSnapshot): string {
+  const frames = session.frames
+    .map((frame) => `${frame.id}:${frame.path ?? ""}:${frame.line ?? 0}:${frame.column ?? 0}`)
+    .join("|");
+  const scopes = session.scopes
+    .map((scope) => `${scope.name}:${scope.variables.length}:${scope.variables
+      .slice(0, 20)
+      .map((variable) => `${variable.name}:${variable.type ?? ""}:${variable.value}`)
+      .join("|")}`)
+    .join("||");
+  return [
+    session.id,
+    session.status,
+    session.reason ?? "",
+    session.selectedFrameId ?? "",
+    session.stdout.length,
+    session.stderr.length,
+    session.error ?? "",
+    session.breakpoints.map((breakpoint) => `${breakpoint.path}:${breakpoint.line}:${breakpoint.enabled}:${breakpoint.verified}`).join("|"),
+    frames,
+    scopes,
+    session.finishedAt ?? 0,
+  ].join("\u0001");
+}
+
+export function sameDebugSessionSnapshot(
+  left: DebugSessionSnapshot | undefined,
+  right: DebugSessionSnapshot,
+): boolean {
+  return Boolean(left && debugSessionFingerprint(left) === debugSessionFingerprint(right));
+}
+
 function asError(cause: unknown): Error {
   return cause instanceof Error ? cause : new Error(String(cause));
 }

@@ -275,7 +275,7 @@ import {
   textEditorLineDecorationProviders,
   workbenchResourceDescriptor,
 } from "./runtime";
-import { restoreActiveDebugSession, workspaceRelativeDebugPath } from "./debug-session-state";
+import { restoreActiveDebugSession, sameDebugSessionSnapshot, workspaceRelativeDebugPath } from "./debug-session-state";
 import {
   DEFAULT_DEBUG_PANEL_LAYOUT,
   EMPTY_DEBUG_OUTPUT_OFFSETS,
@@ -323,7 +323,7 @@ import {
   resolvePluginSettingValues,
   updatePluginSettingValue,
 } from "./plugin-settings";
-import { editorGutterWidth, editorLineNumbers, editorVisibleLineRange, resolveEditorSettings } from "./editor-settings";
+import { editorDocumentMetrics, editorVisibleLineRange, resolveEditorSettings } from "./editor-settings";
 import {
   closeSidebarForSide,
   maximumSidebarWidth,
@@ -931,13 +931,36 @@ export function App() {
   const activeDebugLine = activeDebugFrame?.line;
   useEffect(() => {
     if (!debugSessionActive || !debugSession || !debugAdapter) return;
-    const timer = window.setInterval(() => {
-      void debugAdapter.read(debugSession.id).then((snapshot) => {
-        setDebugSession((current) => current?.id === snapshot.id ? snapshot : current);
-      }).catch(() => undefined);
-    }, 400);
-    return () => window.clearInterval(timer);
-  }, [debugSessionActive, debugSession?.id, debugAdapter]);
+    if (!["starting", "running"].includes(debugSession.status)) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    let reading = false;
+    const delay = debugSession.status === "starting" ? 250 : 750;
+    const poll = async () => {
+      if (cancelled || reading) return;
+      reading = true;
+      try {
+        const snapshot = await debugAdapter.read(debugSession.id);
+        if (!cancelled) {
+          setDebugSession((current) => (
+            current?.id === snapshot.id && !sameDebugSessionSnapshot(current, snapshot)
+              ? snapshot
+              : current
+          ));
+        }
+      } catch {
+        // A command or process transition may temporarily make a poll stale.
+      } finally {
+        reading = false;
+        if (!cancelled) timer = window.setTimeout(poll, delay);
+      }
+    };
+    timer = window.setTimeout(poll, delay);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [debugSessionActive, debugSession?.id, debugSession?.status, debugAdapter]);
 
   useEffect(() => {
     if (!debugOutputFollowTail || !debugSession) return;
@@ -1075,17 +1098,21 @@ export function App() {
     return () => { cancelled = true; };
   }, [fileCreationTargetPath, resolveWorkspaceFileCreationOptions]);
   const editorSettings = resolveEditorSettings(workspaceSettings);
-  const editorRulerLines = useMemo(
-    () => activeDocument?.kind === "text" ? editorLineNumbers(activeDocument.content) : ["01"],
+  const editorMetrics = useMemo(
+    () => activeDocument?.kind === "text"
+      ? editorDocumentMetrics(activeDocument.content)
+      : { lineCount: 1, lineNumberWidth: 2, gutterWidth: 52 },
     [activeDocument?.id, activeDocument?.kind, activeDocument?.content],
   );
-  const editorGutterWidthPixels = activeDocument?.kind === "text" ? editorGutterWidth(activeDocument.content) : 52;
   const editorRulerRange = editorVisibleLineRange(
-    editorRulerLines.length,
+    editorMetrics.lineCount,
     editorViewport.scrollTop,
     editorViewport.height,
   );
-  const visibleEditorRulerLines = editorRulerLines.slice(editorRulerRange.start - 1, editorRulerRange.end);
+  const visibleEditorRulerLines = useMemo(() => Array.from(
+    { length: Math.max(0, editorRulerRange.end - editorRulerRange.start + 1) },
+    (_, index) => editorRulerRange.start + index,
+  ), [editorRulerRange.start, editorRulerRange.end]);
   const editorDecorationsByLine = useMemo(() => {
     const grouped = new Map<number, TextEditorLineDecoration[]>();
     for (const decoration of editorLineDecorations) {
@@ -5896,16 +5923,15 @@ export function App() {
                   <div
                     className={`editor-canvas${showEditorGutter ? " has-editor-gutter" : ""}${editorSettings.lineNumbers ? " has-line-numbers" : ""}${editorNavigationLoading ? " is-symbol-navigation-loading" : ""}`}
                     aria-busy={editorNavigationLoading}
-                    style={{ "--editor-gutter-width": `${editorGutterWidthPixels}px` } as React.CSSProperties}
+                    style={{ "--editor-gutter-width": `${editorMetrics.gutterWidth}px` } as React.CSSProperties}
                   >
                     {showEditorGutter ? (
                       <div className={`editor-line-ruler${editorSettings.lineNumbers ? "" : " decorations-only"}`}>
                         <pre
                           ref={editorLineRulerRef}
-                          style={{ height: `${36 + editorRulerLines.length * 21.45}px` }}
+                          style={{ height: `${36 + editorMetrics.lineCount * 21.45}px` }}
                         >
-                          {visibleEditorRulerLines.map((lineNumber, index) => {
-                            const line = editorRulerRange.start + index;
+                          {visibleEditorRulerLines.map((line) => {
                             const breakpoint = activeDocument?.path
                               ? debugBreakpoints.find((candidate) => candidate.path === activeDocument.path && candidate.line === line)
                               : undefined;
@@ -5919,7 +5945,7 @@ export function App() {
                             const content = <>
                               <i className={`editor-line-ruler__marker${breakpoint ? " is-breakpoint" : ""}`} />
                               <i className={`editor-line-ruler__execution-marker${currentDebugLine ? " is-current" : ""}`} />
-                              {editorSettings.lineNumbers ? <b>{lineNumber}</b> : null}
+                              {editorSettings.lineNumbers ? <b>{String(line).padStart(editorMetrics.lineNumberWidth, "0")}</b> : null}
                             </>;
                             return changeDecoration ? (
                               <button

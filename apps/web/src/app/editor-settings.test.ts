@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { editorGutterWidth, editorLineNumbers, editorVisibleLineRange, resolveEditorSettings } from "./editor-settings";
+import {
+  editorDocumentMetrics,
+  editorGutterWidth,
+  editorLineNumbers,
+  editorVisibleLineRange,
+  resolveEditorSettings,
+} from "./editor-settings";
 
 describe("editor settings", () => {
   it("enables line numbers by default", () => {
@@ -27,6 +33,19 @@ describe("editor settings", () => {
   it("widens the gutter when line numbers have four or more digits", () => {
     expect(editorGutterWidth("line\n".repeat(999))).toBe(62);
     expect(editorGutterWidth("line\n".repeat(9_999))).toBe(70);
+  });
+
+  it("computes large-file metrics without materializing every line", () => {
+    expect(editorDocumentMetrics("first\nsecond\n")).toEqual({
+      lineCount: 3,
+      lineNumberWidth: 2,
+      gutterWidth: 52,
+    });
+    expect(editorDocumentMetrics("line\n".repeat(9_999))).toEqual({
+      lineCount: 10_000,
+      lineNumberWidth: 5,
+      gutterWidth: 70,
+    });
   });
 
   it("limits the ruler to visible lines plus overscan", () => {

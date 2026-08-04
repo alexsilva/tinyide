@@ -1,10 +1,10 @@
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { CircleAlert, Code2, MoreVertical, Undo2, X } from "lucide-react";
-import type { CSSProperties, ReactNode } from "react";
+import { memo, useMemo, type CSSProperties, type ReactNode } from "react";
 import type { TextDiagnostic, TextEditorLineDecoration } from "@tinyide/plugin-api";
 import type { SyntaxHighlighter } from "../generic-syntax";
 
-export function HighlightedSource({
+export const HighlightedSource = memo(function HighlightedSource({
   source,
   provider,
   highlight,
@@ -13,9 +13,9 @@ export function HighlightedSource({
   readonly provider?: Pick<SyntaxHighlighter, "highlight">;
   readonly highlight?: { readonly start: number; readonly end: number };
 }) {
-  const tokens = [...(provider?.highlight(source) ?? [])]
+  const tokens = useMemo(() => [...(provider?.highlight(source) ?? [])]
     .filter((token) => token.start >= 0 && token.start < token.end && token.end <= source.length)
-    .sort((left, right) => left.start - right.start);
+    .sort((left, right) => left.start - right.start), [provider, source]);
   const highlightStart = Math.max(0, Math.min(source.length, highlight?.start ?? 0));
   const highlightEnd = Math.max(highlightStart, Math.min(source.length, highlight?.end ?? 0));
   const boundaries = new Set([0, source.length]);
@@ -49,7 +49,7 @@ export function HighlightedSource({
   }
   fragments.push("\n");
   return <>{fragments}</>;
-}
+});
 
 export function HighlightedLine({ source, provider }: { readonly source: string; readonly provider: Pick<SyntaxHighlighter, "highlight"> | undefined }) {
   if (!provider) return <>{source}</>;

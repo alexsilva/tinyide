@@ -85,12 +85,22 @@ function addMatches(
 
 function resolveCandidates(candidates: readonly Candidate[]): readonly SyntaxToken[] {
   const accepted: Candidate[] = [];
-  for (const candidate of candidates
+  const ordered = candidates
     .filter((token) => token.start >= 0 && token.end > token.start)
     .slice()
-    .sort((left, right) => right.priority - left.priority || (right.end - right.start) - (left.end - left.start) || left.start - right.start)) {
-    if (accepted.some((token) => candidate.start < token.end && candidate.end > token.start)) continue;
+    .sort((left, right) => right.priority - left.priority || (right.end - right.start) - (left.end - left.start) || left.start - right.start);
+  const occupied = new Uint8Array(ordered.reduce((maximum, token) => Math.max(maximum, token.end), 0));
+  for (const candidate of ordered) {
+    let overlaps = false;
+    for (let index = candidate.start; index < candidate.end; index += 1) {
+      if (occupied[index]) {
+        overlaps = true;
+        break;
+      }
+    }
+    if (overlaps) continue;
     accepted.push(candidate);
+    occupied.fill(1, candidate.start, candidate.end);
   }
   return accepted
     .sort((left, right) => left.start - right.start || left.end - right.end)

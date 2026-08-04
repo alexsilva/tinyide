@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { editorLineNumbers, resolveEditorSettings } from "./editor-settings";
+import { editorGutterWidth, editorLineNumbers, editorVisibleLineRange, resolveEditorSettings } from "./editor-settings";
 
 describe("editor settings", () => {
   it("enables line numbers by default", () => {
@@ -22,5 +22,15 @@ describe("editor settings", () => {
     expect(numbers[0]).toBe("001");
     expect(numbers[8]).toBe("009");
     expect(numbers[99]).toBe("100");
+  });
+
+  it("widens the gutter when line numbers have four or more digits", () => {
+    expect(editorGutterWidth("line\n".repeat(999))).toBe(62);
+    expect(editorGutterWidth("line\n".repeat(9_999))).toBe(70);
+  });
+
+  it("limits the ruler to visible lines plus overscan", () => {
+    expect(editorVisibleLineRange(7_008, 50_000, 800)).toEqual({ start: 2_319, end: 2_381 });
+    expect(editorVisibleLineRange(7_008, 0, 800)).toEqual({ start: 1, end: 50 });
   });
 });

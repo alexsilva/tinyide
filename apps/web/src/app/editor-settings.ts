@@ -19,3 +19,30 @@ export function editorLineNumbers(source: string): readonly string[] {
   const width = Math.max(2, String(count).length);
   return Array.from({ length: count }, (_, index) => String(index + 1).padStart(width, "0"));
 }
+
+export function editorGutterWidth(source: string): number {
+  const lineCount = source.split("\n").length;
+  const digits = Math.max(2, String(lineCount).length);
+  return Math.max(52, 30 + digits * 8);
+}
+
+export interface EditorVisibleLineRange {
+  readonly start: number;
+  readonly end: number;
+}
+
+export function editorVisibleLineRange(
+  lineCount: number,
+  scrollTop: number,
+  viewportHeight: number,
+  overscan = 12,
+): EditorVisibleLineRange {
+  const lineHeight = 21.45;
+  const contentPadding = 18;
+  const firstVisible = Math.floor(Math.max(0, scrollTop - contentPadding) / lineHeight) + 1;
+  const lastVisible = Math.ceil(Math.max(0, scrollTop + viewportHeight - contentPadding) / lineHeight) + 1;
+  return {
+    start: Math.max(1, firstVisible - overscan),
+    end: Math.min(Math.max(1, lineCount), lastVisible + overscan),
+  };
+}

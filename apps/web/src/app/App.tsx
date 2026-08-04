@@ -316,7 +316,7 @@ import {
   resolvePluginSettingValues,
   updatePluginSettingValue,
 } from "./plugin-settings";
-import { editorLineNumbers, resolveEditorSettings } from "./editor-settings";
+import { editorGutterWidth, editorLineNumbers, editorVisibleLineRange, resolveEditorSettings } from "./editor-settings";
 import {
   closeSidebarForSide,
   maximumSidebarWidth,
@@ -400,7 +400,7 @@ interface ContextMenuState {
 }
 
 const EXPLORER_FILTER_DEBOUNCE_MS = 40;
-const MAX_SYNTAX_HIGHLIGHT_SOURCE_LENGTH = 100_000;
+const MAX_SYNTAX_HIGHLIGHT_SOURCE_LENGTH = 500_000;
 const EDITOR_NAVIGATION_LOADING_DELAY_MS = 150;
 const EDITOR_NAVIGATION_LOADING_MINIMUM_MS = 350;
 
@@ -696,6 +696,7 @@ export function App() {
   const [editorSearchCaseSensitive, setEditorSearchCaseSensitive] = useState(false);
   const [editorSearchRegex, setEditorSearchRegex] = useState(false);
   const [editorNavigationLoading, setEditorNavigationLoading] = useState(false);
+  const [editorViewport, setEditorViewport] = useState({ scrollTop: 0, height: 800 });
   const explorerFilterInputRef = useRef<HTMLInputElement>(null);
   const editorSearchInputRef = useRef<HTMLInputElement>(null);
   const editorNavigationLoadingRef = useRef(false);
@@ -1042,7 +1043,17 @@ export function App() {
     return () => { cancelled = true; };
   }, [fileCreationTargetPath, resolveWorkspaceFileCreationOptions]);
   const editorSettings = resolveEditorSettings(workspaceSettings);
-  const editorRulerLines = activeDocument?.kind === "text" ? editorLineNumbers(activeDocument.content) : ["01"];
+  const editorRulerLines = useMemo(
+    () => activeDocument?.kind === "text" ? editorLineNumbers(activeDocument.content) : ["01"],
+    [activeDocument?.id, activeDocument?.kind, activeDocument?.content],
+  );
+  const editorGutterWidthPixels = activeDocument?.kind === "text" ? editorGutterWidth(activeDocument.content) : 52;
+  const editorRulerRange = editorVisibleLineRange(
+    editorRulerLines.length,
+    editorViewport.scrollTop,
+    editorViewport.height,
+  );
+  const visibleEditorRulerLines = editorRulerLines.slice(editorRulerRange.start - 1, editorRulerRange.end);
   const editorDecorationsByLine = useMemo(() => {
     const grouped = new Map<number, TextEditorLineDecoration[]>();
     for (const decoration of editorLineDecorations) {
@@ -2881,6 +2892,7 @@ export function App() {
       const scrollContainer = highlightedEditorScrollRef.current ?? textarea;
       scrollContainer.scrollTop = activeDocument.scrollTop;
       scrollContainer.scrollLeft = activeDocument.scrollLeft;
+      setEditorViewport({ scrollTop: activeDocument.scrollTop, height: scrollContainer.clientHeight });
       syncEditorLineRuler(activeDocument.scrollTop);
     });
   }, [activeDocumentId, editorSettings.lineNumbers, editorSearchOpen, activeResourceEditorProvider?.id]);
@@ -5625,12 +5637,16 @@ export function App() {
                   <div
                     className={`editor-canvas${showEditorGutter ? " has-editor-gutter" : ""}${editorSettings.lineNumbers ? " has-line-numbers" : ""}${editorNavigationLoading ? " is-symbol-navigation-loading" : ""}`}
                     aria-busy={editorNavigationLoading}
+                    style={{ "--editor-gutter-width": `${editorGutterWidthPixels}px` } as React.CSSProperties}
                   >
                     {showEditorGutter ? (
                       <div className={`editor-line-ruler${editorSettings.lineNumbers ? "" : " decorations-only"}`}>
-                        <pre ref={editorLineRulerRef}>
-                          {editorRulerLines.map((lineNumber, index) => {
-                            const line = index + 1;
+                        <pre
+                          ref={editorLineRulerRef}
+                          style={{ height: `${36 + editorRulerLines.length * 21.45}px` }}
+                        >
+                          {visibleEditorRulerLines.map((lineNumber, index) => {
+                            const line = editorRulerRange.start + index;
                             const breakpoint = activeDocument?.path
                               ? debugBreakpoints.find((candidate) => candidate.path === activeDocument.path && candidate.line === line)
                               : undefined;
@@ -5650,6 +5666,7 @@ export function App() {
                               <button
                                 className={`editor-line-ruler__line${lineDecorationClassName(decorations)}${currentDebugLine ? " is-debug-current" : ""}`}
                                 key={line}
+                                style={{ top: `${18 + (line - 1) * 21.45}px` }}
                                 type="button"
                                 title={tooltip || undefined}
                                 aria-label={`${tooltip || "Exibir alteração"}, linha ${line}`}
@@ -5662,6 +5679,7 @@ export function App() {
                               <button
                                 className={`editor-line-ruler__line${currentDebugLine ? " is-debug-current" : ""}`}
                                 key={line}
+                                style={{ top: `${18 + (line - 1) * 21.45}px` }}
                                 type="button"
                                 aria-label={`${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${line}`}
                                 onClick={() => { if (activeDocument?.path) toggleBreakpoint(activeDocument.path, line); }}
@@ -5699,6 +5717,10 @@ export function App() {
                         onMouseLeave={() => setHoveredDiagnosticLine(undefined)}
                         onScroll={(event) => {
                           syncEditorLineRuler(event.currentTarget.scrollTop);
+                          setEditorViewport({
+                            scrollTop: event.currentTarget.scrollTop,
+                            height: event.currentTarget.clientHeight,
+                          });
                           if (editorRef.current) captureEditorState(editorRef.current, event.currentTarget);
                         }}
                       >
@@ -5784,6 +5806,10 @@ export function App() {
                         }}
                         onScroll={(event) => {
                           syncEditorLineRuler(event.currentTarget.scrollTop);
+                          setEditorViewport({
+                            scrollTop: event.currentTarget.scrollTop,
+                            height: event.currentTarget.clientHeight,
+                          });
                           captureEditorState(event.currentTarget);
                         }}
                       />

@@ -359,7 +359,7 @@
 .resource-editor__message.is-error svg,
 .resource-editor__message.is-error strong { color: #e58a95; }
 .editor-canvas { --editor-gutter-width: 0px; position: relative; display: grid; min-width: 0; min-height: 0; overflow: hidden; grid-template-columns: minmax(0, 1fr); background: #0f1218; }
-.editor-canvas.has-editor-gutter { --editor-gutter-width: 52px; grid-template-columns: 52px minmax(0, 1fr); }
+.editor-canvas.has-editor-gutter { grid-template-columns: var(--editor-gutter-width, 52px) minmax(0, 1fr); }
 .editor-canvas.has-editor-gutter:not(.has-line-numbers) { --editor-gutter-width: 20px; grid-template-columns: 20px minmax(0, 1fr); }
 .editor-canvas > .code-editor,
 .editor-canvas > .highlight-editor { min-width: 0; min-height: 0; }
@@ -368,8 +368,8 @@
 .editor-canvas.is-symbol-navigation-loading * { cursor: progress !important; }
 .editor-line-ruler { min-height: 0; overflow: hidden; border-right: 1px solid #303b4c; background: #171d27; color: #91a0b6; user-select: none; scrollbar-width: none; }
 .editor-line-ruler::-webkit-scrollbar { display: none; }
-.editor-line-ruler pre { min-height: 100%; margin: 0; padding: 18px 0; font: 13px/1.65 "JetBrains Mono", "Fira Code", Consolas, monospace; white-space: normal; }
-.editor-line-ruler__line { position: relative; display: grid; width: 100%; grid-template-columns: 9px 8px minmax(0, 1fr); align-items: center; height: 21.45px; border: 0; padding: 0 7px 0 3px; background: transparent; color: inherit; font: inherit; text-align: right; cursor: pointer; }
+.editor-line-ruler pre { position: relative; min-height: 100%; margin: 0; padding: 0; font: 13px/1.65 "JetBrains Mono", "Fira Code", Consolas, monospace; white-space: normal; }
+.editor-line-ruler__line { position: absolute; left: 0; display: grid; width: 100%; grid-template-columns: 9px 8px minmax(0, 1fr); align-items: center; height: 21.45px; border: 0; padding: 0 7px 0 3px; background: transparent; color: inherit; font: inherit; text-align: right; cursor: pointer; }
 .editor-line-ruler__line:hover,
 .editor-line-ruler__line:focus-visible { outline: none; background: #222b39; color: #c9d5e8; }
 .editor-line-ruler__line b { grid-column: 3; overflow: hidden; font: inherit; font-weight: 400; text-overflow: clip; }

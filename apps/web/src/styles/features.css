@@ -344,6 +344,25 @@
 
 .editor-stack { display: flex; min-width: 0; min-height: 0; overflow: hidden; flex-direction: column; }
 .editor-stack > .editor-canvas { flex: 1 1 auto; min-height: 0; }
+.editor-external-file-notice { display: flex; flex: 0 0 auto; align-items: center; gap: 9px; min-height: 38px; padding: 5px 8px 5px 10px; border-bottom: 1px solid #4b3c24; background: #2a2115; color: #e7d8b7; font-size: 11px; }
+.editor-external-file-notice.is-reloaded { border-bottom-color: #29445c; background: #17283a; color: #c7dff4; }
+.editor-external-file-notice > svg { flex: 0 0 auto; }
+.editor-external-file-notice__message { display: flex; min-width: 0; flex: 1 1 auto; flex-direction: column; gap: 1px; overflow: hidden; }
+.editor-external-file-notice__message strong,
+.editor-external-file-notice__message span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.editor-external-file-notice__actions { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; }
+.editor-external-file-notice__actions button:not(.icon-button) { height: 24px; border: 1px solid #66512f; border-radius: 4px; padding: 0 8px; background: #362a19; color: inherit; font: inherit; cursor: pointer; }
+.editor-external-file-notice.is-reloaded .editor-external-file-notice__actions button { border-color: #355a78; background: #20394f; }
+.editor-external-file-notice__actions button:hover { filter: brightness(1.12); }
+.external-file-notice { display: flex; flex: 0 0 auto; align-items: center; gap: 9px; min-height: 34px; padding: 4px 8px 4px 10px; border-bottom: 1px solid #4b3c24; background: #2a2115; color: #e7d8b7; font-size: 11px; }
+.external-file-notice--reloaded { border-bottom-color: #29445c; background: #17283a; color: #c7dff4; }
+.external-file-notice > svg { flex: 0 0 auto; }
+.external-file-notice__message { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.external-file-notice__actions { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; }
+.external-file-notice__actions button { height: 24px; border: 1px solid #66512f; border-radius: 4px; padding: 0 8px; background: #362a19; color: inherit; font: inherit; cursor: pointer; }
+.external-file-notice--reloaded .external-file-notice__actions button { border-color: #355a78; background: #20394f; }
+.external-file-notice__actions button:hover { filter: brightness(1.12); }
+.external-file-notice__dismiss { display: inline-grid; width: 24px; padding: 0 !important; place-items: center; }
 .resource-editor { display: flex; min-width: 0; min-height: 0; height: 100%; flex: 1 1 auto; overflow: hidden; background: #0f1218; color: var(--text); }
 .resource-editor--plugin { position: relative; }
 .resource-editor--image { flex-direction: column; }

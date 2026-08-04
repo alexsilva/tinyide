@@ -30,6 +30,11 @@ export interface OpenDocumentResourceReconciliation {
     readonly from: string;
     readonly to: string;
   }[];
+  readonly externalChanges: readonly {
+    readonly id: string;
+    readonly path: string;
+    readonly kind: "reloaded" | "conflict";
+  }[];
 }
 
 function renamedWorkspacePath(path: string, renames: readonly WorkspaceResourceRename[]): string {
@@ -84,6 +89,7 @@ export async function reconcileOpenDocumentsAfterWorkspaceChange(options: {
   const renames = options.renames ?? [];
   const removedIds: string[] = [];
   const remappedIds: Array<{from: string; to: string}> = [];
+  const externalChanges: Array<{id: string; path: string; kind: "reloaded" | "conflict"}> = [];
   const resolved: OpenDocument[] = [];
 
   for (const document of options.documents) {
@@ -95,9 +101,21 @@ export async function reconcileOpenDocumentsAfterWorkspaceChange(options: {
     try {
       const handle = await resolveFileHandle(options.workspaceHandle, path);
       const disk = await readFileDocument(handle, path, options.workspaceRoot);
+      const changedOnDisk = disk.kind !== document.kind
+        || disk.mediaType !== document.mediaType
+        || disk.size !== document.size
+        || disk.content !== document.savedContent;
+      const clean = document.content === document.savedContent;
       const next = mergeDiskDocument(document, disk, path);
       resolved.push(next);
       if (document.id !== next.id) remappedIds.push({from: document.id, to: next.id});
+      if (changedOnDisk) {
+        externalChanges.push({
+          id: next.id,
+          path,
+          kind: clean ? "reloaded" : "conflict",
+        });
+      }
     } catch {
       removedIds.push(document.id);
     }
@@ -110,5 +128,5 @@ export async function reconcileOpenDocumentsAfterWorkspaceChange(options: {
     return (order.get(leftSource) ?? Number.MAX_SAFE_INTEGER) - (order.get(rightSource) ?? Number.MAX_SAFE_INTEGER);
   });
 
-  return {documents: resolved, removedIds, remappedIds};
+  return {documents: resolved, removedIds, remappedIds, externalChanges};
 }

@@ -61,6 +61,9 @@ describe("workspace resource reconciliation", () => {
       savedContent: "new\n",
     });
     expect(result.removedIds).toEqual(["src/removed.py"]);
+    expect(result.externalChanges).toEqual([
+      {id: "src/changed.py", path: "src/changed.py", kind: "reloaded"},
+    ]);
   });
 
   it("remaps an open tab from an explicit Git rename", async () => {
@@ -84,6 +87,9 @@ describe("workspace resource reconciliation", () => {
     });
     expect(result.remappedIds).toEqual([{from: "src/old.py", to: "src/new.py"}]);
     expect(result.removedIds).toEqual([]);
+    expect(result.externalChanges).toEqual([
+      {id: "src/new.py", path: "src/new.py", kind: "reloaded"},
+    ]);
   });
 
   it("closes a missing tab when no explicit rename is supplied", async () => {
@@ -101,6 +107,7 @@ describe("workspace resource reconciliation", () => {
     expect(result.documents).toEqual([]);
     expect(result.removedIds).toEqual(["src/main.py"]);
     expect(result.remappedIds).toEqual([]);
+    expect(result.externalChanges).toEqual([]);
   });
 
   it("preserves unsaved editor content while updating the disk baseline", async () => {
@@ -120,6 +127,24 @@ describe("workspace resource reconciliation", () => {
       content: "editor-unsaved\n",
       savedContent: "disk-reset\n",
     });
+    expect(result.externalChanges).toEqual([
+      {id: "src/main.py", path: "src/main.py", kind: "conflict"},
+    ]);
+  });
+
+  it("does not report an external change when disk content is unchanged", async () => {
+    const document = await openDocument("src/main.py", "same\n");
+    const root = directoryHandle("root", [
+      directoryHandle("src", [fileHandle("main.py", "same\n")]),
+    ]);
+
+    const result = await reconcileOpenDocumentsAfterWorkspaceChange({
+      documents: [document],
+      workspaceHandle: root,
+      workspaceRoot: "/workspace",
+    });
+
+    expect(result.externalChanges).toEqual([]);
   });
 
 });

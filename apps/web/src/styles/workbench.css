@@ -186,7 +186,9 @@
 .tree-entry.is-selected { background: var(--surface-4); color: var(--text); outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: -1px; }
 .editor-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 37px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--border); background: #12161d; }
 .breadcrumb { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.editor-search { display: flex; align-items: center; gap: 4px; width: min(330px, 42vw); min-width: 150px; padding: 0 4px; border: 1px solid #252c38; border-radius: 4px; background: #0d1016; }
+.editor-search { position: relative; display: grid; width: min(390px, 52vw); min-width: 180px; padding: 2px 4px; border: 1px solid #252c38; border-radius: 4px; background: #0d1016; }
+.editor-search__find-row, .editor-search__replace-row { display: flex; min-width: 0; align-items: center; gap: 4px; }
+.editor-search__replace-row { position: absolute; z-index: 30; top: calc(100% + 4px); right: -1px; box-sizing: border-box; width: calc(100% + 2px); min-height: 31px; padding: 4px; border: 1px solid #252c38; border-radius: 4px; background: #0d1016; box-shadow: 0 8px 20px rgb(0 0 0 / 38%); }
 .editor-search:focus-within { border-color: var(--accent); }
 .editor-search[data-invalid="true"] { border-color: #b4545e; }
 .editor-search__icon { flex: 0 0 auto; color: #788392; }
@@ -199,6 +201,9 @@
 .editor-search__toggle[aria-pressed="true"] { background: #294a70; color: #f0f5fb; }
 .editor-search__toggle:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 .editor-search .icon-button { width: 20px; min-height: 20px; border-color: transparent; background: transparent; }
+.editor-search__replace-action { height: 21px; flex: 0 0 auto; border: 1px solid #354154; border-radius: 3px; padding: 0 6px; background: #18212e; color: #b8c6d8; font-size: 10px; cursor: pointer; }
+.editor-search__replace-action:hover:not(:disabled) { border-color: #4c6687; background: #23354c; color: #e5edf7; }
+.editor-search__replace-action:disabled { cursor: default; opacity: .46; }
 .editor-actions select { height: 27px; min-width: 150px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2); color: var(--text); font-size: 11px; }
 .code-editor { width: 100%; height: 100%; resize: none; border: 0; outline: 0; padding: 18px 20px; background: #0f1218; color: #d4d8df; font: 13px/1.65 "JetBrains Mono", "Fira Code", Consolas, monospace; tab-size: 4; }
 
@@ -244,6 +249,9 @@
 
 .statusbar { display: flex; align-items: center; gap: 12px; border-top: 1px solid #263047; background: #243760; color: #e8eeff; padding: 0 8px; font-size: 10px; }
 .statusbar button { color: inherit; font-size: 10px; }
+.statusbar-external-sync { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.statusbar-external-sync.is-checking svg { animation: statusbar-spin 800ms linear infinite; }
+@keyframes statusbar-spin { to { transform: rotate(360deg); } }
 .statusbar-plugin-item { display: flex; min-width: 0; align-items: center; }
 .statusbar-plugin-item:empty { display: none; }
 .status-spacer { flex: 1; }

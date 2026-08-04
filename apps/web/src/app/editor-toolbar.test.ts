@@ -17,4 +17,11 @@ describe("editor toolbar contributions", () => {
     expect(appSource).toContain('item.icon === "back" ? <ArrowLeft');
     expect(appSource).toContain('item.icon === "forward" ? <ArrowRight');
   });
+
+  it("uses a compact dropdown trigger for the execution profile selector", () => {
+    expect(appSource).toContain('className="execution-profile-select"');
+    expect(appSource).toContain('className="execution-profile-select__label"');
+    expect(appSource).toContain("<DropdownMenu.Trigger asChild>");
+    expect(appSource).not.toContain('<select\n              className="execution-profile-select"');
+  });
 });

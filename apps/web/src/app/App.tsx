@@ -76,6 +76,12 @@ import {
 } from "./workbench-plugin-hosts";
 import { scrollOutputToEnd } from "./output-follow";
 import {
+  ExternalFileNotice,
+  WorkspaceExternalSyncIndicator,
+  type ExternalFileNoticeState,
+  type WorkspaceExternalSyncState,
+} from "./editor/ExternalFileNotice";
+import {
   TEXT_EDITOR_DOCUMENT_CHANGED_EVENT,
   TEXT_EDITOR_DOCUMENT_SAVED_EVENT,
   WORKSPACE_RESOURCES_CHANGED_EVENT,
@@ -364,7 +370,7 @@ import { DebugVariableNode } from "./debug/DebugVariableNode";
 import { DiagnosticLayer, EditorLineDiffPeek, HighlightedSource } from "./editor/editor-components";
 import { NativeImageEditor, UnsupportedBinaryEditor } from "./editor/resource-editors";
 import { resolveTextEditorNavigation } from "./editor/navigation";
-import { findTextMatches } from "./editor/text-search";
+import { findTextMatches, replaceTextMatch, replaceTextMatches } from "./editor/text-search";
 import { textOffsetAtPosition, textPositionAtOffset } from "./editor/text-position";
 import { ProfileDialog } from "./execution/ProfileDialog";
 import { EnvironmentPackageManager } from "./execution/EnvironmentPackageManager";
@@ -649,6 +655,8 @@ export function App() {
   const [resourceDecorationRevision, setResourceDecorationRevision] = useState(0);
   const [restorationComplete, setRestorationComplete] = useState(false);
   const [error, setError] = useState<string>();
+  const [externalDocumentNotices, setExternalDocumentNotices] = useState<ReadonlyMap<string, ExternalFileNoticeState>>(new Map());
+  const [workspaceExternalSync, setWorkspaceExternalSync] = useState<WorkspaceExternalSyncState>();
   const [workspaceAccess, setWorkspaceAccess] = useState<"ready" | "permission-required" | "missing">("ready");
   const [explorerCreation, setExplorerCreation] = useState<"file" | "directory">();
   const [explorerCreationParentPath, setExplorerCreationParentPath] = useState("");
@@ -694,6 +702,8 @@ export function App() {
   const [explorerFilterRevision, setExplorerFilterRevision] = useState(0);
   const [editorSearchOpen, setEditorSearchOpen] = useState(false);
   const [editorSearchQuery, setEditorSearchQuery] = useState("");
+  const [editorSearchReplaceOpen, setEditorSearchReplaceOpen] = useState(false);
+  const [editorSearchReplacement, setEditorSearchReplacement] = useState("");
   const [editorSearchMatchIndex, setEditorSearchMatchIndex] = useState(0);
   const [editorSearchCaseSensitive, setEditorSearchCaseSensitive] = useState(false);
   const [editorSearchRegex, setEditorSearchRegex] = useState(false);
@@ -701,6 +711,7 @@ export function App() {
   const [editorViewport, setEditorViewport] = useState({ scrollTop: 0, height: 800 });
   const explorerFilterInputRef = useRef<HTMLInputElement>(null);
   const editorSearchInputRef = useRef<HTMLInputElement>(null);
+  const editorSearchReplaceInputRef = useRef<HTMLInputElement>(null);
   const editorNavigationLoadingRef = useRef(false);
   const restoredRef = useRef(false);
   const openWorkspaceResourceRef = useRef<
@@ -709,6 +720,7 @@ export function App() {
   const explorerFilterExpansionBackupRef = useRef<ReadonlySet<string> | undefined>(undefined);
   const snapshotTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const workspaceExternalSyncTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const explorerHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const explorerHistoryRef = useRef<ExplorerHistoryState>(createExplorerHistoryState());
   const explorerClipboardRef = useRef<readonly ExplorerClipboardEntry[] | undefined>(undefined);
@@ -818,6 +830,9 @@ export function App() {
   }), []);
 
   const activeDocument = documents.find((document) => document.id === activeDocumentId);
+  const activeExternalDocumentNotice = activeDocument
+    ? externalDocumentNotices.get(activeDocument.id)
+    : undefined;
   const [editorToolbarItems, setEditorToolbarItems] = useState<readonly WorkbenchEditorToolbarItem[]>([]);
   const [resourceEditorRevision, setResourceEditorRevision] = useState(0);
   const activeResourceEditorProvider = useMemo(
@@ -829,11 +844,25 @@ export function App() {
     [activeDocument, platformSnapshot.plugins, resourceEditorRevision, restorationComplete, workspaceSettings.plugins],
   );
   const activeLanguageProvider = activeResourceEditorProvider ? undefined : languageProviderFor(activeDocument);
-  const openEditorSearch = useCallback(() => {
+  const openEditorSearch = useCallback((selectedText = "") => {
     if (activeDocument?.kind !== "text" || activeResourceEditorProvider) return false;
+    if (selectedText) {
+      setEditorSearchQuery(selectedText);
+      setEditorSearchMatchIndex(0);
+    }
     setEditorSearchOpen(true);
+    window.requestAnimationFrame(() => {
+      const input = editorSearchInputRef.current;
+      input?.focus({ preventScroll: true });
+      input?.select();
+    });
     return true;
   }, [activeDocument?.id, activeDocument?.kind, activeResourceEditorProvider]);
+  const openEditorReplace = useCallback(() => {
+    if (!openEditorSearch()) return false;
+    setEditorSearchReplaceOpen(true);
+    return true;
+  }, [openEditorSearch]);
   const editorSearchResult = useMemo(() => {
     if (!editorSearchOpen || activeDocument?.kind !== "text" || activeResourceEditorProvider) return { matches: [] };
     try {
@@ -1481,6 +1510,10 @@ export function App() {
       if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
     };
   }, [error]);
+
+  useEffect(() => () => {
+    if (workspaceExternalSyncTimerRef.current) clearTimeout(workspaceExternalSyncTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (!activeDocument || !activeLanguageProvider) {
@@ -2773,6 +2806,29 @@ export function App() {
     setDiagnostics([]);
   };
 
+  const applyEditorSearchReplacement = (content: string, selectionStart: number, selectionEnd: number) => {
+    const textarea = editorRef.current;
+    if (!textarea) return;
+    textarea.value = content;
+    textarea.setSelectionRange(selectionStart, selectionEnd);
+    updateDocument(textarea);
+    setEditorSearchMatchIndex(0);
+    window.requestAnimationFrame(() => editorSearchInputRef.current?.focus({ preventScroll: true }));
+  };
+
+  const replaceCurrentEditorSearchMatch = () => {
+    if (!activeDocument || activeDocument.kind !== "text" || !activeEditorSearchMatch) return;
+    const nextContent = replaceTextMatch(activeDocument.content, activeEditorSearchMatch, editorSearchReplacement);
+    const selectionStart = activeEditorSearchMatch.start;
+    applyEditorSearchReplacement(nextContent, selectionStart, selectionStart + editorSearchReplacement.length);
+  };
+
+  const replaceAllEditorSearchMatches = () => {
+    if (!activeDocument || activeDocument.kind !== "text" || !editorSearchMatches.length) return;
+    const nextContent = replaceTextMatches(activeDocument.content, editorSearchMatches, editorSearchReplacement);
+    applyEditorSearchReplacement(nextContent, 0, 0);
+  };
+
   const navigateEditorHistory = (
     direction: "undo" | "redo",
     textarea: HTMLTextAreaElement,
@@ -2853,7 +2909,12 @@ export function App() {
     if (!(event.ctrlKey || event.metaKey)) return;
     const key = event.key.toLocaleLowerCase();
     if (key === "f" && !event.shiftKey && !event.altKey) {
-      if (openEditorSearch()) event.preventDefault();
+      const { value, selectionStart, selectionEnd } = event.currentTarget;
+      if (openEditorSearch(value.slice(selectionStart, selectionEnd))) event.preventDefault();
+      return;
+    }
+    if (key === "h" && !event.shiftKey && !event.altKey) {
+      if (openEditorReplace()) event.preventDefault();
       return;
     }
     const undo = key === "z" && !event.shiftKey;
@@ -2942,6 +3003,38 @@ export function App() {
   const saveDocument = async (forceSaveAs = false) => {
     if (!activeDocument) return;
     await saveOpenDocument(activeDocument, forceSaveAs);
+    setExternalDocumentNotices((current) => {
+      if (!current.has(activeDocument.id)) return current;
+      const next = new Map(current);
+      next.delete(activeDocument.id);
+      return next;
+    });
+  };
+
+  const dismissExternalDocumentNotice = (documentId: string) => {
+    setExternalDocumentNotices((current) => {
+      if (!current.has(documentId)) return current;
+      const next = new Map(current);
+      next.delete(documentId);
+      return next;
+    });
+  };
+
+  const reloadExternalDocument = (documentId: string) => {
+    const document = documentsRef.current.find((candidate) => candidate.id === documentId);
+    if (!document || document.kind !== "text") return;
+    const nextDocuments = documentsRef.current.map((candidate) => candidate.id === documentId
+      ? {
+          ...candidate,
+          content: candidate.savedContent,
+          selectionStart: Math.min(candidate.selectionStart, candidate.savedContent.length),
+          selectionEnd: Math.min(candidate.selectionEnd, candidate.savedContent.length),
+        }
+      : candidate);
+    documentsRef.current = nextDocuments;
+    setDocuments(nextDocuments);
+    editorHistoriesRef.current.delete(documentId);
+    dismissExternalDocumentNotice(documentId);
   };
 
   const newDocument = (option: Pick<WorkspaceFileCreationOption, "extension"> = TEXT_FILE_CREATION_OPTION) => {
@@ -3047,6 +3140,8 @@ export function App() {
     async (event) => {
       if (!workspaceHandle) return;
       if (event.workspaceRoot && workspaceRoot && event.workspaceRoot !== workspaceRoot) return;
+      const detectedAt = Date.now();
+      setWorkspaceExternalSync({ status: "checking", affected: event.paths?.length ?? 0 });
       const nextEntries = await listDirectory(workspaceHandle);
       setEntries(await hydrateExpandedEntries(nextEntries, expanded));
       const sourceDocuments = documentsRef.current;
@@ -3058,6 +3153,29 @@ export function App() {
       });
       documentsRef.current = reconciliation.documents;
       setDocuments(reconciliation.documents);
+      setExternalDocumentNotices((current) => {
+        const next = new Map(current);
+        for (const id of reconciliation.removedIds) next.delete(id);
+        for (const {from, to} of reconciliation.remappedIds) {
+          const notice = next.get(from);
+          next.delete(from);
+          if (notice) next.set(to, notice);
+        }
+        for (const change of reconciliation.externalChanges) {
+          if (change.kind === "conflict") {
+            next.set(change.id, {
+              kind: "conflict",
+              detectedAt,
+            });
+          } else {
+            next.set(change.id, {
+              kind: "reloaded",
+              detectedAt,
+            });
+          }
+        }
+        return next;
+      });
 
       for (const {from, to} of reconciliation.remappedIds) {
         const history = editorHistoriesRef.current.get(from);
@@ -3083,6 +3201,11 @@ export function App() {
           return nearest ? remapped.get(nearest) ?? nearest : undefined;
         });
       }
+      setWorkspaceExternalSync({ status: "applied", affected: reconciliation.externalChanges.length });
+      if (workspaceExternalSyncTimerRef.current) clearTimeout(workspaceExternalSyncTimerRef.current);
+      workspaceExternalSyncTimerRef.current = setTimeout(() => {
+        setWorkspaceExternalSync(undefined);
+      }, 5000);
     },
   ).dispose, [platform.events, workspaceHandle, workspaceRoot, expanded]);
 
@@ -3117,10 +3240,17 @@ export function App() {
     input.select();
   }, [editorSearchOpen]);
 
+  useLayoutEffect(() => {
+    if (!editorSearchReplaceOpen) return;
+    editorSearchReplaceInputRef.current?.focus({ preventScroll: true });
+  }, [editorSearchReplaceOpen]);
+
   useEffect(() => {
     if (!editorSearchOpen || activeDocument?.kind === "text") return;
     setEditorSearchOpen(false);
     setEditorSearchQuery("");
+    setEditorSearchReplaceOpen(false);
+    setEditorSearchReplacement("");
   }, [editorSearchOpen, activeDocument?.id, activeDocument?.kind]);
 
   useEffect(() => {
@@ -5373,14 +5503,54 @@ export function App() {
             {workbenchTitlebarContributions.map((provider) => (
               <WorkbenchTitlebarHost key={provider.id} provider={provider} state={workbenchState} />
             ))}
-            <select
-              aria-label="Perfil de execução"
-              value={profilesState.selectedId ?? ""}
-              onChange={(event) => updateProfiles(profilesState.profiles, event.target.value || undefined)}
-            >
-              <option value="">Selecionar perfil</option>
-              {profilesState.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
-            </select>
+            <DropdownMenu.Root>
+              <ButtonTooltip label={selectedProfile?.name ?? "Selecionar perfil"}>
+                <DropdownMenu.Trigger asChild>
+                  <button
+                    className="execution-profile-select"
+                    type="button"
+                    aria-label="Perfil de execução"
+                    title={selectedProfile?.name ?? "Selecionar perfil"}
+                    data-placeholder={!selectedProfile ? "true" : undefined}
+                  >
+                    <span className="execution-profile-select__label">
+                      {selectedProfile?.name ?? "Selecionar perfil"}
+                    </span>
+                    <ChevronDown size={12} />
+                  </button>
+                </DropdownMenu.Trigger>
+              </ButtonTooltip>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content className="menu-content execution-profile-select__menu" align="end" sideOffset={6}>
+                  <DropdownMenu.Item
+                    className="menu-item"
+                    onSelect={() => updateProfiles(profilesState.profiles, undefined)}
+                  >
+                    <Check
+                      size={14}
+                      className="execution-profile-select__check"
+                      style={{ opacity: profilesState.selectedId ? 0 : 1 }}
+                    />
+                    Sem perfil
+                  </DropdownMenu.Item>
+                  {profilesState.profiles.map((profile) => (
+                    <DropdownMenu.Item
+                      key={profile.id}
+                      className="menu-item"
+                      onSelect={() => updateProfiles(profilesState.profiles, profile.id)}
+                      title={profile.name}
+                    >
+                      <Check
+                        size={14}
+                        className="execution-profile-select__check"
+                        style={{ opacity: profilesState.selectedId === profile.id ? 1 : 0 }}
+                      />
+                      <span className="execution-profile-select__menu-label">{profile.name}</span>
+                    </DropdownMenu.Item>
+                  ))}
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
             <button className="icon-button small" type="button" aria-label="Gerenciar perfis" onClick={() => setProfilesOpen(true)}><Settings2 size={14} /></button>
             <ButtonTooltip label="Executar perfil">
               <button
@@ -5497,6 +5667,7 @@ export function App() {
                   <div className="editor-actions">
                     {editorSearchOpen ? (
                       <div className="editor-search" role="search" data-invalid={editorSearchError ? "true" : undefined}>
+                        <div className="editor-search__find-row">
                         <Search className="editor-search__icon" size={13} />
                         <input
                           ref={editorSearchInputRef}
@@ -5512,10 +5683,27 @@ export function App() {
                             setEditorSearchMatchIndex(0);
                           }}
                           onKeyDown={(event) => {
+                            const key = event.key.toLocaleLowerCase();
+                            if ((event.ctrlKey || event.metaKey) && key === "f") {
+                              event.preventDefault();
+                              event.currentTarget.select();
+                              return;
+                            }
+                            if ((event.ctrlKey || event.metaKey) && key === "h") {
+                              event.preventDefault();
+                              setEditorSearchReplaceOpen(true);
+                              return;
+                            }
                             if (event.key === "Escape") {
                               event.preventDefault();
+                              if (editorSearchReplaceOpen) {
+                                setEditorSearchReplaceOpen(false);
+                                return;
+                              }
                               setEditorSearchOpen(false);
                               setEditorSearchQuery("");
+                              setEditorSearchReplaceOpen(false);
+                              setEditorSearchReplacement("");
                               return;
                             }
                             if (event.key === "Enter" && editorSearchMatches.length) {
@@ -5551,6 +5739,15 @@ export function App() {
                         <span className="editor-search__count" aria-live="polite">
                           {editorSearchError ? "!" : editorSearchMatches.length ? `${editorSearchMatchIndex + 1}/${editorSearchMatches.length}` : "0"}
                         </span>
+                        <button
+                          className="icon-button small"
+                          type="button"
+                          aria-label="Alternar substituição"
+                          aria-expanded={editorSearchReplaceOpen}
+                          title="Substituir (Ctrl+H)"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => setEditorSearchReplaceOpen((current) => !current)}
+                        ><CornerDownRight size={12} /></button>
                         {editorSearchMatches.length > 1 ? (
                           <>
                             <button
@@ -5578,8 +5775,52 @@ export function App() {
                           onClick={() => {
                             setEditorSearchOpen(false);
                             setEditorSearchQuery("");
+                            setEditorSearchReplaceOpen(false);
+                            setEditorSearchReplacement("");
                           }}
                         ><X size={12} /></button>
+                        </div>
+                        {editorSearchReplaceOpen ? (
+                          <div className="editor-search__replace-row">
+                            <CornerDownRight className="editor-search__icon" size={13} />
+                            <input
+                              ref={editorSearchReplaceInputRef}
+                              className="editor-search__input"
+                              type="text"
+                              value={editorSearchReplacement}
+                              aria-label="Substituir por"
+                              placeholder="Substituir por"
+                              onChange={(event) => setEditorSearchReplacement(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Escape") {
+                                  event.preventDefault();
+                                  setEditorSearchReplaceOpen(false);
+                                  editorSearchInputRef.current?.focus({ preventScroll: true });
+                                  return;
+                                }
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  if (event.ctrlKey || event.metaKey) replaceAllEditorSearchMatches();
+                                  else replaceCurrentEditorSearchMatch();
+                                }
+                              }}
+                            />
+                            <button
+                              className="editor-search__replace-action"
+                              type="button"
+                              disabled={!activeEditorSearchMatch || Boolean(editorSearchError)}
+                              title="Substituir ocorrência atual (Enter)"
+                              onClick={replaceCurrentEditorSearchMatch}
+                            >Substituir</button>
+                            <button
+                              className="editor-search__replace-action"
+                              type="button"
+                              disabled={!editorSearchMatches.length || Boolean(editorSearchError)}
+                              title="Substituir todas as ocorrências (Ctrl+Enter)"
+                              onClick={replaceAllEditorSearchMatches}
+                            >Todos</button>
+                          </div>
+                        ) : null}
                       </div>
                     ) : (
                       <button
@@ -5588,7 +5829,7 @@ export function App() {
                         aria-label="Pesquisar no arquivo"
                         title="Pesquisar no arquivo"
                         disabled={!activeDocument || activeDocument.kind !== "text" || Boolean(activeResourceEditorProvider)}
-                        onClick={openEditorSearch}
+                        onClick={() => openEditorSearch()}
                       ><Search size={14} /></button>
                     )}
                     {editorToolbarItems.map((item) => {
@@ -5629,6 +5870,14 @@ export function App() {
                   </div>
                 </div>
                 <div className="editor-stack">
+                  {activeDocument && activeExternalDocumentNotice ? (
+                    <ExternalFileNotice
+                      notice={activeExternalDocumentNotice}
+                      onReload={() => reloadExternalDocument(activeDocument.id)}
+                      onKeep={() => dismissExternalDocumentNotice(activeDocument.id)}
+                      onDismiss={() => dismissExternalDocumentNotice(activeDocument.id)}
+                    />
+                  ) : null}
                   {activeDocument && activeResourceEditorProvider ? (
                     <ResourceEditorHost
                       provider={activeResourceEditorProvider}
@@ -6262,6 +6511,7 @@ export function App() {
         <footer className="statusbar">
           <button type="button" onClick={() => invoke(openSingleFile)}><File size={13} /> Abrir arquivo</button>
           <span>{platformSnapshot.plugins.length} plugin(s)</span>
+          {workspaceExternalSync ? <WorkspaceExternalSyncIndicator state={workspaceExternalSync} /> : null}
           {workbenchStatusbarContributions.map((provider) => (
             <WorkbenchStatusbarHost key={provider.id} provider={provider} state={workbenchState} />
           ))}

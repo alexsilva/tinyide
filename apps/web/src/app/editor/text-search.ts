@@ -35,3 +35,20 @@ export function findTextMatches(
   }
   return matches;
 }
+
+/** Replaces one already-resolved search match without reinterpreting the replacement text. */
+export function replaceTextMatch(source: string, match: TextSearchMatch, replacement: string): string {
+  return `${source.slice(0, match.start)}${replacement}${source.slice(match.end)}`;
+}
+
+/** Replaces matches from the end so offsets remain valid for every earlier match. */
+export function replaceTextMatches(
+  source: string,
+  matches: readonly TextSearchMatch[],
+  replacement: string,
+): string {
+  return [...matches].reverse().reduce(
+    (content, match) => replaceTextMatch(content, match, replacement),
+    source,
+  );
+}

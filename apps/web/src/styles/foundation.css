@@ -92,9 +92,57 @@ button { color: inherit; }
 .brand-button { height: 30px; padding: 0 8px; border-radius: 5px; }
 .brand-button:hover { background: var(--surface-3); }
 .window-title { flex: 1; overflow: hidden; color: var(--muted); font-size: 12px; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
-.titlebar-actions, .editor-actions, .toolbar-row, .plugin-actions, .dialog-actions { display: flex; align-items: center; gap: 6px; }
+.titlebar-actions, .editor-actions, .toolbar-row, .plugin-actions, .dialog-actions { display: flex; min-width: 0; align-items: center; gap: 6px; }
 .titlebar-plugin-actions { display:flex; align-items:center; min-width:0; }
-.titlebar-actions select { height: 27px; min-width: 170px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2); color: var(--text); font-size: 11px; }
+.execution-profile-select {
+  display: inline-flex;
+  flex: 0 0 156px;
+  align-items: center;
+  gap: 6px;
+  width: 156px;
+  max-width: 156px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+.execution-profile-select:hover,
+.execution-profile-select[data-state="open"] {
+  border-color: var(--border);
+  background: var(--surface-3);
+}
+.execution-profile-select[data-placeholder="true"] {
+  color: var(--muted);
+}
+.execution-profile-select__label,
+.execution-profile-select__menu-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.execution-profile-select__label {
+  flex: 1;
+  text-align: left;
+}
+.execution-profile-select__check {
+  flex: 0 0 auto;
+}
+.execution-profile-select__menu {
+  width: min(280px, calc(100vw - 24px));
+}
+@media (max-width: 720px) {
+  .execution-profile-select {
+    flex-basis: 124px;
+    width: 124px;
+    max-width: 124px;
+  }
+}
 .titlebar-corner { display: flex; flex: 0 0 auto; align-items: center; justify-content: center; align-self: stretch; width: 36px; margin: 0 -8px 0 8px; border-left: 1px solid var(--border); }
 
 .button, .icon-button {

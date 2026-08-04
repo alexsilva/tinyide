@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findTextMatches } from "./text-search";
+import { findTextMatches, replaceTextMatch, replaceTextMatches } from "./text-search";
 
 describe("editor text search", () => {
   it("finds literal matches without considering case", () => {
@@ -29,5 +29,15 @@ describe("editor text search", () => {
 
   it("reports invalid regular expressions", () => {
     expect(() => findTextMatches("content", "([", { regex: true })).toThrow(SyntaxError);
+  });
+
+  it("replaces one resolved match literally", () => {
+    expect(replaceTextMatch("alpha beta alpha", { start: 11, end: 16 }, "$value")).toBe("alpha beta $value");
+  });
+
+  it("replaces every resolved match without shifting later offsets", () => {
+    const source = "alpha beta alpha";
+    const matches = findTextMatches(source, "alpha");
+    expect(replaceTextMatches(source, matches, "x")).toBe("x beta x");
   });
 });

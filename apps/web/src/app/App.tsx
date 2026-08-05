@@ -87,6 +87,7 @@ import {
   WORKSPACE_RESOURCES_CHANGED_EVENT,
 } from "@tinyide/plugin-api";
 import type {
+  DebugAdapterCommand,
   DebugAdapterProvider,
   DebugBreakpoint,
   DebugSessionSnapshot,
@@ -326,7 +327,13 @@ import {
   resolvePluginStringArraySettingValue,
   updatePluginSettingValue,
 } from "./plugin-settings";
-import { editorDocumentMetrics, editorVisibleLineRange, resolveEditorSettings } from "./editor-settings";
+import {
+  EDITOR_CONTENT_PADDING,
+  EDITOR_DEFAULT_LINE_HEIGHT,
+  editorDocumentMetrics,
+  editorVisibleLineRange,
+  resolveEditorSettings,
+} from "./editor-settings";
 import {
   closeSidebarForSide,
   maximumSidebarWidth,
@@ -398,6 +405,11 @@ interface FoldPreviewState {
   readonly lineCount: number;
 }
 
+interface EditorLayoutMetrics {
+  readonly lineHeight: number;
+  readonly contentPadding: number;
+}
+
 interface FoldProjection {
   readonly content: string;
   readonly fileLineByVisibleLine: readonly number[];
@@ -413,6 +425,11 @@ interface ActiveFoldRangeState {
   readonly providerId: string;
   readonly source: string;
   readonly ranges: readonly FoldRange[];
+}
+
+interface DebugCommandPendingState {
+  readonly sessionId: string;
+  readonly command: DebugAdapterCommand;
 }
 
 function normalizeFoldRanges(
@@ -794,6 +811,7 @@ export function App() {
   const [debugBreakpoints, setDebugBreakpoints] = useState<readonly DebugBreakpoint[]>([]);
   const [debugSession, setDebugSession] = useState<DebugSessionSnapshot>();
   const [debugAdapter, setDebugAdapter] = useState<DebugAdapterProvider>();
+  const [debugCommandPending, setDebugCommandPending] = useState<DebugCommandPendingState>();
   const [debugRestartingProfileId, setDebugRestartingProfileId] = useState<string>();
   const [restartingProfileId, setRestartingProfileId] = useState<string>();
   const [debugInspectorWidth, setDebugInspectorWidth] = useState<number>(DEFAULT_DEBUG_PANEL_LAYOUT.inspectorWidth);
@@ -881,6 +899,10 @@ export function App() {
   const [editorSearchRegex, setEditorSearchRegex] = useState(false);
   const [editorNavigationLoading, setEditorNavigationLoading] = useState(false);
   const [editorViewport, setEditorViewport] = useState({ scrollTop: 0, height: 800 });
+  const [editorLayoutMetrics, setEditorLayoutMetrics] = useState<EditorLayoutMetrics>({
+    lineHeight: EDITOR_DEFAULT_LINE_HEIGHT,
+    contentPadding: EDITOR_CONTENT_PADDING,
+  });
   /** Estado visual de blocos recolhidos. Não altera `document.content`. */
   const [documentFolds, setDocumentFolds] = useState<ReadonlyMap<string, readonly DocumentFold[]>>(new Map());
   const [activeFoldRangeState, setActiveFoldRangeState] = useState<ActiveFoldRangeState>();
@@ -893,6 +915,7 @@ export function App() {
   const explorerFilterInputRef = useRef<HTMLInputElement>(null);
   const editorSearchInputRef = useRef<HTMLInputElement>(null);
   const editorSearchReplaceInputRef = useRef<HTMLInputElement>(null);
+  const syntaxLayerRef = useRef<HTMLPreElement>(null);
   const editorNavigationLoadingRef = useRef(false);
   const restoredRef = useRef(false);
   const openWorkspaceResourceRef = useRef<
@@ -928,6 +951,7 @@ export function App() {
   openProfileTabIdsRef.current = openProfileTabIds;
   const profileRunCancellationRef = useRef(new Map<string, { cancelled: boolean }>());
   const profileRunPromiseRef = useRef(new Map<string, Promise<void>>());
+  const debugCommandPromiseRef = useRef<Promise<void> | undefined>(undefined);
   const debugRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
   const debugLayoutRef = useRef<HTMLDivElement | null>(null);
   const debugOutputRef = useRef<HTMLDivElement | null>(null);
@@ -1343,10 +1367,44 @@ export function App() {
       : { lineCount: 1, lineNumberWidth: 2, gutterWidth: 52 },
     [activeDocument?.id, activeDocument?.kind, activeEditorDisplayContent],
   );
+  useLayoutEffect(() => {
+    if (activeDocument?.kind !== "text") return;
+    let cancelled = false;
+    const measure = () => {
+      const layer = syntaxLayerRef.current;
+      if (!layer || cancelled) return;
+      const computed = window.getComputedStyle(layer);
+      const declaredLineHeight = Number.parseFloat(computed.lineHeight);
+      const paddingTop = Number.parseFloat(computed.paddingTop);
+      const paddingBottom = Number.parseFloat(computed.paddingBottom);
+      const contentPadding = Number.isFinite(paddingTop) ? paddingTop : EDITOR_CONTENT_PADDING;
+      const measuredHeight = layer.scrollHeight - (Number.isFinite(paddingTop) ? paddingTop : 0) - (Number.isFinite(paddingBottom) ? paddingBottom : 0);
+      const measuredLineHeight = editorMetrics.lineCount > 1 ? measuredHeight / editorMetrics.lineCount : declaredLineHeight;
+      const lineHeight = Number.isFinite(measuredLineHeight) && measuredLineHeight > 8
+        ? measuredLineHeight
+        : Number.isFinite(declaredLineHeight) && declaredLineHeight > 8
+          ? declaredLineHeight
+          : EDITOR_DEFAULT_LINE_HEIGHT;
+      setEditorLayoutMetrics((current) => (
+        Math.abs(current.lineHeight - lineHeight) < 0.001
+        && Math.abs(current.contentPadding - contentPadding) < 0.001
+          ? current
+          : { lineHeight, contentPadding }
+      ));
+    };
+    const frame = window.requestAnimationFrame(measure);
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
+    };
+  }, [activeDocument?.id, activeDocument?.kind, activeEditorDisplayContent, editorMetrics.lineCount]);
   const editorRulerRange = editorVisibleLineRange(
     editorMetrics.lineCount,
     editorViewport.scrollTop,
     editorViewport.height,
+    12,
+    editorLayoutMetrics.lineHeight,
+    editorLayoutMetrics.contentPadding,
   );
   const visibleEditorRulerLines = useMemo(() => Array.from(
     { length: Math.max(0, editorRulerRange.end - editorRulerRange.start + 1) },
@@ -1358,6 +1416,14 @@ export function App() {
    */
   const fileLineByVisibleLine = activeFoldProjection?.fileLineByVisibleLine;
   const fileLineOf = (visibleLine: number) => fileLineByVisibleLine?.[visibleLine - 1] ?? visibleLine;
+  const editorLineTop = (line: number) => (
+    editorLayoutMetrics.contentPadding + (line - 1) * editorLayoutMetrics.lineHeight
+  );
+  const editorScrollTopForLine = (line: number) => Math.max(0, editorLineTop(line) - 120);
+  const editorScrollTopForTopLine = (line: number) => Math.max(0, editorLineTop(line));
+  const editorTopLineForScrollTop = (scrollTop: number) => (
+    Math.max(1, (scrollTop - editorLayoutMetrics.contentPadding) / editorLayoutMetrics.lineHeight + 1)
+  );
   const editorDecorationsByLine = useMemo(() => {
     const grouped = new Map<number, TextEditorLineDecoration[]>();
     const visibleLines = activeFoldProjection?.visibleLineByFileLine;
@@ -1381,6 +1447,11 @@ export function App() {
     return new Map(activeFoldRanges.map((range) => [range.startLine, range]));
   }, [activeDocument?.kind, activeFoldRanges]);
   const foldedHeaderLines = activeFoldProjection?.foldIdByHeaderVisibleLine ?? new Map<number, string>();
+  const activeDebugVisibleLine = activeDocument?.kind === "text"
+    && activeDocument.path === activeDebugPath
+    && activeDebugLine
+      ? activeFoldProjection?.visibleLineByFileLine[activeDebugLine - 1] ?? activeDebugLine
+      : undefined;
   const foldPreview = useMemo<FoldPreviewState | undefined>(() => {
     if (activeDocument?.kind !== "text" || foldPreviewLine === undefined) return undefined;
     const foldedId = foldedHeaderLines.get(foldPreviewLine);
@@ -1391,7 +1462,7 @@ export function App() {
       : undefined;
   }, [activeDocument?.kind, activeFoldProjection, foldedHeaderLines, foldPreviewLine]);
   const foldPreviewRawTop = foldPreview
-    ? 18 + (foldPreview.line - 1) * 21.45 - editorViewport.scrollTop + 22
+    ? editorLineTop(foldPreview.line) - editorViewport.scrollTop + editorLayoutMetrics.lineHeight
     : FOLD_PREVIEW_MARGIN;
   const foldPreviewTop = foldPreview
     ? Math.min(
@@ -1435,8 +1506,8 @@ export function App() {
     if (event.target instanceof Element && event.target.closest(".editor-fold-preview")) return;
     const scroller = highlightedEditorScrollRef.current ?? editorRef.current;
     const bounds = event.currentTarget.getBoundingClientRect();
-    const contentY = event.clientY - bounds.top + (scroller?.scrollTop ?? 0) - 18;
-    const line = Math.floor(contentY / 21.45) + 1;
+    const contentY = event.clientY - bounds.top + (scroller?.scrollTop ?? 0) - editorLayoutMetrics.contentPadding;
+    const line = Math.floor(contentY / editorLayoutMetrics.lineHeight) + 1;
     const fileLine = fileLineOf(line);
     const next = foldRangeByStartLine.has(fileLine) || foldedHeaderLines.has(line) ? line : undefined;
     setHoveredFoldLine((current) => current === next ? current : next);
@@ -1481,7 +1552,12 @@ export function App() {
   };
   const showEditorGutter = activeDocument?.kind === "text"
     && !activeResourceEditorProvider
-    && (editorSettings.lineNumbers || editorLineDecorations.length > 0 || debugBreakpoints.some((breakpoint) => breakpoint.path === activeDocument.path));
+    && (
+      editorSettings.lineNumbers
+      || editorLineDecorations.length > 0
+      || debugBreakpoints.some((breakpoint) => breakpoint.path === activeDocument.path)
+      || activeDebugVisibleLine !== undefined
+    );
 
   useEffect(() => {
     const snapshot: WorkbenchStateSnapshot = {
@@ -2154,10 +2230,12 @@ export function App() {
     setClosingProfileTabIds(new Set());
     setDebugSession(undefined);
     setDebugAdapter(undefined);
+    setDebugCommandPending(undefined);
     setDebugRestartingProfileId(undefined);
     setRestartingProfileId(undefined);
     profileRunCancellationRef.current.clear();
     profileRunPromiseRef.current.clear();
+    debugCommandPromiseRef.current = undefined;
     debugRestartPromiseRef.current = undefined;
     void Promise.all([
       listHostProcesses(),
@@ -2426,12 +2504,14 @@ export function App() {
     setResumedProcessId(undefined);
     setDebugSession(undefined);
     setDebugAdapter(undefined);
+    setDebugCommandPending(undefined);
     setDebugBreakpoints([]);
     setPanelVisible(false);
     setToolWindowVisible(false);
     setActiveToolWindowId(undefined);
     profileRunCancellationRef.current.clear();
     profileRunPromiseRef.current.clear();
+    debugCommandPromiseRef.current = undefined;
     debugRestartPromiseRef.current = undefined;
   };
 
@@ -2633,12 +2713,6 @@ export function App() {
     );
   };
 
-  const editorScrollTopForLine = (line: number) => Math.max(0, 18 + (line - 1) * 21.45 - 120);
-
-  const editorScrollTopForTopLine = (line: number) => Math.max(0, 18 + (line - 1) * 21.45);
-
-  const editorTopLineForScrollTop = (scrollTop: number) => Math.max(1, (scrollTop - 18) / 21.45 + 1);
-
   const revealEditorLocation = (
     line: number,
     selectionStart?: number,
@@ -2743,7 +2817,8 @@ export function App() {
         reveal: true,
       });
       if (cancelled) return;
-      const targetScrollTop = Math.max(0, 18 + (activeDebugLine - 1) * 21.45 - 120);
+      const visibleDebugLine = activeFoldProjection?.visibleLineByFileLine[activeDebugLine - 1] ?? activeDebugLine;
+      const targetScrollTop = editorScrollTopForLine(visibleDebugLine);
       window.requestAnimationFrame(() => {
         const scrollContainer = highlightedEditorScrollRef.current ?? editorRef.current;
         if (!scrollContainer) return;
@@ -2756,7 +2831,7 @@ export function App() {
       });
     })().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
     return () => { cancelled = true; };
-  }, [activeDebugPath, activeDebugLine, debugSession?.status]);
+  }, [activeDebugPath, activeDebugLine, activeFoldProjection, debugSession?.status, editorLayoutMetrics]);
 
   const resourceContext = (entry: WorkspaceEntry): ResourceContext => {
     const document = entry.kind === "file"
@@ -4132,9 +4207,22 @@ export function App() {
     await startDebugForProfile(selectedProfile);
   };
 
-  const debugCommand = async (command: "pause" | "resume" | "stepOver" | "stepInto" | "stepOut" | "stop") => {
+  const debugCommand = async (command: DebugAdapterCommand) => {
     if (!debugSession || !debugAdapter) throw new Error("Nenhuma sessão de debug ativa.");
-    setDebugSession(await sendDebugCommand(debugAdapter, debugSession.id, command));
+    if (debugCommandPromiseRef.current) return debugCommandPromiseRef.current;
+    const sessionId = debugSession.id;
+    const pending = (async () => {
+      setDebugCommandPending({ sessionId, command });
+      const snapshot = await sendDebugCommand(debugAdapter, sessionId, command);
+      setDebugSession(snapshot);
+    })();
+    debugCommandPromiseRef.current = pending;
+    try {
+      await pending;
+    } finally {
+      if (debugCommandPromiseRef.current === pending) debugCommandPromiseRef.current = undefined;
+      setDebugCommandPending((current) => current?.sessionId === sessionId ? undefined : current);
+    }
   };
 
   const restartDebugSession = async (profileId: string) => {
@@ -6377,7 +6465,11 @@ export function App() {
                   <div
                     className={`editor-canvas${showEditorGutter ? " has-editor-gutter" : ""}${editorSettings.lineNumbers ? " has-line-numbers" : ""}${editorNavigationLoading ? " is-symbol-navigation-loading" : ""}`}
                     aria-busy={editorNavigationLoading}
-                    style={{ "--editor-gutter-width": `${editorMetrics.gutterWidth}px` } as React.CSSProperties}
+                    style={{
+                      "--editor-gutter-width": `${editorMetrics.gutterWidth}px`,
+                      "--editor-line-height": `${editorLayoutMetrics.lineHeight}px`,
+                      "--editor-content-padding": `${editorLayoutMetrics.contentPadding}px`,
+                    } as React.CSSProperties}
                     onMouseMove={trackFoldHover}
                     onMouseLeave={() => { setHoveredFoldLine(undefined); setFoldPreviewLine(undefined); }}
                   >
@@ -6385,14 +6477,14 @@ export function App() {
                       <div className={`editor-line-ruler${editorSettings.lineNumbers ? "" : " decorations-only"}`}>
                         <pre
                           ref={editorLineRulerRef}
-                          style={{ height: `${36 + editorMetrics.lineCount * 21.45}px` }}
+                          style={{ height: `${editorLayoutMetrics.contentPadding * 2 + editorMetrics.lineCount * editorLayoutMetrics.lineHeight}px` }}
                         >
                           {visibleEditorRulerLines.map((line) => {
                             const fileLine = fileLineOf(line);
                             const breakpoint = activeDocument?.path
                               ? debugBreakpoints.find((candidate) => candidate.path === activeDocument.path && candidate.line === fileLine)
                               : undefined;
-                            const currentDebugLine = activeDocument?.path === activeDebugPath && activeDebugLine === fileLine;
+                            const currentDebugLine = activeDebugVisibleLine === line;
                             const decorations = editorDecorationsByLine.get(line) ?? [];
                             const changeDecoration = decorations.find((decoration) => decoration.change);
                             const tooltip = decorations
@@ -6408,7 +6500,7 @@ export function App() {
                               <button
                                 className={`editor-line-ruler__line${lineDecorationClassName(decorations)}${currentDebugLine ? " is-debug-current" : ""}`}
                                 key={line}
-                                style={{ top: `${18 + (line - 1) * 21.45}px` }}
+                                style={{ top: `${editorLineTop(line)}px` }}
                                 type="button"
                                 title={tooltip || undefined}
                                 aria-label={`${tooltip || "Exibir alteração"}, linha ${fileLine}`}
@@ -6421,7 +6513,7 @@ export function App() {
                               <button
                                 className={`editor-line-ruler__line${currentDebugLine ? " is-debug-current" : ""}`}
                                 key={line}
-                                style={{ top: `${18 + (line - 1) * 21.45}px` }}
+                                style={{ top: `${editorLineTop(line)}px` }}
                                 type="button"
                                 aria-label={`${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${fileLine}`}
                                 onClick={() => { if (activeDocument?.path) toggleBreakpoint(activeDocument.path, fileLine); }}
@@ -6431,14 +6523,15 @@ export function App() {
                         </pre>
                       </div>
                     ) : null}
-                    {activeDocument && activeDocument.path === activeDebugPath && activeDebugLine ? (
+                    {activeDocument && activeDebugLine && activeDebugVisibleLine ? (
                       <div
                         ref={editorDebugCurrentLineRef}
                         className="editor-debug-current-line"
                         aria-hidden="true"
                         data-debug-line={activeDebugLine}
+                        data-debug-visible-line={activeDebugVisibleLine}
                         style={{
-                          "--debug-line-content-top": `${18 + (activeDebugLine - 1) * 21.45}px`,
+                          "--debug-line-content-top": `${editorLineTop(activeDebugVisibleLine)}px`,
                           "--editor-scroll-top": `${(highlightedEditorScrollRef.current ?? editorRef.current)?.scrollTop ?? activeDocument.scrollTop}px`,
                         } as React.CSSProperties}
                       />
@@ -6449,8 +6542,8 @@ export function App() {
                         className="highlight-editor"
                         onMouseMove={(event) => {
                           const bounds = event.currentTarget.getBoundingClientRect();
-                          const contentY = event.clientY - bounds.top + event.currentTarget.scrollTop - 18;
-                          const line = Math.floor(contentY / 21.45) + 1;
+                          const contentY = event.clientY - bounds.top + event.currentTarget.scrollTop - editorLayoutMetrics.contentPadding;
+                          const line = Math.floor(contentY / editorLayoutMetrics.lineHeight) + 1;
                           const nextLine = diagnostics.some((diagnostic) => diagnostic.line === line)
                             ? line
                             : undefined;
@@ -6468,6 +6561,7 @@ export function App() {
                       >
                         <div className="highlight-editor__content">
                           <pre
+                            ref={syntaxLayerRef}
                             className="syntax-layer"
                             data-syntax-provider={activeSyntaxHighlighter?.id}
                             data-syntax-origin={activeSyntaxHighlighter?.origin}
@@ -6569,7 +6663,7 @@ export function App() {
                             type="button"
                             title={folded ? "Expandir bloco" : "Recolher bloco"}
                             aria-label={folded ? `Expandir bloco, linha ${line}` : `Recolher bloco, linha ${line}`}
-                            style={{ "--fold-line-top": `${18 + (line - 1) * 21.45}px` } as React.CSSProperties}
+                            style={{ "--fold-line-top": `${editorLineTop(line)}px` } as React.CSSProperties}
                             onMouseDown={(event) => event.preventDefault()}
                             onMouseEnter={() => { if (folded) setFoldPreviewLine(line); else setFoldPreviewLine(undefined); }}
                             onFocus={() => { if (folded) setFoldPreviewLine(line); else setFoldPreviewLine(undefined); }}
@@ -6616,7 +6710,7 @@ export function App() {
                       <EditorLineDiffPeek
                         decoration={selectedEditorLineDecoration}
                         provider={activeSyntaxHighlighter}
-                        top={18 + (selectedEditorLineDecoration.line - 1) * 21.45 - activeDocument.scrollTop + 21.45}
+                        top={editorLineTop(selectedEditorLineDecoration.line) - activeDocument.scrollTop + editorLayoutMetrics.lineHeight}
                         onClose={() => setSelectedEditorLineDecoration(undefined)}
                         onAction={(action) => {
                           invoke(async () => {
@@ -6794,6 +6888,7 @@ export function App() {
                   const debugging = Boolean(tabDebugSession);
                   const debugEnded = Boolean(tabDebugSession && ["stopped", "completed", "failed"].includes(tabDebugSession.status));
                   const debugRestarting = debugRestartingProfileId === tab.profileId;
+                  const debugCommandBusy = Boolean(tabDebugSession && debugCommandPending?.sessionId === tabDebugSession.id);
                   const executionRunning = tab.execution?.status === "running";
                   const executionRestarting = restartingProfileId === tab.profileId;
                   const outputFollowing = profileOutputFollowing[tab.tabId] ?? true;
@@ -6814,24 +6909,24 @@ export function App() {
                                   className="icon-button small"
                                   type="button"
                                   aria-label={tabDebugSession.status === "paused" ? "Continuar depuração" : "Pausar depuração"}
-                                  disabled={debugRestarting || debugEnded || !["running", "paused"].includes(tabDebugSession.status)}
+                                  disabled={debugRestarting || debugCommandBusy || debugEnded || !["running", "paused"].includes(tabDebugSession.status)}
                                   onClick={() => invoke(() => debugCommand(tabDebugSession.status === "paused" ? "resume" : "pause"))}
                                 >{tabDebugSession.status === "paused" ? <Play size={14} /> : <Pause size={14} />}</button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Step over" side="top">
-                                <button className="icon-button small" type="button" aria-label="Step over" disabled={debugRestarting || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepOver"))}><StepForward size={14} /></button>
+                                <button className="icon-button small" type="button" aria-label="Step over" disabled={debugRestarting || debugCommandBusy || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepOver"))}><StepForward size={14} /></button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Step into" side="top">
-                                <button className="icon-button small" type="button" aria-label="Step into" disabled={debugRestarting || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepInto"))}><CornerDownRight size={14} /></button>
+                                <button className="icon-button small" type="button" aria-label="Step into" disabled={debugRestarting || debugCommandBusy || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepInto"))}><CornerDownRight size={14} /></button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Step out" side="top">
-                                <button className="icon-button small" type="button" aria-label="Step out" disabled={debugRestarting || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepOut"))}><CornerUpRight size={14} /></button>
+                                <button className="icon-button small" type="button" aria-label="Step out" disabled={debugRestarting || debugCommandBusy || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepOut"))}><CornerUpRight size={14} /></button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Reiniciar depuração" side="top">
-                                <button className="icon-button small" type="button" aria-label="Reiniciar depuração" disabled={debugRestarting} onClick={() => invoke(() => restartDebugSession(tab.profileId))}><RotateCw className={debugRestarting ? "is-spinning" : undefined} size={13} /></button>
+                                <button className="icon-button small" type="button" aria-label="Reiniciar depuração" disabled={debugRestarting || debugCommandBusy} onClick={() => invoke(() => restartDebugSession(tab.profileId))}><RotateCw className={debugRestarting ? "is-spinning" : undefined} size={13} /></button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Parar depuração" side="top">
-                                <button className="icon-button small danger" type="button" aria-label="Parar depuração" disabled={debugRestarting || debugEnded} onClick={() => invoke(() => debugCommand("stop"))}><Square size={13} /></button>
+                                <button className="icon-button small danger" type="button" aria-label="Parar depuração" disabled={debugRestarting || debugCommandBusy || debugEnded} onClick={() => invoke(() => debugCommand("stop"))}><Square size={13} /></button>
                               </ButtonTooltip>
                             </>
                           ) : tab.profile ? (

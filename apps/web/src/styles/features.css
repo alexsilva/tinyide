@@ -43,10 +43,10 @@
 .diagnostic-layer { pointer-events: none; z-index: 2; overflow: hidden; background: transparent; }
 .diagnostic-line {
   position: absolute;
-  top: calc(18px + (var(--diagnostic-line) - 1) * 21.45px);
+  top: calc(var(--editor-content-padding, 18px) + (var(--diagnostic-line) - 1) * var(--editor-line-height, 21.45px));
   left: 0;
   width: 100%;
-  height: 21.45px;
+  height: var(--editor-line-height, 21.45px);
   color: #e75b65;
   background: rgb(231 91 101 / 7%);
 }
@@ -388,7 +388,7 @@
 .editor-line-ruler { min-height: 0; overflow: hidden; border-right: 1px solid #303b4c; background: #171d27; color: #91a0b6; user-select: none; scrollbar-width: none; }
 .editor-line-ruler::-webkit-scrollbar { display: none; }
 .editor-line-ruler pre { position: relative; min-height: 100%; margin: 0; padding: 0; font: 13px/1.65 "JetBrains Mono", "Fira Code", Consolas, monospace; white-space: normal; }
-.editor-line-ruler__line { position: absolute; left: 0; display: grid; width: 100%; grid-template-columns: 9px 8px minmax(0, 1fr); align-items: center; height: 21.45px; border: 0; padding: 0 7px 0 3px; background: transparent; color: inherit; font: inherit; text-align: right; cursor: pointer; }
+.editor-line-ruler__line { position: absolute; left: 0; display: grid; width: 100%; grid-template-columns: 9px 8px minmax(0, 1fr); align-items: center; height: var(--editor-line-height, 21.45px); border: 0; padding: 0 7px 0 3px; background: transparent; color: inherit; font: inherit; text-align: right; cursor: pointer; }
 .editor-line-ruler__line:hover,
 .editor-line-ruler__line:focus-visible { outline: none; background: #222b39; color: #c9d5e8; }
 .editor-line-ruler__line b { grid-column: 3; overflow: hidden; font: inherit; font-weight: 400; text-overflow: clip; }
@@ -396,7 +396,7 @@
 .editor-line-ruler__execution-marker { display: block; grid-column: 2; justify-self: start; width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 7px solid transparent; }
 .editor-line-ruler__execution-marker.is-current { border-left-color: #f0c75e; filter: drop-shadow(0 0 2px rgb(240 199 94 / 45%)); }
 .editor-fold-overlay { position: absolute; z-index: 3; top: 0; bottom: 0; left: var(--editor-gutter-width); width: 20px; pointer-events: none; }
-.editor-fold-toggle { position: absolute; top: calc(var(--fold-line-top) - var(--editor-scroll-top, 0px)); left: 1px; display: flex; width: 14px; height: 21.45px; align-items: center; justify-content: center; border: 1px solid rgb(108 140 255 / 30%); border-radius: 3px; padding: 0; background: rgb(23 29 39 / 88%); color: #91a0b6; font: 12px/1 "JetBrains Mono", "Fira Code", Consolas, monospace; pointer-events: auto; cursor: pointer; }
+.editor-fold-toggle { position: absolute; top: calc(var(--fold-line-top) - var(--editor-scroll-top, 0px)); left: 1px; display: flex; width: 14px; height: var(--editor-line-height, 21.45px); align-items: center; justify-content: center; border: 1px solid rgb(108 140 255 / 30%); border-radius: 3px; padding: 0; background: rgb(23 29 39 / 88%); color: #91a0b6; font: 12px/1 "JetBrains Mono", "Fira Code", Consolas, monospace; pointer-events: auto; cursor: pointer; }
 .editor-fold-toggle:hover,
 .editor-fold-toggle:focus-visible { outline: none; border-color: #6c8cff; background: #222b39; color: #dbe4f5; }
 .editor-fold-toggle.is-folded { border-color: rgb(108 140 255 / 60%); color: #6c8cff; }
@@ -412,7 +412,7 @@
 .editor-line-ruler__line.has-warning .editor-line-ruler__marker { background: #d2a84a; }
 .editor-line-ruler__line.has-error .editor-line-ruler__marker { background: #e06c75; }
 .editor-line-ruler__marker.is-breakpoint { width: 8px; height: 8px; align-self: center; border-radius: 50%; background: #e05252; box-shadow: 0 0 0 1px #7f2020; }
-.editor-debug-current-line { position: absolute; z-index: 1; top: calc(var(--debug-line-content-top) - var(--editor-scroll-top, 0px)); right: 0; left: var(--editor-gutter-width); height: 21.45px; pointer-events: none; background: rgb(91 107 155 / 24%); border-top: 1px solid rgb(129 151 214 / 18%); border-bottom: 1px solid rgb(129 151 214 / 18%); }
+.editor-debug-current-line { position: absolute; z-index: 1; top: calc(var(--debug-line-content-top) - var(--editor-scroll-top, 0px)); right: 0; left: var(--editor-gutter-width); height: var(--editor-line-height, 21.45px); pointer-events: none; background: rgb(91 107 155 / 24%); border-top: 1px solid rgb(129 151 214 / 18%); border-bottom: 1px solid rgb(129 151 214 / 18%); }
 .execution-panel-view { display: flex; height: calc(100% - var(--execution-tab-height, 30px)); min-height: 0; flex-direction: column; }
 .execution-panel-view[hidden] { display: none; }
 .execution-panel-toolbar { display: flex; min-height: 32px; flex: 0 0 32px; align-items: center; justify-content: space-between; gap: 10px; padding: 2px 8px; border-bottom: 1px solid #252b36; background: #121720; }

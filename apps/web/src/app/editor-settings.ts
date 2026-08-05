@@ -8,6 +8,9 @@ export const DEFAULT_EDITOR_SETTINGS: ResolvedEditorSettings = {
   lineNumbers: true,
 };
 
+export const EDITOR_DEFAULT_LINE_HEIGHT = 21.45;
+export const EDITOR_CONTENT_PADDING = 18;
+
 export function resolveEditorSettings(settings: WorkspaceSettings): ResolvedEditorSettings {
   return {
     lineNumbers: settings.editor?.lineNumbers !== false,
@@ -53,9 +56,9 @@ export function editorVisibleLineRange(
   scrollTop: number,
   viewportHeight: number,
   overscan = 12,
+  lineHeight = EDITOR_DEFAULT_LINE_HEIGHT,
+  contentPadding = EDITOR_CONTENT_PADDING,
 ): EditorVisibleLineRange {
-  const lineHeight = 21.45;
-  const contentPadding = 18;
   const firstVisible = Math.floor(Math.max(0, scrollTop - contentPadding) / lineHeight) + 1;
   const lastVisible = Math.ceil(Math.max(0, scrollTop + viewportHeight - contentPadding) / lineHeight) + 1;
   return {

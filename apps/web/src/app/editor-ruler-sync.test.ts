@@ -14,8 +14,14 @@ describe("editor ruler scroll synchronization", () => {
   it("updates the debug-line background from the same scroll position as the ruler", () => {
     expect(appSource).toContain('editorDebugCurrentLineRef.current?.style.setProperty("--editor-scroll-top", `${scrollTop}px`)');
     expect(appSource).toContain('data-debug-line={activeDebugLine}');
+    expect(appSource).toContain('data-debug-visible-line={activeDebugVisibleLine}');
+    expect(appSource).toContain('const currentDebugLine = activeDebugVisibleLine === line');
     expect(featuresCss).toContain("top: calc(var(--debug-line-content-top) - var(--editor-scroll-top, 0px))");
     expect(appSource).not.toContain("(activeDebugLine - 1) * 21.45 - activeDocument.scrollTop");
+  });
+
+  it("keeps the debug execution marker visible independently of line-number settings", () => {
+    expect(appSource).toContain("|| activeDebugVisibleLine !== undefined");
   });
 
   it("uses the scroll position accepted by the browser after debug navigation", () => {

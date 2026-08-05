@@ -3,6 +3,7 @@ import type {
   PluginSettingValue,
   PluginSettingValues,
   PluginSettingsProvider,
+  PluginStringArraySettingDefinition,
 } from "@tinyide/plugin-api";
 
 export function resolvePluginBooleanSettingValue(
@@ -11,6 +12,20 @@ export function resolvePluginBooleanSettingValue(
 ): boolean {
   const value = configured?.[setting.id];
   return typeof value === "boolean" ? value : setting.defaultValue;
+}
+
+export function resolvePluginStringArraySettingValue(
+  setting: PluginStringArraySettingDefinition,
+  configured: PluginSettingValues | undefined,
+): readonly string[] {
+  const value = configured?.[setting.id];
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
+  }
+  if (typeof value === "string") {
+    return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+  }
+  return setting.defaultValue;
 }
 
 export function resolvePluginSettingValues(
@@ -29,6 +44,16 @@ export function resolvePluginSettingValues(
         && setting.options.some((option) => option.value === configuredValue)
         ? configuredValue
         : setting.defaultValue;
+      continue;
+    }
+    if (setting.type === "string") {
+      values[setting.id] = typeof configuredValue === "string"
+        ? configuredValue
+        : setting.defaultValue;
+      continue;
+    }
+    if (setting.type === "stringArray") {
+      values[setting.id] = resolvePluginStringArraySettingValue(setting, configured);
       continue;
     }
     const numericValue = typeof configuredValue === "number" && Number.isFinite(configuredValue)

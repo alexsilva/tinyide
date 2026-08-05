@@ -4,6 +4,8 @@
 
 O tinyIde é deliberadamente um editor de texto básico quando nenhum plugin está instalado. Recursos de IDE — linguagens, terminais, ambientes de execução, Git, depuração, testes, bancos de dados e integrações — devem ser fornecidos por plugins.
 
+Implementações mínimas distribuídas com a aplicação, como o suporte básico a HTML, pertencem à arquitetura de módulos. Elas não possuem estado de instalação ou habilitação e não devem ser tratadas como plugins oficiais especiais. Consulte [Arquitetura de módulos](modulos.md).
+
 A regra arquitetural central é:
 
 ```text

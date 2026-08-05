@@ -112,6 +112,7 @@ import type {
   TextEditorDocumentChangedEvent,
   TextEditorDocumentSnapshot,
   TextEditorDocumentSavedEvent,
+  TextEditorFoldingRange,
   TextEditorLineDecoration,
   TextEditorNavigationProvider,
   TextDiagnostic,
@@ -242,6 +243,7 @@ import {
   writeReactSnapshot,
   writeSession,
   type PersistedSidebarView,
+  type StoredDocumentFold,
 } from "./persistence";
 import { resolveSyntaxHighlighter, type SyntaxHighlighter } from "./generic-syntax";
 import {
@@ -321,6 +323,7 @@ import {
 import {
   resolvePluginBooleanSettingValue,
   resolvePluginSettingValues,
+  resolvePluginStringArraySettingValue,
   updatePluginSettingValue,
 } from "./plugin-settings";
 import { editorDocumentMetrics, editorVisibleLineRange, resolveEditorSettings } from "./editor-settings";
@@ -384,6 +387,172 @@ import { ButtonTooltip, PluginCardIcon, WorkbenchActivityIconView } from "./work
 import { WorkbenchActivityBar } from "./workbench/WorkbenchActivityBar";
 import { ProblemsPanel } from "./workbench/ProblemsPanel";
 import { useWorkbenchContributions } from "./workbench/useWorkbenchContributions";
+
+type FoldRange = TextEditorFoldingRange;
+
+interface DocumentFold extends StoredDocumentFold {}
+
+interface FoldPreviewState {
+  readonly line: number;
+  readonly text: string;
+  readonly lineCount: number;
+}
+
+interface FoldProjection {
+  readonly content: string;
+  readonly fileLineByVisibleLine: readonly number[];
+  readonly visibleLineByFileLine: readonly number[];
+  readonly hiddenLineByFileLine: readonly boolean[];
+  readonly foldIdByHeaderVisibleLine: ReadonlyMap<number, string>;
+  readonly foldIdByMarkerVisibleLine: ReadonlyMap<number, string>;
+  readonly hiddenTextByFoldId: ReadonlyMap<string, string>;
+}
+
+interface ActiveFoldRangeState {
+  readonly documentId: string;
+  readonly providerId: string;
+  readonly source: string;
+  readonly ranges: readonly FoldRange[];
+}
+
+function normalizeFoldRanges(
+  ranges: readonly TextEditorFoldingRange[],
+  lineCount: number,
+): readonly FoldRange[] {
+  const byKey = new Map<string, FoldRange>();
+  const maximumLine = Math.max(1, Math.trunc(lineCount));
+
+  for (const range of ranges) {
+    const startLine = Math.trunc(range.startLine);
+    const endLine = Math.min(maximumLine, Math.trunc(range.endLine));
+    if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) continue;
+    if (startLine < 1 || startLine >= maximumLine || endLine <= startLine) continue;
+    byKey.set(`${startLine}:${endLine}`, {
+      startLine,
+      endLine,
+      ...(range.kind === undefined ? {} : { kind: range.kind }),
+      ...(range.collapsedText === undefined ? {} : { collapsedText: range.collapsedText }),
+    });
+  }
+
+  return [...byKey.values()].sort((left, right) =>
+    left.startLine - right.startLine
+    || right.endLine - left.endLine
+  );
+}
+
+function foldMarker(id: string, hiddenLineCount: number): string {
+  return `⋯ ${hiddenLineCount} linha(s) ocultas ⟦fold:${id}⟧ ⋯`;
+}
+
+const FOLD_PREVIEW_MAX_HEIGHT = 520;
+const FOLD_PREVIEW_MIN_HEIGHT = 140;
+const FOLD_PREVIEW_MARGIN = 12;
+
+function collapseFolds(content: string, folds: readonly DocumentFold[]): FoldProjection {
+  const lines = content.split("\n");
+  const lineCount = lines.length;
+  const validFolds = folds
+    .map((fold) => ({
+      ...fold,
+      startLine: Math.trunc(fold.startLine),
+      endLine: Math.trunc(fold.endLine),
+    }))
+    .filter((fold) => (
+      fold.id
+      && Number.isFinite(fold.startLine)
+      && Number.isFinite(fold.endLine)
+      && fold.startLine >= 1
+      && fold.startLine < fold.endLine
+      && fold.endLine <= lineCount
+    ))
+    .sort((left, right) => left.startLine - right.startLine || right.endLine - left.endLine);
+
+  const output: string[] = [];
+  const fileLineByVisibleLine: number[] = [];
+  const visibleLineByFileLine = Array.from({ length: lineCount }, (_, index) => index + 1);
+  const hiddenLineByFileLine = Array.from({ length: lineCount }, () => false);
+  const foldIdByHeaderVisibleLine = new Map<number, string>();
+  const foldIdByMarkerVisibleLine = new Map<number, string>();
+  const hiddenTextByFoldId = new Map<string, string>();
+
+  let foldIndex = 0;
+  let fileLine = 1;
+  while (fileLine <= lineCount) {
+    while (foldIndex < validFolds.length && validFolds[foldIndex]!.startLine < fileLine) foldIndex += 1;
+    const fold = validFolds[foldIndex];
+    if (fold && fold.startLine === fileLine) {
+      const headerVisibleLine = output.length + 1;
+      output.push(lines[fileLine - 1] ?? "");
+      fileLineByVisibleLine[headerVisibleLine - 1] = fileLine;
+      visibleLineByFileLine[fileLine - 1] = headerVisibleLine;
+      foldIdByHeaderVisibleLine.set(headerVisibleLine, fold.id);
+
+      const hiddenText = lines.slice(fold.startLine, fold.endLine).join("\n");
+      const markerVisibleLine = output.length + 1;
+      const indent = (lines[fileLine - 1] ?? "").match(/^[ \t]*/)?.[0] ?? "";
+      output.push(`${indent}${foldMarker(fold.id, fold.endLine - fold.startLine)}`);
+      fileLineByVisibleLine[markerVisibleLine - 1] = fold.startLine + 1;
+      foldIdByMarkerVisibleLine.set(markerVisibleLine, fold.id);
+      hiddenTextByFoldId.set(fold.id, hiddenText);
+
+      for (let hiddenLine = fold.startLine + 1; hiddenLine <= fold.endLine; hiddenLine += 1) {
+        visibleLineByFileLine[hiddenLine - 1] = markerVisibleLine;
+        hiddenLineByFileLine[hiddenLine - 1] = true;
+      }
+
+      fileLine = fold.endLine + 1;
+      foldIndex += 1;
+      while (foldIndex < validFolds.length && validFolds[foldIndex]!.startLine <= fold.endLine) foldIndex += 1;
+      continue;
+    }
+
+    const visibleLine = output.length + 1;
+    output.push(lines[fileLine - 1] ?? "");
+    fileLineByVisibleLine[visibleLine - 1] = fileLine;
+    visibleLineByFileLine[fileLine - 1] = visibleLine;
+    fileLine += 1;
+  }
+
+  return {
+    content: output.join("\n"),
+    fileLineByVisibleLine,
+    visibleLineByFileLine,
+    hiddenLineByFileLine,
+    foldIdByHeaderVisibleLine,
+    foldIdByMarkerVisibleLine,
+    hiddenTextByFoldId,
+  };
+}
+
+function foldedDiagnostics(
+  diagnostics: readonly TextDiagnostic[],
+  projection: FoldProjection,
+): readonly TextDiagnostic[] {
+  const seen = new Set<string>();
+  const result: TextDiagnostic[] = [];
+  for (const diagnostic of diagnostics) {
+    const line = projection.visibleLineByFileLine[diagnostic.line - 1] ?? diagnostic.line;
+    const hidden = projection.hiddenLineByFileLine[diagnostic.line - 1] === true;
+    const endLine = diagnostic.endLine === undefined
+      ? undefined
+      : projection.visibleLineByFileLine[diagnostic.endLine - 1] ?? diagnostic.endLine;
+    const mapped: TextDiagnostic = {
+      severity: diagnostic.severity,
+      message: hidden ? `${diagnostic.message} (bloco dobrado)` : diagnostic.message,
+      line,
+      column: hidden ? 1 : diagnostic.column,
+      ...(diagnostic.code === undefined ? {} : { code: diagnostic.code }),
+      ...(endLine === undefined ? {} : { endLine }),
+      ...(hidden || diagnostic.endColumn === undefined ? {} : { endColumn: diagnostic.endColumn }),
+    };
+    const key = `${mapped.severity}:${mapped.line}:${mapped.column}:${mapped.message}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(mapped);
+  }
+  return result;
+}
 
 const PROFILE_KEY = "tinyide.react.executionProfiles.v1";
 const LINT_SETTINGS_KEY = "tinyide.react.lintSettings.v1";
@@ -589,6 +758,8 @@ export function App() {
   const [explorerRevealedHiddenPaths, setExplorerRevealedHiddenPaths] = useState<ReadonlySet<string>>(new Set());
   const [documents, setDocuments] = useState<readonly OpenDocument[]>([]);
   const [activeDocumentId, setActiveDocumentId] = useState<string | undefined>(initialSession.activeDocumentId);
+  const [draggingDocumentId, setDraggingDocumentId] = useState<string>();
+  const [dropTargetDocumentId, setDropTargetDocumentId] = useState<string>();
   const [output, setOutput] = useState<string[]>(["tinyIde React shell inicializado."]);
   const [diagnostics, setDiagnostics] = useState<readonly TextDiagnostic[]>([]);
   const [hoveredDiagnosticLine, setHoveredDiagnosticLine] = useState<number>();
@@ -640,6 +811,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSectionId, setSettingsSectionId] = useState("editor");
   const [pluginSettingsDraft, setPluginSettingsDraft] = useState<PluginSettingValues>({});
+  const [pluginStringArrayDrafts, setPluginStringArrayDrafts] = useState<Record<string, string>>({});
   const [watcherIgnoredDraft, setWatcherIgnoredDraft] = useState("");
   const [watcherDraftDirectories, setWatcherDraftDirectories] = useState<readonly string[]>([]);
   const [workbenchDialog, setWorkbenchDialog] = useState<ActiveWorkbenchDialog>();
@@ -709,6 +881,15 @@ export function App() {
   const [editorSearchRegex, setEditorSearchRegex] = useState(false);
   const [editorNavigationLoading, setEditorNavigationLoading] = useState(false);
   const [editorViewport, setEditorViewport] = useState({ scrollTop: 0, height: 800 });
+  /** Estado visual de blocos recolhidos. Não altera `document.content`. */
+  const [documentFolds, setDocumentFolds] = useState<ReadonlyMap<string, readonly DocumentFold[]>>(new Map());
+  const [activeFoldRangeState, setActiveFoldRangeState] = useState<ActiveFoldRangeState>();
+  const [hoveredFoldLine, setHoveredFoldLine] = useState<number | undefined>(undefined);
+  const [foldPreviewLine, setFoldPreviewLine] = useState<number | undefined>(undefined);
+  const documentFoldsRef = useRef<ReadonlyMap<string, readonly DocumentFold[]>>(documentFolds);
+  documentFoldsRef.current = documentFolds;
+  const foldIdCounterRef = useRef(0);
+  const editorFoldOverlayRef = useRef<HTMLDivElement>(null);
   const explorerFilterInputRef = useRef<HTMLInputElement>(null);
   const editorSearchInputRef = useRef<HTMLInputElement>(null);
   const editorSearchReplaceInputRef = useRef<HTMLInputElement>(null);
@@ -830,6 +1011,8 @@ export function App() {
   }), []);
 
   const activeDocument = documents.find((document) => document.id === activeDocumentId);
+  /** Conteúdo real do arquivo aberto. Fold é sempre estado visual derivado deste texto. */
+  const activeEditorContent = activeDocument?.kind === "text" ? activeDocument.content : "";
   const activeExternalDocumentNotice = activeDocument
     ? externalDocumentNotices.get(activeDocument.id)
     : undefined;
@@ -867,7 +1050,7 @@ export function App() {
     if (!editorSearchOpen || activeDocument?.kind !== "text" || activeResourceEditorProvider) return { matches: [] };
     try {
       return {
-        matches: findTextMatches(activeDocument.content, editorSearchQuery, {
+        matches: findTextMatches(activeEditorContent, editorSearchQuery, {
           caseSensitive: editorSearchCaseSensitive,
           regex: editorSearchRegex,
         }),
@@ -875,19 +1058,68 @@ export function App() {
     } catch {
       return { matches: [], error: "Expressão regular inválida" };
     }
-  }, [editorSearchOpen, editorSearchQuery, editorSearchCaseSensitive, editorSearchRegex, activeDocument?.id, activeDocument?.kind, activeDocument?.content, activeResourceEditorProvider]);
+  }, [editorSearchOpen, editorSearchQuery, editorSearchCaseSensitive, editorSearchRegex, activeDocument?.id, activeDocument?.kind, activeEditorContent, activeResourceEditorProvider]);
   const editorSearchMatches = editorSearchResult.matches;
   const editorSearchError = "error" in editorSearchResult ? editorSearchResult.error : undefined;
   const activeEditorSearchMatch = editorSearchMatches[editorSearchMatchIndex];
   const activeSyntaxHighlighter = useMemo(() => {
     if (activeResourceEditorProvider || !activeDocument || activeDocument.kind !== "text") return undefined;
-    if (activeDocument.content.length > MAX_SYNTAX_HIGHLIGHT_SOURCE_LENGTH) return undefined;
+    if (activeEditorContent.length > MAX_SYNTAX_HIGHLIGHT_SOURCE_LENGTH) return undefined;
     return resolveSyntaxHighlighter({
       fileName: activeDocument.name,
       mediaType: activeDocument.mediaType,
-      source: activeDocument.content,
+      source: activeEditorContent,
     }, platform.capabilities.getAll<LanguageProvider>("language.provider"));
-  }, [activeResourceEditorProvider, activeDocument?.id, activeDocument?.name, activeDocument?.mediaType, activeDocument?.content, platformSnapshot.plugins]);
+  }, [activeResourceEditorProvider, activeDocument?.id, activeDocument?.name, activeDocument?.mediaType, activeEditorContent, platformSnapshot.plugins]);
+
+  useEffect(() => {
+    const provider = activeLanguageProvider;
+    if (
+      activeResourceEditorProvider
+      || !activeDocument
+      || activeDocument.kind !== "text"
+      || !provider?.provideFoldingRanges
+    ) {
+      setActiveFoldRangeState(undefined);
+      return;
+    }
+
+    let cancelled = false;
+    const source = activeEditorContent;
+    const lineCount = source.split("\n").length;
+    const document = editorToolbarDocumentSnapshot(activeDocument);
+
+    void Promise.resolve(provider.provideFoldingRanges({ document, source }))
+      .then((ranges: readonly TextEditorFoldingRange[]) => {
+        if (cancelled) return;
+        setActiveFoldRangeState({
+          documentId: activeDocument.id,
+          providerId: provider.id,
+          source,
+          ranges: normalizeFoldRanges(ranges, lineCount),
+        });
+      })
+      .catch((cause) => {
+        if (cancelled) return;
+        setActiveFoldRangeState(undefined);
+        setError(cause instanceof Error ? cause.message : String(cause));
+      });
+
+    return () => { cancelled = true; };
+  }, [
+    activeResourceEditorProvider,
+    activeDocument?.id,
+    activeDocument?.kind,
+    activeDocument?.name,
+    activeDocument?.path,
+    activeDocument?.workspaceRoot,
+    activeDocument?.mediaType,
+    activeDocument?.content,
+    activeDocument?.savedContent,
+    activeEditorContent,
+    activeLanguageProvider,
+  ]);
+
   const {
     sidebars: workbenchSidebars,
     panels: workbenchPanels,
@@ -1098,11 +1330,18 @@ export function App() {
     return () => { cancelled = true; };
   }, [fileCreationTargetPath, resolveWorkspaceFileCreationOptions]);
   const editorSettings = resolveEditorSettings(workspaceSettings);
+  const activeDocumentFolds = activeDocument ? (documentFolds.get(activeDocument.id) ?? []) : [];
+  const activeFoldProjection = useMemo<FoldProjection | undefined>(() => (
+    activeDocument?.kind === "text" && activeDocumentFolds.length
+      ? collapseFolds(activeEditorContent, activeDocumentFolds)
+      : undefined
+  ), [activeDocument?.id, activeDocument?.kind, activeEditorContent, activeDocumentFolds]);
+  const activeEditorDisplayContent = activeFoldProjection?.content ?? activeEditorContent;
   const editorMetrics = useMemo(
     () => activeDocument?.kind === "text"
-      ? editorDocumentMetrics(activeDocument.content)
+      ? editorDocumentMetrics(activeEditorDisplayContent)
       : { lineCount: 1, lineNumberWidth: 2, gutterWidth: 52 },
-    [activeDocument?.id, activeDocument?.kind, activeDocument?.content],
+    [activeDocument?.id, activeDocument?.kind, activeEditorDisplayContent],
   );
   const editorRulerRange = editorVisibleLineRange(
     editorMetrics.lineCount,
@@ -1113,16 +1352,133 @@ export function App() {
     { length: Math.max(0, editorRulerRange.end - editorRulerRange.start + 1) },
     (_, index) => editorRulerRange.start + index,
   ), [editorRulerRange.start, editorRulerRange.end]);
+  /**
+   * Linha real do arquivo para cada linha visível (índice 0 = linha 1). Com blocos dobrados a régua
+   * continua mostrando a numeração do arquivo, e breakpoints/depuração seguem usando o arquivo real.
+   */
+  const fileLineByVisibleLine = activeFoldProjection?.fileLineByVisibleLine;
+  const fileLineOf = (visibleLine: number) => fileLineByVisibleLine?.[visibleLine - 1] ?? visibleLine;
   const editorDecorationsByLine = useMemo(() => {
     const grouped = new Map<number, TextEditorLineDecoration[]>();
+    const visibleLines = activeFoldProjection?.visibleLineByFileLine;
     for (const decoration of editorLineDecorations) {
       if (!Number.isInteger(decoration.line) || decoration.line < 1) continue;
-      const items = grouped.get(decoration.line) ?? [];
-      items.push(decoration);
-      grouped.set(decoration.line, items);
+      const line = visibleLines?.[decoration.line - 1] ?? decoration.line;
+      const items = grouped.get(line) ?? [];
+      items.push(line === decoration.line ? decoration : { ...decoration, line });
+      grouped.set(line, items);
     }
     return grouped;
-  }, [editorLineDecorations]);
+  }, [editorLineDecorations, activeFoldProjection]);
+  const activeFoldRanges: readonly FoldRange[] = activeFoldRangeState
+    && activeFoldRangeState.documentId === activeDocument?.id
+    && activeFoldRangeState.providerId === activeLanguageProvider?.id
+    && activeFoldRangeState.source === activeEditorContent
+    ? activeFoldRangeState.ranges
+    : [];
+  const foldRangeByStartLine = useMemo(() => {
+    if (activeDocument?.kind !== "text") return new Map<number, FoldRange>();
+    return new Map(activeFoldRanges.map((range) => [range.startLine, range]));
+  }, [activeDocument?.kind, activeFoldRanges]);
+  const foldedHeaderLines = activeFoldProjection?.foldIdByHeaderVisibleLine ?? new Map<number, string>();
+  const foldPreview = useMemo<FoldPreviewState | undefined>(() => {
+    if (activeDocument?.kind !== "text" || foldPreviewLine === undefined) return undefined;
+    const foldedId = foldedHeaderLines.get(foldPreviewLine);
+    if (!foldedId) return undefined;
+    const hiddenText = activeFoldProjection?.hiddenTextByFoldId.get(foldedId);
+    return hiddenText !== undefined
+      ? { line: foldPreviewLine, text: hiddenText, lineCount: hiddenText.split("\n").length }
+      : undefined;
+  }, [activeDocument?.kind, activeFoldProjection, foldedHeaderLines, foldPreviewLine]);
+  const foldPreviewRawTop = foldPreview
+    ? 18 + (foldPreview.line - 1) * 21.45 - editorViewport.scrollTop + 22
+    : FOLD_PREVIEW_MARGIN;
+  const foldPreviewTop = foldPreview
+    ? Math.min(
+        Math.max(FOLD_PREVIEW_MARGIN, foldPreviewRawTop),
+        Math.max(FOLD_PREVIEW_MARGIN, editorViewport.height - FOLD_PREVIEW_MAX_HEIGHT - FOLD_PREVIEW_MARGIN),
+      )
+    : FOLD_PREVIEW_MARGIN;
+  const foldPreviewMaxHeight = foldPreview
+    ? Math.max(
+        FOLD_PREVIEW_MIN_HEIGHT,
+        Math.min(FOLD_PREVIEW_MAX_HEIGHT, editorViewport.height - foldPreviewTop - FOLD_PREVIEW_MARGIN),
+      )
+    : FOLD_PREVIEW_MAX_HEIGHT;
+  /** Floating fold controls: every folded header stays visible, the hovered header appears on demand. */
+  const foldControlLines = useMemo(() => {
+    if (activeDocument?.kind !== "text" || activeDocument.readOnly) return [] as { line: number; folded: boolean }[];
+    const controls: { line: number; folded: boolean }[] = [];
+    for (const line of foldedHeaderLines.keys()) {
+      if (line >= editorRulerRange.start && line <= editorRulerRange.end) controls.push({ line, folded: true });
+    }
+    const hoveredFileLine = hoveredFoldLine === undefined ? undefined : fileLineOf(hoveredFoldLine);
+    if (
+      hoveredFoldLine !== undefined
+      && hoveredFileLine !== undefined
+      && !foldedHeaderLines.has(hoveredFoldLine)
+      && foldRangeByStartLine.has(hoveredFileLine)
+    ) controls.push({ line: hoveredFoldLine, folded: false });
+    return controls;
+  }, [
+    activeDocument?.kind,
+    activeDocument?.readOnly,
+    foldedHeaderLines,
+    foldRangeByStartLine,
+    hoveredFoldLine,
+    fileLineByVisibleLine,
+    editorRulerRange.start,
+    editorRulerRange.end,
+  ]);
+  const trackFoldHover = (event: React.MouseEvent<HTMLElement>) => {
+    if (activeDocument?.kind !== "text" || activeDocument.readOnly) return;
+    if (event.target instanceof Element && event.target.closest(".editor-fold-preview")) return;
+    const scroller = highlightedEditorScrollRef.current ?? editorRef.current;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const contentY = event.clientY - bounds.top + (scroller?.scrollTop ?? 0) - 18;
+    const line = Math.floor(contentY / 21.45) + 1;
+    const fileLine = fileLineOf(line);
+    const next = foldRangeByStartLine.has(fileLine) || foldedHeaderLines.has(line) ? line : undefined;
+    setHoveredFoldLine((current) => current === next ? current : next);
+  };
+  const toggleFold = (line: number) => {
+    if (!activeDocument || activeDocument.kind !== "text" || activeDocument.readOnly) return;
+    const documentId = activeDocument.id;
+    const existingFoldId = foldedHeaderLines.get(line);
+    if (existingFoldId) {
+      const nextFolds = new Map(documentFoldsRef.current);
+      nextFolds.set(documentId, (nextFolds.get(documentId) ?? []).filter((fold) => fold.id !== existingFoldId));
+      if (!nextFolds.get(documentId)?.length) nextFolds.delete(documentId);
+      documentFoldsRef.current = nextFolds;
+      setDocumentFolds(nextFolds);
+      setFoldPreviewLine(undefined);
+      return;
+    }
+    const fileLine = fileLineOf(line);
+    const range = foldRangeByStartLine.get(fileLine);
+    if (!range) return;
+    const lines = activeEditorContent.split("\n");
+    const hiddenText = lines.slice(range.startLine, range.endLine).join("\n");
+    foldIdCounterRef.current += 1;
+    const id = `f${foldIdCounterRef.current}`;
+    const nextFolds = new Map(documentFoldsRef.current);
+    nextFolds.set(documentId, [...(nextFolds.get(documentId) ?? []), {
+      id,
+      startLine: range.startLine,
+      endLine: range.endLine,
+      hiddenText,
+    }]);
+    documentFoldsRef.current = nextFolds;
+    setDocumentFolds(nextFolds);
+  };
+  const clearDocumentFolds = (documentId: string) => {
+    if (documentFoldsRef.current.has(documentId)) {
+      const next = new Map(documentFoldsRef.current);
+      next.delete(documentId);
+      documentFoldsRef.current = next;
+      setDocumentFolds(next);
+    }
+  };
   const showEditorGutter = activeDocument?.kind === "text"
     && !activeResourceEditorProvider
     && (editorSettings.lineNumbers || editorLineDecorations.length > 0 || debugBreakpoints.some((breakpoint) => breakpoint.path === activeDocument.path));
@@ -1217,6 +1573,8 @@ export function App() {
       const nextDocuments = documentsRef.current.map((document) => document.id === request.documentId ? changedDocument : document);
       documentsRef.current = nextDocuments;
       setDocuments(nextDocuments);
+      /** O conteúdo veio de fora do editor: as dobras registradas não valem mais para este texto. */
+      clearDocumentFolds(request.documentId);
       setDiagnostics([]);
       await platform.events.emit<TextEditorDocumentChangedEvent>(TEXT_EDITOR_DOCUMENT_CHANGED_EVENT, {
         document: {
@@ -1550,9 +1908,12 @@ export function App() {
 
     let cancelled = false;
     const timer = window.setTimeout(() => {
+      /** O lint analisa o conteúdo real; os diagnósticos voltam para as coordenadas visíveis. */
+      const projection = activeFoldProjection;
       void lintDocument(activeDocument, { enabledRuleIds: lintEnabledRuleIds })
         .then((items) => {
-          if (!cancelled) setDiagnostics(items);
+          if (cancelled) return;
+          setDiagnostics(projection ? foldedDiagnostics(items, projection) : items);
         })
         .catch((cause) => {
           if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
@@ -1563,7 +1924,7 @@ export function App() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [activeDocument?.id, activeDocument?.content, activeLanguageProvider, lintEnabledRuleIds]);
+  }, [activeDocument?.id, activeDocument?.content, activeLanguageProvider, lintEnabledRuleIds, activeFoldProjection]);
 
   useEffect(() => {
     return platform.subscribe(() => setPlatformSnapshot(platform.snapshot()));
@@ -1719,6 +2080,22 @@ export function App() {
           setEntries([]);
         }
         setDocuments(restoredDocuments);
+        if (snapshot) {
+          const restoredDocumentIds = new Set(restoredDocuments.map((document) => document.id));
+          const restoredFolds = new Map<string, readonly DocumentFold[]>();
+          for (const document of snapshot.documents) {
+            if (!restoredDocumentIds.has(document.id)) continue;
+            const folds = document.folds?.filter((fold): fold is DocumentFold => (
+              Number.isInteger(fold.startLine)
+              && Number.isInteger(fold.endLine)
+              && fold.startLine >= 1
+              && fold.endLine > fold.startLine
+            ));
+            if (folds?.length) restoredFolds.set(document.id, folds);
+          }
+          documentFoldsRef.current = restoredFolds;
+          setDocumentFolds(restoredFolds);
+        }
         if (snapshot) {
           setDiagnostics(snapshot.diagnostics);
           setOutput([...snapshot.output]);
@@ -1964,6 +2341,7 @@ export function App() {
         ...(workspaceHandle && !isDesktopWorkspaceHandle(workspaceHandle) ? { workspaceHandle } : {}),
         workspaceEntries: entries,
         documents,
+        documentFolds,
         diagnostics,
         output,
       });
@@ -1971,7 +2349,7 @@ export function App() {
     return () => {
       if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
     };
-  }, [workspaceName, workspaceRoot, workspaceHandle, entries, documents, diagnostics, output]);
+  }, [workspaceName, workspaceRoot, workspaceHandle, entries, documents, documentFolds, diagnostics, output]);
 
   useEffect(() => {
     if (!platformSnapshot.initialized || !restorationComplete) return;
@@ -2289,7 +2667,7 @@ export function App() {
     setDocuments((current) => current.map((document) => document.id === activeDocument.id
       ? { ...document, selectionStart: match.start, selectionEnd: match.end }
       : document));
-    scrollEditorToLine(textPositionAtOffset(activeDocument.content, match.start).line);
+    scrollEditorToLine(textPositionAtOffset(activeEditorContent, match.start).line);
     window.requestAnimationFrame(() => {
       editorRef.current?.setSelectionRange(match.start, match.end);
       editorSearchInputRef.current?.focus({ preventScroll: true });
@@ -2797,6 +3175,7 @@ export function App() {
     const content = textarea.value;
     const selectionStart = textarea.selectionStart;
     const selectionEnd = textarea.selectionEnd;
+    if (documentFoldsRef.current.has(activeDocumentId)) clearDocumentFolds(activeDocumentId);
     setDocuments((current) => current.map((document) => {
       if (document.id !== activeDocumentId) return document;
       const history = editorHistoriesRef.current.get(document.id)
@@ -2845,14 +3224,14 @@ export function App() {
 
   const replaceCurrentEditorSearchMatch = () => {
     if (!activeDocument || activeDocument.kind !== "text" || !activeEditorSearchMatch) return;
-    const nextContent = replaceTextMatch(activeDocument.content, activeEditorSearchMatch, editorSearchReplacement);
+    const nextContent = replaceTextMatch(activeEditorContent, activeEditorSearchMatch, editorSearchReplacement);
     const selectionStart = activeEditorSearchMatch.start;
     applyEditorSearchReplacement(nextContent, selectionStart, selectionStart + editorSearchReplacement.length);
   };
 
   const replaceAllEditorSearchMatches = () => {
     if (!activeDocument || activeDocument.kind !== "text" || !editorSearchMatches.length) return;
-    const nextContent = replaceTextMatches(activeDocument.content, editorSearchMatches, editorSearchReplacement);
+    const nextContent = replaceTextMatches(activeEditorContent, editorSearchMatches, editorSearchReplacement);
     applyEditorSearchReplacement(nextContent, 0, 0);
   };
 
@@ -2876,10 +3255,11 @@ export function App() {
     if (!navigation.snapshot) return;
 
     const { snapshot } = navigation;
+    const content = snapshot.content;
     setDocuments((current) => current.map((candidate) => candidate.id === document.id
       ? {
           ...candidate,
-          content: snapshot.content,
+          content,
           selectionStart: snapshot.selectionStart,
           selectionEnd: snapshot.selectionEnd,
         }
@@ -2890,11 +3270,11 @@ export function App() {
         name: document.name,
         ...(document.path ? { path: document.path } : {}),
         ...(document.workspaceRoot ? { workspaceRoot: document.workspaceRoot } : {}),
-        content: snapshot.content,
+        content,
       },
       previousContent: document.content,
       reason: direction,
-      isDirty: snapshot.content !== document.savedContent,
+      isDirty: content !== document.savedContent,
     };
     void platform.events.emit(TEXT_EDITOR_DOCUMENT_CHANGED_EVENT, changedEvent);
     setDiagnostics([]);
@@ -2969,6 +3349,7 @@ export function App() {
 
   const syncEditorLineRuler = (scrollTop: number) => {
     editorDebugCurrentLineRef.current?.style.setProperty("--editor-scroll-top", `${scrollTop}px`);
+    editorFoldOverlayRef.current?.style.setProperty("--editor-scroll-top", `${scrollTop}px`);
     if (!editorLineRulerRef.current) return;
     const rulerViewport = editorLineRulerRef.current.parentElement;
     if (!rulerViewport) return;
@@ -3061,6 +3442,7 @@ export function App() {
     documentsRef.current = nextDocuments;
     setDocuments(nextDocuments);
     editorHistoriesRef.current.delete(documentId);
+    clearDocumentFolds(documentId);
     dismissExternalDocumentNotice(documentId);
   };
 
@@ -3180,6 +3562,13 @@ export function App() {
       });
       documentsRef.current = reconciliation.documents;
       setDocuments(reconciliation.documents);
+      /** Arquivos alterados/removidos fora da IDE invalidam as dobras registradas para eles. */
+      for (const id of reconciliation.removedIds) clearDocumentFolds(id);
+      for (const { from } of reconciliation.remappedIds) clearDocumentFolds(from);
+      for (const document of reconciliation.documents) {
+        const previous = sourceDocuments.find((candidate) => candidate.id === document.id);
+        if (previous && previous.content !== document.content) clearDocumentFolds(document.id);
+      }
       setExternalDocumentNotices((current) => {
         const next = new Map(current);
         for (const id of reconciliation.removedIds) next.delete(id);
@@ -4066,10 +4455,26 @@ export function App() {
     if (index < 0) return;
     const next = documents.filter((document) => document.id !== documentId);
     editorHistoriesRef.current.delete(documentId);
+    clearDocumentFolds(documentId);
     setDocuments(next);
     if (activeDocumentId === documentId) {
       setActiveDocumentId(next[index]?.id ?? next[index - 1]?.id);
     }
+  };
+
+  const reorderDocuments = (sourceId: string, targetId: string) => {
+    if (sourceId === targetId) return;
+    setDocuments((current) => {
+      const from = current.findIndex((document) => document.id === sourceId);
+      if (from < 0) return current;
+      const to = current.findIndex((document) => document.id === targetId);
+      if (to < 0) return current;
+      const moving = current[from];
+      if (!moving) return current;
+      const rest = current.filter((document) => document.id !== sourceId);
+      const next = [...rest.slice(0, to), moving, ...rest.slice(to)];
+      return next;
+    });
   };
 
   const executeContextMenuItem = async (item: ResourceContextMenuItem, target: ContextMenuTarget) => {
@@ -4844,6 +5249,26 @@ export function App() {
 
   const removeWatcherDraftDirectory = (name: string) => {
     setWatcherDraftDirectories((current) => current.filter((entry) => entry !== name));
+  };
+
+  const addPluginStringArraySetting = (settingId: string) => {
+    if (!activePluginSettingsProvider) return;
+    const setting = activePluginSettingsProvider.settings.find((candidate) => candidate.id === settingId);
+    if (!setting || setting.type !== "stringArray") return;
+    const draft = (pluginStringArrayDrafts[settingId] ?? "").trim();
+    if (!draft) return;
+    const current = resolvePluginStringArraySettingValue(setting, pluginSettingsDraft);
+    const next = current.includes(draft) ? [...current] : [...current, draft];
+    setPluginStringArrayDrafts((drafts) => ({ ...drafts, [settingId]: "" }));
+    void applyPluginSetting(settingId, next);
+  };
+
+  const removePluginStringArraySetting = (settingId: string, entry: string) => {
+    if (!activePluginSettingsProvider) return;
+    const setting = activePluginSettingsProvider.settings.find((candidate) => candidate.id === settingId);
+    if (!setting || setting.type !== "stringArray") return;
+    const current = resolvePluginStringArraySettingValue(setting, pluginSettingsDraft);
+    void applyPluginSetting(settingId, current.filter((candidate) => candidate !== entry));
   };
 
   const commitWatcherDraftDirectories = async () => {
@@ -5657,13 +6082,42 @@ export function App() {
                   <Tabs.List className="tabs-list">
                     {documents.map((document) => (
                       <Tabs.Trigger
-                        className="tab-trigger"
+                        className={`tab-trigger${draggingDocumentId === document.id ? " is-dragging" : ""}${dropTargetDocumentId === document.id ? " is-drop-target" : ""}`}
                         key={document.id}
                         value={document.id}
                         title={document.origin
                           ?? workspaceAbsolutePath(document.workspaceRoot ?? workspaceRoot, document.path)
                           ?? document.path
                           ?? document.name}
+                        draggable
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = "move";
+                          event.dataTransfer.setData("application/x-tinyide-document-id", document.id);
+                          setDraggingDocumentId(document.id);
+                        }}
+                        onDragEnd={() => {
+                          setDraggingDocumentId(undefined);
+                          setDropTargetDocumentId(undefined);
+                        }}
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          event.dataTransfer.dropEffect = "move";
+                          setDropTargetDocumentId(document.id);
+                        }}
+                        onDragLeave={(event) => {
+                          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                            setDropTargetDocumentId((current) => current === document.id ? undefined : current);
+                          }
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          const encodedId = event.dataTransfer.getData("application/x-tinyide-document-id");
+                          setDropTargetDocumentId(undefined);
+                          if (!encodedId) return;
+                          reorderDocuments(encodedId, document.id);
+                        }}
                         onContextMenu={(event) => {
                           event.preventDefault();
                           invoke(() => openDocumentMenu(document, event.clientX, event.clientY));
@@ -5924,6 +6378,8 @@ export function App() {
                     className={`editor-canvas${showEditorGutter ? " has-editor-gutter" : ""}${editorSettings.lineNumbers ? " has-line-numbers" : ""}${editorNavigationLoading ? " is-symbol-navigation-loading" : ""}`}
                     aria-busy={editorNavigationLoading}
                     style={{ "--editor-gutter-width": `${editorMetrics.gutterWidth}px` } as React.CSSProperties}
+                    onMouseMove={trackFoldHover}
+                    onMouseLeave={() => { setHoveredFoldLine(undefined); setFoldPreviewLine(undefined); }}
                   >
                     {showEditorGutter ? (
                       <div className={`editor-line-ruler${editorSettings.lineNumbers ? "" : " decorations-only"}`}>
@@ -5932,10 +6388,11 @@ export function App() {
                           style={{ height: `${36 + editorMetrics.lineCount * 21.45}px` }}
                         >
                           {visibleEditorRulerLines.map((line) => {
+                            const fileLine = fileLineOf(line);
                             const breakpoint = activeDocument?.path
-                              ? debugBreakpoints.find((candidate) => candidate.path === activeDocument.path && candidate.line === line)
+                              ? debugBreakpoints.find((candidate) => candidate.path === activeDocument.path && candidate.line === fileLine)
                               : undefined;
-                            const currentDebugLine = activeDocument?.path === activeDebugPath && activeDebugLine === line;
+                            const currentDebugLine = activeDocument?.path === activeDebugPath && activeDebugLine === fileLine;
                             const decorations = editorDecorationsByLine.get(line) ?? [];
                             const changeDecoration = decorations.find((decoration) => decoration.change);
                             const tooltip = decorations
@@ -5945,7 +6402,7 @@ export function App() {
                             const content = <>
                               <i className={`editor-line-ruler__marker${breakpoint ? " is-breakpoint" : ""}`} />
                               <i className={`editor-line-ruler__execution-marker${currentDebugLine ? " is-current" : ""}`} />
-                              {editorSettings.lineNumbers ? <b>{String(line).padStart(editorMetrics.lineNumberWidth, "0")}</b> : null}
+                              {editorSettings.lineNumbers ? <b>{String(fileLine).padStart(editorMetrics.lineNumberWidth, "0")}</b> : null}
                             </>;
                             return changeDecoration ? (
                               <button
@@ -5954,9 +6411,9 @@ export function App() {
                                 style={{ top: `${18 + (line - 1) * 21.45}px` }}
                                 type="button"
                                 title={tooltip || undefined}
-                                aria-label={`${tooltip || "Exibir alteração"}, linha ${line}`}
+                                aria-label={`${tooltip || "Exibir alteração"}, linha ${fileLine}`}
                                 onClick={() => setSelectedEditorLineDecoration((current) => current === changeDecoration ? undefined : changeDecoration)}
-                                onDoubleClick={() => { if (activeDocument?.path) toggleBreakpoint(activeDocument.path, line); }}
+                                onDoubleClick={() => { if (activeDocument?.path) toggleBreakpoint(activeDocument.path, fileLine); }}
                               >
                                 {content}
                               </button>
@@ -5966,8 +6423,8 @@ export function App() {
                                 key={line}
                                 style={{ top: `${18 + (line - 1) * 21.45}px` }}
                                 type="button"
-                                aria-label={`${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${line}`}
-                                onClick={() => { if (activeDocument?.path) toggleBreakpoint(activeDocument.path, line); }}
+                                aria-label={`${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${fileLine}`}
+                                onClick={() => { if (activeDocument?.path) toggleBreakpoint(activeDocument.path, fileLine); }}
                               >{content}</button>
                             );
                           })}
@@ -5986,7 +6443,7 @@ export function App() {
                         } as React.CSSProperties}
                       />
                     ) : null}
-                    {(activeSyntaxHighlighter || activeEditorSearchMatch) && activeDocument ? (
+                    {(activeSyntaxHighlighter || activeEditorSearchMatch || activeFoldProjection) && activeDocument ? (
                       <div
                         ref={highlightedEditorScrollRef}
                         className="highlight-editor"
@@ -6016,14 +6473,14 @@ export function App() {
                             data-syntax-origin={activeSyntaxHighlighter?.origin}
                           >
                             <HighlightedSource
-                              source={activeDocument.content}
+                              source={activeEditorDisplayContent}
                               {...(activeSyntaxHighlighter ? { provider: activeSyntaxHighlighter } : {})}
-                              {...(activeEditorSearchMatch ? { highlight: activeEditorSearchMatch } : {})}
+                              {...(activeEditorSearchMatch && !activeFoldProjection ? { highlight: activeEditorSearchMatch } : {})}
                             />
                           </pre>
                           <DiagnosticLayer
                             diagnostics={diagnostics}
-                            source={activeDocument.content}
+                            source={activeEditorDisplayContent}
                             hoveredLine={hoveredDiagnosticLine}
                           />
                           <textarea
@@ -6031,7 +6488,7 @@ export function App() {
                             className="code-editor code-editor--highlighted"
                             spellCheck={false}
                             wrap="off"
-                            value={activeDocument.content}
+                            value={activeEditorContent}
                             readOnly={activeDocument.readOnly}
                             onChange={(event) => updateDocument(event.currentTarget)}
                             onKeyDown={handleEditorKeyDown}
@@ -6064,7 +6521,7 @@ export function App() {
                         ref={editorRef}
                         className="code-editor"
                         spellCheck={false}
-                        value={activeDocument?.content ?? ""}
+                        value={activeEditorContent}
                         readOnly={activeDocument?.readOnly}
                         onChange={(event) => updateDocument(event.currentTarget)}
                         onKeyDown={handleEditorKeyDown}
@@ -6099,6 +6556,62 @@ export function App() {
                         }}
                       />
                     )}
+                    {foldControlLines.length ? (
+                      <div
+                        ref={editorFoldOverlayRef}
+                        className="editor-fold-overlay"
+                        style={{ "--editor-scroll-top": `${editorViewport.scrollTop}px` } as React.CSSProperties}
+                      >
+                        {foldControlLines.map(({ line, folded }) => (
+                          <button
+                            key={line}
+                            className={`editor-fold-toggle${folded ? " is-folded" : ""}`}
+                            type="button"
+                            title={folded ? "Expandir bloco" : "Recolher bloco"}
+                            aria-label={folded ? `Expandir bloco, linha ${line}` : `Recolher bloco, linha ${line}`}
+                            style={{ "--fold-line-top": `${18 + (line - 1) * 21.45}px` } as React.CSSProperties}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onMouseEnter={() => { if (folded) setFoldPreviewLine(line); else setFoldPreviewLine(undefined); }}
+                            onFocus={() => { if (folded) setFoldPreviewLine(line); else setFoldPreviewLine(undefined); }}
+                            onMouseLeave={(event) => {
+                              if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".editor-fold-preview")) return;
+                              setFoldPreviewLine(undefined);
+                            }}
+                            onBlur={(event) => {
+                              if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".editor-fold-preview")) return;
+                              setFoldPreviewLine(undefined);
+                            }}
+                            onClick={() => toggleFold(line)}
+                          >{folded ? "+" : "-"}</button>
+                        ))}
+                      </div>
+                    ) : null}
+                    {foldPreview ? (
+                      <div
+                        className="editor-fold-preview"
+                        style={{
+                          "--fold-preview-top": `${foldPreviewTop}px`,
+                          "--fold-preview-max-height": `${foldPreviewMaxHeight}px`,
+                        } as React.CSSProperties}
+                        role="tooltip"
+                        onMouseMove={(event) => event.stopPropagation()}
+                        onMouseLeave={() => setFoldPreviewLine(undefined)}
+                        onBlur={(event) => {
+                          if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".editor-fold-toggle.is-folded")) return;
+                          setFoldPreviewLine(undefined);
+                        }}
+                        onWheel={(event) => event.stopPropagation()}
+                      >
+                        <div className="editor-fold-preview__title">
+                          <span>Trecho recolhido</span>
+                          <span>{foldPreview.lineCount} linha(s)</span>
+                        </div>
+                        <pre tabIndex={0} aria-label="Conteúdo completo do trecho recolhido">{foldPreview.text}</pre>
+                        {foldPreview.lineCount > 12 ? (
+                          <div className="editor-fold-preview__footer">Role para visualizar o trecho completo.</div>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {selectedEditorLineDecoration?.change && activeDocument ? (
                       <EditorLineDiffPeek
                         decoration={selectedEditorLineDecoration}
@@ -6776,7 +7289,57 @@ export function App() {
                         </div>
                       </div>
                       <div className="plugin-setting-list">
-                        {activePluginSettingsProvider.settings.map((setting) => (
+                        {activePluginSettingsProvider.settings.map((setting) => setting.type === "stringArray" ? (
+                          <div className={`plugin-setting plugin-setting--${setting.type}`} key={setting.id}>
+                            <span className="plugin-setting__copy">
+                              <strong>{setting.label}</strong>
+                              {setting.description ? <small>{setting.description}</small> : null}
+                            </span>
+                            <div className="plugin-setting__string-array">
+                              <div className="watcher-ignored-chips">
+                                {resolvePluginStringArraySettingValue(setting, pluginSettingsDraft).map((entry) => (
+                                  <span className="watcher-ignored-chip" key={entry}>
+                                    {entry}
+                                    <button
+                                      type="button"
+                                      aria-label={`Remover ${entry}`}
+                                      disabled={!workspaceRoot}
+                                      onClick={() => invoke(() => removePluginStringArraySetting(setting.id, entry))}
+                                    >
+                                      <X size={12} />
+                                    </button>
+                                  </span>
+                                ))}
+                              </div>
+                              <div className="watcher-ignored-add">
+                                <input
+                                  type="text"
+                                  placeholder={setting.inputPlaceholder}
+                                  value={pluginStringArrayDrafts[setting.id] ?? ""}
+                                  disabled={!workspaceRoot}
+                                  onChange={(event) => setPluginStringArrayDrafts((drafts) => ({
+                                    ...drafts,
+                                    [setting.id]: event.target.value,
+                                  }))}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter") {
+                                      event.preventDefault();
+                                      invoke(() => addPluginStringArraySetting(setting.id));
+                                    }
+                                  }}
+                                />
+                                <button
+                                  className="button"
+                                  type="button"
+                                  disabled={!workspaceRoot || !(pluginStringArrayDrafts[setting.id] ?? "").trim()}
+                                  onClick={() => invoke(() => addPluginStringArraySetting(setting.id))}
+                                >
+                                  <Plus size={14} /> {setting.addLabel ?? "Adicionar"}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
                           <label className={`plugin-setting plugin-setting--${setting.type}`} key={setting.id}>
                             <span className="plugin-setting__copy">
                               <strong>{setting.label}</strong>
@@ -6803,6 +7366,15 @@ export function App() {
                                   <option key={option.value} value={option.value}>{option.label}</option>
                                 ))}
                               </select>
+                            ) : setting.type === "string" ? (
+                              <input
+                                className="plugin-setting__control plugin-setting__control--string"
+                                type="text"
+                                value={String(pluginSettingsDraft[setting.id] ?? setting.defaultValue)}
+                                placeholder={setting.placeholder}
+                                disabled={!workspaceRoot}
+                                onChange={(event) => invoke(() => applyPluginSetting(setting.id, event.target.value))}
+                              />
                             ) : (
                               <input
                                 className="plugin-setting__control plugin-setting__control--number"

@@ -35,6 +35,18 @@ const provider: PluginSettingsProvider = {
         { value: "files", label: "Files" },
       ],
     },
+    {
+      id: "ignored",
+      type: "string",
+      label: "Ignored",
+      defaultValue: "node_modules, dist",
+    },
+    {
+      id: "ignoredDirs",
+      type: "stringArray",
+      label: "Ignored dirs",
+      defaultValue: [".git", "node_modules"],
+    },
   ],
 };
 
@@ -44,6 +56,8 @@ describe("plugin settings", () => {
       enabled: true,
       limit: 80,
       mode: "content",
+      ignored: "node_modules, dist",
+      ignoredDirs: [".git", "node_modules"],
     });
   });
 
@@ -52,10 +66,14 @@ describe("plugin settings", () => {
       enabled: false,
       limit: 120,
       mode: "files",
+      ignored: ".cache",
+      ignoredDirs: [".cache", "dist"],
     })).toEqual({
       enabled: false,
       limit: 120,
       mode: "files",
+      ignored: ".cache",
+      ignoredDirs: [".cache", "dist"],
     });
   });
 
@@ -81,11 +99,24 @@ describe("plugin settings", () => {
       enabled: "no",
       limit: 500,
       mode: "unknown",
+      ignored: 42,
+      ignoredDirs: 42,
     })).toEqual({
       enabled: true,
       limit: 200,
       mode: "content",
+      ignored: "node_modules, dist",
+      ignoredDirs: [".git", "node_modules"],
     });
+  });
+
+  it("normalizes a legacy CSV string into a string array and drops invalid entries", () => {
+    const arrayProvider = {
+      ...provider,
+      settings: [{ id: "dirs", type: "stringArray" as const, label: "Dirs", defaultValue: ["a"] }],
+    };
+    expect(resolvePluginSettingValues(arrayProvider, { dirs: " a , b ,," })).toEqual({ dirs: ["a", "b"] });
+    expect(resolvePluginSettingValues(arrayProvider, { dirs: ["a", "", "  ", "b"] })).toEqual({ dirs: ["a", "b"] });
   });
 
   it("updates a setting without mutating the previous map", () => {

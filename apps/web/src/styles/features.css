@@ -147,13 +147,13 @@
 .plugin-setting__control:focus-visible { border-color: #5684b7; outline: 2px solid rgb(86 132 183 / 20%); outline-offset: 0; }
 .plugin-setting__control:disabled { cursor: default; }
 .plugin-setting__control--number { width: 92px; }
-.settings-switch { position: relative; display: block; width: 38px; height: 21px; flex: 0 0 auto; }
-.settings-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-.settings-switch i { position: absolute; inset: 0; border: 1px solid #465166; border-radius: 999px; background: #242b36; transition: background 140ms ease, border-color 140ms ease; }
-.settings-switch i::after { position: absolute; top: 3px; left: 3px; width: 13px; height: 13px; border-radius: 50%; background: #909aaa; box-shadow: 0 1px 3px rgb(0 0 0 / 45%); transition: transform 140ms ease, background 140ms ease; content: ""; }
-.settings-switch input:checked + i { border-color: #5b82c2; background: #345d9c; }
-.settings-switch input:checked + i::after { transform: translateX(17px); background: #f0f4fb; }
-.settings-switch input:focus-visible + i { outline: 2px solid #7398d2; outline-offset: 2px; }
+.plugin-setting__control--string { width: min(280px, 38vw); }
+.plugin-setting--stringArray { align-items: start; cursor: default; grid-template-columns: minmax(0, 1fr); }
+.plugin-setting__string-array { display: grid; gap: 10px; min-width: 0; margin-top: 4px; }
+.plugin-setting--stringArray .watcher-ignored-add input { width: 100%; }
+.settings-switch { display: block; width: 38px; height: 21px; flex: 0 0 auto; }
+.settings-switch input { display: block; }
+.settings-switch i { display: none; }
 .plugin-setting-note { display: grid; gap: 5px; padding: 0 2px; }
 .plugin-setting-note strong { color: #dce3ed; font-size: 12px; font-weight: 650; }
 .plugin-setting-note small { color: #8995a7; font-size: 10px; line-height: 1.5; }
@@ -395,6 +395,15 @@
 .editor-line-ruler__marker { display: block; grid-column: 1; justify-self: start; width: 3px; height: 100%; border-radius: 1px; background: transparent; }
 .editor-line-ruler__execution-marker { display: block; grid-column: 2; justify-self: start; width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 7px solid transparent; }
 .editor-line-ruler__execution-marker.is-current { border-left-color: #f0c75e; filter: drop-shadow(0 0 2px rgb(240 199 94 / 45%)); }
+.editor-fold-overlay { position: absolute; z-index: 3; top: 0; bottom: 0; left: var(--editor-gutter-width); width: 20px; pointer-events: none; }
+.editor-fold-toggle { position: absolute; top: calc(var(--fold-line-top) - var(--editor-scroll-top, 0px)); left: 1px; display: flex; width: 14px; height: 21.45px; align-items: center; justify-content: center; border: 1px solid rgb(108 140 255 / 30%); border-radius: 3px; padding: 0; background: rgb(23 29 39 / 88%); color: #91a0b6; font: 12px/1 "JetBrains Mono", "Fira Code", Consolas, monospace; pointer-events: auto; cursor: pointer; }
+.editor-fold-toggle:hover,
+.editor-fold-toggle:focus-visible { outline: none; border-color: #6c8cff; background: #222b39; color: #dbe4f5; }
+.editor-fold-toggle.is-folded { border-color: rgb(108 140 255 / 60%); color: #6c8cff; }
+.editor-fold-preview { position: absolute; z-index: 6; top: var(--fold-preview-top); left: calc(var(--editor-gutter-width) + 24px); display: flex; flex-direction: column; width: min(720px, calc(100% - var(--editor-gutter-width) - 48px)); max-height: var(--fold-preview-max-height, 520px); overflow: hidden; border: 1px solid rgb(108 140 255 / 35%); border-radius: 8px; background: rgb(17 22 31 / 96%); box-shadow: 0 18px 50px rgb(0 0 0 / 34%); color: #dbe4f5; pointer-events: auto; }
+.editor-fold-preview__title { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid rgb(145 160 182 / 16%); padding: 7px 10px; color: #91a0b6; font: 600 11px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-transform: uppercase; letter-spacing: .04em; }
+.editor-fold-preview pre { flex: 1 1 auto; min-height: 0; overflow: auto; margin: 0; padding: 10px 12px; white-space: pre-wrap; color: #dbe4f5; font: 12px/1.45 "JetBrains Mono", "Fira Code", Consolas, monospace; }
+.editor-fold-preview__footer { flex: 0 0 auto; border-top: 1px solid rgb(145 160 182 / 16%); padding: 6px 10px; color: #91a0b6; font: 11px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 .editor-line-ruler__line.is-debug-current { background: #293044; color: #f4f7fb; }
 .editor-line-ruler__line.has-added .editor-line-ruler__marker { background: #55b876; }
 .editor-line-ruler__line.has-modified .editor-line-ruler__marker { background: #d2a84a; }
@@ -412,7 +421,7 @@
 .execution-panel-toolbar__actions .icon-button:hover:not(:disabled) { background: #27303d; }
 .execution-panel-toolbar__follow { flex: none; }
 .workbench-output-follow { display: inline-flex; align-items: center; gap: 5px; color: #9ca8b8; font-size: 10px; white-space: nowrap; cursor: pointer; user-select: none; }
-.workbench-output-follow input { width: 13px; height: 13px; margin: 0; accent-color: #6d91df; cursor: pointer; }
+.workbench-output-follow input { cursor: pointer; }
 .execution-panel-output { height: auto !important; min-height: 0; flex: 1 1 auto; }
 .execution-panel-plugin-view { display: flex; min-width: 0; min-height: 0; flex: 1 1 auto; flex-direction: column; overflow: hidden; }
 .execution-panel-plugin-view > * { min-height: 0; flex: 1 1 auto; }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { htmlLanguageProvider, highlightHtml } from "./html-language";
+import { htmlLanguageProvider, highlightHtml, provideHtmlFoldingRanges } from "./html-language";
 
 describe("HTML language module", () => {
   it("owns the HTML file associations", () => {
@@ -16,5 +16,14 @@ describe("HTML language module", () => {
       expect.objectContaining({ scope: "string", start: 12, end: 21 }),
       expect.objectContaining({ scope: "keyword", start: 29, end: 33 }),
     ]));
+  });
+
+  it("computes HTML folds inside the HTML module", () => {
+    const source = "<main>\n  <section>\n    text\n  </section>\n  <img src=\"x\">\n</main>";
+
+    expect(provideHtmlFoldingRanges({ source })).toEqual([
+      { startLine: 1, endLine: 6, kind: "code" },
+      { startLine: 2, endLine: 4, kind: "code" },
+    ]);
   });
 });

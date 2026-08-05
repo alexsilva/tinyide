@@ -79,6 +79,14 @@ interface StoredDocument {
   readonly selectionEnd: number;
   readonly scrollTop: number;
   readonly scrollLeft: number;
+  readonly folds?: readonly StoredDocumentFold[];
+}
+
+export interface StoredDocumentFold {
+  readonly id: string;
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly hiddenText: string;
 }
 
 export interface ApplicationSnapshot {
@@ -339,6 +347,7 @@ export async function writeReactSnapshot(input: {
   readonly workspaceHandle?: BrowserDirectoryHandle;
   readonly workspaceEntries: readonly WorkspaceEntry[];
   readonly documents: readonly OpenDocument[];
+  readonly documentFolds?: ReadonlyMap<string, readonly StoredDocumentFold[]>;
   readonly diagnostics: readonly TextDiagnostic[];
   readonly output: readonly string[];
 }): Promise<void> {
@@ -362,6 +371,9 @@ export async function writeReactSnapshot(input: {
       selectionEnd: document.selectionEnd,
       scrollTop: document.scrollTop,
       scrollLeft: document.scrollLeft,
+      ...((input.documentFolds?.get(document.id)?.length ?? 0) > 0
+        ? { folds: input.documentFolds!.get(document.id)! }
+        : {}),
     })),
     diagnostics: input.diagnostics,
     output: input.output,

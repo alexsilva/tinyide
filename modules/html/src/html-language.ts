@@ -1,4 +1,4 @@
-import type { LanguageProvider, SyntaxToken } from "@tinyide/plugin-api";
+import type { LanguageProvider, SyntaxToken, TextEditorFoldingRange } from "@tinyide/plugin-api";
 
 interface Candidate extends SyntaxToken {
   readonly priority: number;
@@ -64,12 +64,53 @@ export function highlightHtml(source: string): readonly SyntaxToken[] {
   return resolveCandidates(candidates);
 }
 
+const VOID_ELEMENTS = new Set([
+  "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr",
+]);
+
+interface OpenHtmlTag {
+  readonly name: string;
+  readonly line: number;
+}
+
+export function provideHtmlFoldingRanges(context: { readonly source: string }): readonly TextEditorFoldingRange[] {
+  const ranges: TextEditorFoldingRange[] = [];
+  const stack: OpenHtmlTag[] = [];
+  const lines = context.source.split("\n");
+  const tagPattern = /<\s*(\/)?\s*([A-Za-z][\w:-]*)(?:\s[^<>]*)?>/g;
+
+  lines.forEach((line, index) => {
+    let match: RegExpExecArray | null;
+    while ((match = tagPattern.exec(line))) {
+      const raw = match[0];
+      if (/^<!--|^<!|^<\?/.test(raw)) continue;
+      const isClosing = Boolean(match[1]);
+      const tagName = match[2]!.toLocaleLowerCase();
+      const selfClosing = /\/\s*>$/.test(raw) || VOID_ELEMENTS.has(tagName);
+      const lineNumber = index + 1;
+
+      if (isClosing) {
+        const startIndex = stack.map((item) => item.name).lastIndexOf(tagName);
+        if (startIndex < 0) continue;
+        const [open] = stack.splice(startIndex, 1);
+        if (open && lineNumber > open.line) ranges.push({ startLine: open.line, endLine: lineNumber, kind: "code" });
+        continue;
+      }
+
+      if (!selfClosing) stack.push({ name: tagName, line: lineNumber });
+    }
+  });
+
+  return ranges.sort((left, right) => left.startLine - right.startLine || right.endLine - left.endLine);
+}
+
 export const htmlLanguageProvider: LanguageProvider = {
   id: "module.html.language",
   name: "HTML",
   extensions: [".html", ".htm"],
   priority: -1000,
   highlight: highlightHtml,
+  provideFoldingRanges: provideHtmlFoldingRanges,
   async lint() {
     return [];
   },

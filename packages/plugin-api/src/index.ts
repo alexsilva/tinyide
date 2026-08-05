@@ -198,6 +198,27 @@ export interface SyntaxToken {
     | "operator";
 }
 
+export interface TextEditorFoldingRange {
+  /** One-based line where the foldable region header starts. */
+  readonly startLine: number;
+  /** One-based line where the foldable region ends, inclusive. */
+  readonly endLine: number;
+  /** Optional language-owned classification for future UI hints. */
+  readonly kind?: "region" | "comment" | "imports" | "code" | string;
+  /** Optional placeholder text hint. The editor may ignore it. */
+  readonly collapsedText?: string;
+}
+
+export interface TextEditorFoldingContext {
+  readonly document: TextEditorDocumentSnapshot;
+  /**
+   * Source whose line numbers must be used for the returned ranges.
+   * In the plain editor this is the document content; when folds are already
+   * visible it may be the current editor projection.
+   */
+  readonly source: string;
+}
+
 export interface ScriptExecutionResult {
   readonly stdout: string;
   readonly stderr: string;
@@ -434,6 +455,9 @@ export interface LanguageProvider {
   readonly priority?: number;
   readonly lintRules?: readonly LanguageLintRule[];
   highlight(source: string): readonly SyntaxToken[];
+  provideFoldingRanges?(
+    context: TextEditorFoldingContext,
+  ): Promise<readonly TextEditorFoldingRange[]> | readonly TextEditorFoldingRange[];
   lint(
     source: string,
     fileName: string,
@@ -619,7 +643,7 @@ export interface TextEditorNavigationProvider {
 
 export const TEXT_EDITOR_NAVIGATION_CAPABILITY = "textEditor.navigation";
 
-export type PluginSettingValue = boolean | string | number;
+export type PluginSettingValue = boolean | string | number | readonly string[];
 
 export type PluginSettingValues = Readonly<Record<string, PluginSettingValue>>;
 
@@ -658,10 +682,31 @@ export interface PluginSelectSettingDefinition {
   readonly options: readonly PluginSelectSettingOption[];
 }
 
+export interface PluginStringSettingDefinition {
+  readonly id: string;
+  readonly type: "string";
+  readonly label: string;
+  readonly description?: string;
+  readonly defaultValue: string;
+  readonly placeholder?: string;
+}
+
+export interface PluginStringArraySettingDefinition {
+  readonly id: string;
+  readonly type: "stringArray";
+  readonly label: string;
+  readonly description?: string;
+  readonly defaultValue: readonly string[];
+  readonly inputPlaceholder?: string;
+  readonly addLabel?: string;
+}
+
 export type PluginSettingDefinition =
   | PluginBooleanSettingDefinition
   | PluginNumberSettingDefinition
-  | PluginSelectSettingDefinition;
+  | PluginSelectSettingDefinition
+  | PluginStringSettingDefinition
+  | PluginStringArraySettingDefinition;
 
 export interface PluginSettingsProvider {
   readonly id: string;

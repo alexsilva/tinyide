@@ -15,6 +15,7 @@ nav:
       - Visão geral: arquitetura/index.md
       - Core mínimo e validação: arquitetura/core-minimo.md
       - Núcleo da plataforma: arquitetura/core.md
+      - Arquitetura de módulos: arquitetura/modulos.md
       - Sistema de plugins: arquitetura/plugins.md
       - Segurança e isolamento: arquitetura/seguranca.md
   - Ecossistema:

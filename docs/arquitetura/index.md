@@ -2,7 +2,7 @@
 
 ## Visão geral
 
-O tinyIde é dividido em quatro camadas principais:
+O tinyIde é dividido em cinco camadas principais:
 
 ```text
 ┌───────────────────────────────────────────────┐
@@ -11,6 +11,9 @@ O tinyIde é dividido em quatro camadas principais:
 ├───────────────────────────────────────────────┤
 │ Serviços genéricos do core                    │
 │ Workspace, comandos, eventos, processos       │
+├───────────────────────────────────────────────┤
+│ Módulos básicos                               │
+│ Implementações incluídas e carregadas no boot │
 ├───────────────────────────────────────────────┤
 │ Infraestrutura de extensibilidade             │
 │ Plugin API, host, manager e permissões         │
@@ -31,6 +34,9 @@ tinyide/
 ├── packages/
 │   ├── core/
 │   └── plugin-api/
+├── modules/
+│   ├── builtin/             # catálogo dos módulos incluídos
+│   └── html/                # implementação básica de HTML
 ├── plugins/                 # submódulos/repositórios independentes para desenvolvimento
 ├── docs/
 └── site/
@@ -49,12 +55,24 @@ examples/
 
 Nenhum pacote de `apps/` ou `packages/` pode importar código desses diretórios.
 
+O diretório `modules/` possui uma finalidade diferente: contém implementações básicas compiladas com a aplicação. Módulos usam a API pública de extensões, são inicializados automaticamente e não possuem instalação ou habilitação. Consulte [Arquitetura de módulos](modulos.md).
+
 ## Regra de dependência
 
 As dependências devem apontar para dentro da plataforma, nunca para implementações externas.
 
 ```text
 plugin externo
+    ↓
+plugin API pública
+    ↓
+serviços do core
+```
+
+Módulos seguem o mesmo sentido de dependência:
+
+```text
+módulo básico
     ↓
 plugin API pública
     ↓

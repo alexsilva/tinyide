@@ -15,6 +15,7 @@ import type {
   PluginManifest,
   PluginRecord,
   WorkbenchApi,
+  WorkbenchConfirmRequest,
   WorkbenchDialogContribution,
   WorkbenchExecutionProfileUpdateOptions,
   WorkbenchExecutionSnapshot,
@@ -144,6 +145,7 @@ interface WorkbenchBinding {
   openSidebar(id: string): void;
   openToolWindow(id: string, viewId?: string): void;
   openDialog(dialog: WorkbenchDialogContribution): Disposable;
+  confirm(request: WorkbenchConfirmRequest): Promise<boolean>;
   replaceEditorContent(request: WorkbenchTextEditorReplaceContentRequest): Promise<void>;
   saveEditorDocument(request: WorkbenchTextEditorSaveRequest): Promise<void>;
   highlightText(request: WorkbenchTextHighlightRequest): WorkbenchTextHighlightResult;
@@ -174,6 +176,10 @@ class AppWorkbenchApi implements WorkbenchApi {
   #binding: WorkbenchBinding | undefined;
 
   readonly dialogs = {
+    confirm: async (request: WorkbenchConfirmRequest): Promise<boolean> => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      return this.#binding.confirm(request);
+    },
     open: (dialog: WorkbenchDialogContribution): Disposable => {
       if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
       return this.#binding.openDialog(dialog);

@@ -19,6 +19,7 @@ import {
   type ActivityButtonPlacements,
 } from "./activity-layout";
 import { projectSessionStateKey } from "./project-session";
+import { isVirtualDocumentId } from "./virtual-documents";
 
 const SESSION_KEY = () => projectSessionStateKey("tinyide.react.session.v2");
 const DESKTOP_SESSION_STATE_KEY = () => projectSessionStateKey("ui-session");
@@ -68,6 +69,8 @@ interface StoredDocument {
   readonly id: string;
   readonly name: string;
   readonly path?: string;
+  /** Rótulo de origem dos documentos fornecidos por plugin. */
+  readonly origin?: string;
   readonly workspaceRoot?: string;
   readonly handle?: BrowserFileHandle;
   readonly kind?: OpenDocument["kind"];
@@ -286,8 +289,30 @@ export function workspaceDocumentsForSnapshot(
 ): readonly OpenDocument[] {
   if (!workspaceRoot) return [];
   return documents.filter((document) => (
-    Boolean(document.path) && document.workspaceRoot === workspaceRoot
+    // Documentos de plugin não têm arquivo, mas a aba precisa sobreviver ao reload
+    // como acontece com arquivos: quem os desenha é o provider, pelo mediaType.
+    isVirtualDocumentId(document.id)
+      || (Boolean(document.path) && document.workspaceRoot === workspaceRoot)
   ));
+}
+
+/** Reabre a aba de um documento de plugin sem tocar no sistema de arquivos. */
+function restoreVirtualDocument(document: StoredDocument): OpenDocument {
+  return {
+    id: document.id,
+    name: document.name,
+    kind: "text",
+    mediaType: document.mediaType ?? "text/plain",
+    readOnly: true,
+    ...(document.origin ? { origin: document.origin } : {}),
+    size: document.size ?? 0,
+    content: document.content ?? "",
+    savedContent: document.savedContent ?? "",
+    selectionStart: document.selectionStart ?? 0,
+    selectionEnd: document.selectionEnd ?? 0,
+    scrollTop: document.scrollTop ?? 0,
+    scrollLeft: document.scrollLeft ?? 0,
+  };
 }
 
 export async function restoreWorkspaceDocuments(
@@ -297,6 +322,7 @@ export async function restoreWorkspaceDocuments(
 ): Promise<readonly OpenDocument[]> {
   if (!workspaceRoot) return [];
   const restored = await Promise.all(documents.map(async (document): Promise<OpenDocument | undefined> => {
+    if (isVirtualDocumentId(document.id)) return restoreVirtualDocument(document);
     if (!document.path) return undefined;
     if (document.workspaceRoot && document.workspaceRoot !== workspaceRoot) return undefined;
     if (!document.workspaceRoot && !workspaceHandle) return undefined;
@@ -361,6 +387,7 @@ export async function writeReactSnapshot(input: {
       id: document.id,
       name: document.name,
       ...(document.path ? { path: document.path } : {}),
+      ...(document.origin ? { origin: document.origin } : {}),
       ...(document.workspaceRoot ? { workspaceRoot: document.workspaceRoot } : {}),
       kind: document.kind,
       mediaType: document.mediaType,

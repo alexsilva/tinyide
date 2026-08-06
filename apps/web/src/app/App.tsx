@@ -136,6 +136,7 @@ import type {
   WorkbenchStateSnapshot,
   WorkbenchTitlebarContribution,
   WorkbenchExplorerFilterProvider,
+  WorkbenchConfirmRequest,
   WorkbenchVirtualDocumentRequest,
   WorkbenchWorkspaceResourceOpenRequest,
   WorkbenchToolWindowContribution,
@@ -928,6 +929,8 @@ export function App() {
   const openWorkspaceResourceRef = useRef<
     (request: WorkbenchWorkspaceResourceOpenRequest) => Promise<void>
   >(async () => undefined);
+  const [pluginConfirm, setPluginConfirm] = useState<WorkbenchConfirmRequest | undefined>(undefined);
+  const pluginConfirmResolveRef = useRef<((value: boolean) => void) | undefined>(undefined);
   const virtualDocumentRef = useRef<{
     open: (request: WorkbenchVirtualDocumentRequest) => Promise<string>;
     update: (
@@ -1706,6 +1709,14 @@ export function App() {
     },
     async openWorkspaceResource(request) {
       await openWorkspaceResourceRef.current(request);
+    },
+    confirm(request) {
+      // Uma confirmação nova substitui a anterior, que é resolvida como cancelamento.
+      pluginConfirmResolveRef.current?.(false);
+      return new Promise<boolean>((resolve) => {
+        pluginConfirmResolveRef.current = resolve;
+        setPluginConfirm(request);
+      });
     },
     async openVirtualDocument(request) {
       return virtualDocumentRef.current.open(request);
@@ -4594,6 +4605,12 @@ export function App() {
       setBusy(false);
       setActiveProcessId(undefined);
     }
+  };
+
+  const resolvePluginConfirm = (value: boolean) => {
+    pluginConfirmResolveRef.current?.(value);
+    pluginConfirmResolveRef.current = undefined;
+    setPluginConfirm(undefined);
   };
 
   const closeDocument = (documentId: string) => {
@@ -7760,6 +7777,36 @@ export function App() {
                   await platform.uninstall(pluginPendingRemoval.manifest.id);
                   setPluginRemovalId(undefined);
                 })}>Remover</button>
+              </div>
+            </section>
+          </div>
+        ) : null}
+
+        {pluginConfirm ? (
+          <div className="profile-removal-backdrop" role="presentation">
+            <section
+              aria-labelledby="plugin-confirm-title"
+              aria-modal="true"
+              className="profile-removal-dialog"
+              role="alertdialog"
+            >
+              <div>
+                <span className="eyebrow">CONFIRMAÇÃO</span>
+                <h3 id="plugin-confirm-title">{pluginConfirm.title}</h3>
+                <p>{pluginConfirm.message}</p>
+                {pluginConfirm.detail ? <p className="muted">{pluginConfirm.detail}</p> : null}
+              </div>
+              <div className="dialog-actions">
+                <button className="button secondary" type="button" onClick={() => resolvePluginConfirm(false)}>
+                  {pluginConfirm.cancelLabel ?? "Cancelar"}
+                </button>
+                <button
+                  className={`button ${pluginConfirm.danger === false ? "primary" : "danger"}`}
+                  type="button"
+                  onClick={() => resolvePluginConfirm(true)}
+                >
+                  {pluginConfirm.confirmLabel ?? "Confirmar"}
+                </button>
               </div>
             </section>
           </div>

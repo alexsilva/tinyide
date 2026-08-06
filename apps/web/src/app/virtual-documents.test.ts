@@ -6,7 +6,7 @@ import {
   upsertDocument,
   virtualDocumentId,
 } from "./virtual-documents";
-import { workspaceDocumentsForSnapshot } from "./persistence";
+import { restoreWorkspaceDocuments, workspaceDocumentsForSnapshot } from "./persistence";
 import type { OpenDocument } from "../browser-filesystem";
 
 const request = {
@@ -75,7 +75,37 @@ describe("virtual documents", () => {
     expect(replaced[1]?.name).toBe("outro");
   });
 
-  it("is never written to the session snapshot", () => {
+  it("survives a reload: it is stored in and restored from the session", async () => {
+    const virtualDocument = createVirtualDocument({ ...request, content: "" });
+    const persisted = workspaceDocumentsForSnapshot([virtualDocument], "/workspace");
+    expect(persisted.map((document) => document.id)).toEqual([virtualDocument.id]);
+
+    const [restored] = await restoreWorkspaceDocuments(
+      [{
+        id: virtualDocument.id,
+        name: virtualDocument.name,
+        origin: request.origin,
+        mediaType: virtualDocument.mediaType,
+        kind: "text",
+        size: 0,
+        content: "",
+        savedContent: "",
+        selectionStart: 0,
+        selectionEnd: 0,
+        scrollTop: 0,
+        scrollLeft: 0,
+      }],
+      "/workspace",
+    );
+    expect(restored?.id).toBe(virtualDocument.id);
+    expect(restored?.mediaType).toBe(request.mediaType);
+    expect(restored?.origin).toBe(request.origin);
+    expect(restored?.readOnly).toBe(true);
+    // Sem caminho: a restauração não pode tentar ler nada do disco.
+    expect(restored?.path).toBeUndefined();
+  });
+
+  it("is stored alongside file documents, and only file documents need the workspace", () => {
     const virtualDocument = createVirtualDocument(request);
     const fileDocument: OpenDocument = {
       id: "src/main.py",
@@ -93,6 +123,10 @@ describe("virtual documents", () => {
       scrollLeft: 0,
     };
     const persisted = workspaceDocumentsForSnapshot([virtualDocument, fileDocument], "/workspace");
-    expect(persisted.map((document) => document.id)).toEqual(["src/main.py"]);
+    expect(persisted.map((document) => document.id)).toEqual([virtualDocument.id, "src/main.py"]);
+
+    // Um arquivo de outro workspace continua fora do snapshot.
+    const foreign: OpenDocument = { ...fileDocument, id: "outro", workspaceRoot: "/outro" };
+    expect(workspaceDocumentsForSnapshot([foreign], "/workspace")).toEqual([]);
   });
 });

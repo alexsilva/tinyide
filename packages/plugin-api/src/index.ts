@@ -945,7 +945,23 @@ export interface WorkbenchDialogContribution {
   mount(context: WorkbenchDialogMountContext): void | Disposable | Promise<void | Disposable>;
 }
 
+export interface WorkbenchConfirmRequest {
+  readonly title: string;
+  readonly message: string;
+  /** Linha secundária com o efeito da ação. */
+  readonly detail?: string;
+  readonly confirmLabel?: string;
+  readonly cancelLabel?: string;
+  /** Destaca a confirmação como destrutiva e mantém o foco em cancelar. */
+  readonly danger?: boolean;
+}
+
 export interface WorkbenchDialogApi {
+  /**
+   * Confirmação compacta, no mesmo formato usado pela IDE ao excluir arquivos.
+   * Resolve `false` quando o usuário cancela ou fecha o diálogo.
+   */
+  confirm(request: WorkbenchConfirmRequest): Promise<boolean>;
   open(dialog: WorkbenchDialogContribution): Disposable;
 }
 

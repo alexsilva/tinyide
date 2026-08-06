@@ -107,4 +107,12 @@ test.describe("execução e depuração", () => {
     // A sessão encerra sozinha em vez de o PDB reiniciar o script.
     await expect(window.getByText(/will be restarted/)).toHaveCount(0);
   });
+
+  test("oferece reinício da depuração na barra da sessão", async () => {
+    const { window } = ide;
+    await window.getByLabel("Depurar perfil").first().click();
+    await expect(window.getByText(/programa \(Debug\)/)).toBeVisible({ timeout: 45_000 });
+    // Controle da sessão em curso: reiniciar precisa estar ao alcance sem sair do painel.
+    await expect(window.getByLabel("Reiniciar depuração").first()).toBeVisible({ timeout: 45_000 });
+  });
 });

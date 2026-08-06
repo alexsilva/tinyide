@@ -280,7 +280,7 @@ import {
   textEditorLineDecorationProviders,
   workbenchResourceDescriptor,
 } from "./runtime";
-import { restoreActiveDebugSession, sameDebugSessionSnapshot, workspaceRelativeDebugPath } from "./debug-session-state";
+import { restoreActiveDebugSession, workspaceRelativeDebugPath } from "./debug-session-state";
 import {
   DEFAULT_DEBUG_PANEL_LAYOUT,
   EMPTY_DEBUG_OUTPUT_OFFSETS,
@@ -396,6 +396,7 @@ import { ButtonTooltip, PluginCardIcon, WorkbenchActivityIconView } from "./work
 import { WorkbenchActivityBar } from "./workbench/WorkbenchActivityBar";
 import { ProblemsPanel } from "./workbench/ProblemsPanel";
 import { useWorkbenchContributions } from "./workbench/useWorkbenchContributions";
+import { nextDebugSession } from "./debug-session-updates";
 import {
   applyVirtualDocumentChanges,
   createVirtualDocument,
@@ -1220,11 +1221,7 @@ export function App() {
       try {
         const snapshot = await debugAdapter.read(debugSession.id);
         if (!cancelled) {
-          setDebugSession((current) => (
-            current?.id === snapshot.id && !sameDebugSessionSnapshot(current, snapshot)
-              ? snapshot
-              : current
-          ));
+          setDebugSession((current) => nextDebugSession(current, snapshot));
         }
       } catch {
         // A command or process transition may temporarily make a poll stale.

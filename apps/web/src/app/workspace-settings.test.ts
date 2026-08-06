@@ -8,13 +8,14 @@ describe("workspace settings", () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify(EMPTY_WORKSPACE_SETTINGS), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     await expect(readWorkspaceSettings("/workspace")).resolves.toEqual(EMPTY_WORKSPACE_SETTINGS);
-    expect(fetchMock).toHaveBeenCalledWith("/core-api/workspace/settings", {
-      cache: "no-store",
-      headers: {
-        "Content-Type": "application/json",
-        "X-TinyIde-Workspace-Root": "/workspace",
-      },
-    });
+    // A camada de sessão normaliza os cabeçalhos em Headers e acrescenta os seus,
+    // então o que importa é o conteúdo enviado, não a forma do objeto.
+    const [url, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [string, RequestInit];
+    expect(url).toBe("/core-api/workspace/settings");
+    expect(init.cache).toBe("no-store");
+    const sent = new Headers(init.headers);
+    expect(sent.get("X-TinyIde-Workspace-Root")).toBe("/workspace");
+    expect(sent.get("Content-Type")).toBe("application/json");
   });
 
   it("writes settings", async () => {

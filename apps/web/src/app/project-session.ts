@@ -24,9 +24,17 @@ export function createProjectSessionId(): string {
 
 export function projectSessionId(): string {
   if (cachedSessionId) return cachedSessionId;
-  const queryValue = typeof window === "undefined"
-    ? undefined
-    : new URL(window.location.href).searchParams.get(PROJECT_SESSION_QUERY);
+  // `window` pode existir sem `location` utilizável (ambientes de teste, workers):
+  // a ausência do parâmetro não deve derrubar a requisição.
+  const queryValue = (() => {
+    const href = typeof window === "undefined" ? undefined : window.location?.href;
+    if (!href) return undefined;
+    try {
+      return new URL(href).searchParams.get(PROJECT_SESSION_QUERY);
+    } catch {
+      return undefined;
+    }
+  })();
   const storage = safeSessionStorage();
   const stored = storage?.getItem(PROJECT_SESSION_STORAGE_KEY);
   cachedSessionId = validSessionId(queryValue)

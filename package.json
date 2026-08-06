@@ -31,7 +31,9 @@
     "coverage": "npm run coverage:core && npm run coverage:web-critical && npm run coverage:runtime-security && npm run coverage:plugins",
     "typecheck:plugins": "tsc -p plugins/python/jsconfig.json && tsc -p plugins/python-venv/jsconfig.json && tsc -p plugins/pytest/jsconfig.json && tsc -p plugins/javascript/jsconfig.json && tsc -p plugins/node-runtime/jsconfig.json && tsc -p plugins/docker/jsconfig.json && tsc -p plugins/terminal/jsconfig.json && tsc -p plugins/git/jsconfig.json && tsc -p plugins/search/jsconfig.json && tsc -p plugins/markdown/jsconfig.json && tsc -p plugins/database/jsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck:plugins",
-    "check": "npm run typecheck && npm run test && npm run test:performance && npm run coverage && npm run build"
+    "check": "npm run typecheck && npm run test && npm run test:performance && npm run coverage && npm run build",
+    "test:e2e": "npm run build:web && playwright test --config e2e/playwright.config.mjs",
+    "test:e2e:quick": "playwright test --config e2e/playwright.config.mjs"
   },
   "dependencies": {
     "chokidar": "^4.0.3",
@@ -40,6 +42,7 @@
     "pg": "^8.22.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/node": "^26.1.1",
     "@vitest/coverage-v8": "^4.1.10",
     "electron": "^43.2.0",

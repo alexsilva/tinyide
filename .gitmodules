@@ -31,3 +31,6 @@
 [submodule "plugins/markdown"]
 	path = plugins/markdown
 	url = git@github.com:alexsilva/tinyide.markdown.git
+[submodule "plugins/database"]
+	path = plugins/database
+	url = git@github.com:alexsilva/tinyide.database.git

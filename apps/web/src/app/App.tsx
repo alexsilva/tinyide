@@ -136,6 +136,7 @@ import type {
   WorkbenchStateSnapshot,
   WorkbenchTitlebarContribution,
   WorkbenchExplorerFilterProvider,
+  WorkbenchVirtualDocumentRequest,
   WorkbenchWorkspaceResourceOpenRequest,
   WorkbenchToolWindowContribution,
   WorkbenchToolWindowHookContribution,
@@ -394,6 +395,12 @@ import { ButtonTooltip, PluginCardIcon, WorkbenchActivityIconView } from "./work
 import { WorkbenchActivityBar } from "./workbench/WorkbenchActivityBar";
 import { ProblemsPanel } from "./workbench/ProblemsPanel";
 import { useWorkbenchContributions } from "./workbench/useWorkbenchContributions";
+import {
+  applyVirtualDocumentChanges,
+  createVirtualDocument,
+  upsertDocument,
+  virtualDocumentId,
+} from "./virtual-documents";
 
 type FoldRange = TextEditorFoldingRange;
 
@@ -921,6 +928,18 @@ export function App() {
   const openWorkspaceResourceRef = useRef<
     (request: WorkbenchWorkspaceResourceOpenRequest) => Promise<void>
   >(async () => undefined);
+  const virtualDocumentRef = useRef<{
+    open: (request: WorkbenchVirtualDocumentRequest) => Promise<string>;
+    update: (
+      id: string,
+      changes: Partial<Pick<WorkbenchVirtualDocumentRequest, "name" | "content">>,
+    ) => Promise<void>;
+    close: (id: string) => Promise<void>;
+  }>({
+    open: async () => { throw new Error("O editor ainda não está disponível."); },
+    update: async () => undefined,
+    close: async () => undefined,
+  });
   const explorerFilterExpansionBackupRef = useRef<ReadonlySet<string> | undefined>(undefined);
   const snapshotTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -1687,6 +1706,18 @@ export function App() {
     },
     async openWorkspaceResource(request) {
       await openWorkspaceResourceRef.current(request);
+    },
+    async openVirtualDocument(request) {
+      return virtualDocumentRef.current.open(request);
+    },
+    async updateVirtualDocument(id, changes) {
+      await virtualDocumentRef.current.update(id, changes);
+    },
+    async closeVirtualDocument(id) {
+      await virtualDocumentRef.current.close(id);
+    },
+    isVirtualDocumentOpen(id) {
+      return documentsRef.current.some((document) => document.id === id);
     },
     async readWorkspaceResource(path) {
       if (!workspaceHandle) throw new Error("Abra ou reconecte um workspace antes de ler este arquivo.");
@@ -2684,6 +2715,28 @@ export function App() {
     setActiveDocumentId(document.id);
   };
 
+  /**
+   * Documentos fornecidos por plugins: não existem no disco, então não têm handle nem
+   * caminho, nunca são salvos e a renderização fica a cargo do provider de editor que
+   * aceitar o `mediaType`.
+   */
+  const openVirtualDocument = async (request: WorkbenchVirtualDocumentRequest): Promise<string> => {
+    const existing = documentsRef.current.find((item) => item.id === virtualDocumentId(request.key));
+    const document = createVirtualDocument(request, existing);
+    setDocuments((current) => upsertDocument(current, document));
+    if (request.focus !== false) setActiveDocumentId(document.id);
+    return document.id;
+  };
+
+  const updateVirtualDocument = async (
+    id: string,
+    changes: Partial<Pick<WorkbenchVirtualDocumentRequest, "name" | "content">>,
+  ): Promise<void> => {
+    setDocuments((current) => current.map((document) => document.id === id
+      ? applyVirtualDocumentChanges(document, changes)
+      : document));
+  };
+
   const openWorkspaceFilePath = async (path: string, fileHandle?: BrowserFileHandle) => {
     let document: OpenDocument;
     try {
@@ -2795,6 +2848,11 @@ export function App() {
 
   useEffect(() => {
     openWorkspaceResourceRef.current = openWorkspaceResource;
+    virtualDocumentRef.current = {
+      open: openVirtualDocument,
+      update: updateVirtualDocument,
+      close: async (id: string) => { closeDocument(id); },
+    };
   });
 
   const revealDebugLocation = async (path: string | undefined, line: number | undefined) => {

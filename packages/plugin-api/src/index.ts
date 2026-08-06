@@ -743,6 +743,7 @@ export interface WorkbenchPanelMountContext {
 
 export type WorkbenchActivityIcon =
   | "box"
+  | "database"
   | "docker"
   | "files"
   | "git"
@@ -1070,10 +1071,40 @@ export interface WorkbenchApi {
   readonly editor: WorkbenchTextEditorApi;
   readonly text: WorkbenchTextApi;
   readonly workspace: WorkbenchWorkspaceApi;
+  readonly documents: WorkbenchDocumentsApi;
   readonly output: WorkbenchOutputApi;
   readonly execution: WorkbenchExecutionApi;
   openSidebar(id: string): void;
   openToolWindow(id: string, viewId?: string): void;
+}
+
+/**
+ * Documento que não existe no sistema de arquivos e cujo conteúdo é fornecido pelo
+ * próprio plugin. O host apenas abre a aba e delega a renderização ao
+ * `WorkbenchResourceEditorProvider` que aceitar o `mediaType` informado.
+ */
+export interface WorkbenchVirtualDocumentRequest {
+  /** Identificador estável dentro do plugin; reabrir com o mesmo valor foca a aba existente. */
+  readonly key: string;
+  /** Título exibido na aba. */
+  readonly name: string;
+  /** Roteia a renderização: um provider precisa aceitar este tipo em `canOpen`. */
+  readonly mediaType: string;
+  /** Conteúdo textual opcional, disponível ao provider através de `read()`. */
+  readonly content?: string;
+  /** Rótulo de origem exibido pelo host, por exemplo o nome da conexão. */
+  readonly origin?: string;
+  /** Ativa a aba após abrir. Padrão: `true`. */
+  readonly focus?: boolean;
+}
+
+export interface WorkbenchDocumentsApi {
+  /** Abre (ou foca) o documento virtual e devolve o identificador atribuído pelo host. */
+  open(request: WorkbenchVirtualDocumentRequest): Promise<string>;
+  /** Atualiza nome e conteúdo de um documento já aberto. */
+  update(id: string, changes: Partial<Pick<WorkbenchVirtualDocumentRequest, "name" | "content">>): Promise<void>;
+  close(id: string): Promise<void>;
+  isOpen(id: string): boolean;
 }
 
 export interface WorkbenchExplorerFilterRequest {

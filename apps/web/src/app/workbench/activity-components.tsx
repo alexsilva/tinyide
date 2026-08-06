@@ -1,5 +1,5 @@
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { Box, Files, History, Terminal } from "lucide-react";
+import { Box, Database, Files, History, Terminal } from "lucide-react";
 import { useEffect, useState, type KeyboardEventHandler, type ReactElement, type ReactNode } from "react";
 import type {
   WorkbenchActivityBadgeProvider,
@@ -327,6 +327,7 @@ export function WorkbenchActivityIconView({ icon }: { readonly icon: WorkbenchAc
   if (icon === "git" || icon === "source-control") return <GitBrandIcon />;
   if (icon === "nodejs") return <NodeBrandIcon />;
   if (icon === "python") return <PythonBrandIcon />;
+  if (icon === "database") return <Database size={16} />;
   if (icon === "files") return <Files size={16} />;
   if (icon === "history") return <History size={16} />;
   if (icon === "terminal") return <Terminal size={16} />;

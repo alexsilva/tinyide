@@ -18,6 +18,7 @@ import type {
   WorkbenchDialogContribution,
   WorkbenchExecutionProfileUpdateOptions,
   WorkbenchExecutionSnapshot,
+  WorkbenchVirtualDocumentRequest,
   WorkbenchWorkspaceResourceOpenRequest,
   WorkbenchTextEditorReplaceContentRequest,
   WorkbenchTextEditorSaveRequest,
@@ -148,6 +149,13 @@ interface WorkbenchBinding {
   highlightText(request: WorkbenchTextHighlightRequest): WorkbenchTextHighlightResult;
   openWorkspaceResource(request: WorkbenchWorkspaceResourceOpenRequest): Promise<void>;
   readWorkspaceResource(path: string): Promise<Blob>;
+  openVirtualDocument(request: WorkbenchVirtualDocumentRequest): Promise<string>;
+  updateVirtualDocument(
+    id: string,
+    changes: Partial<Pick<WorkbenchVirtualDocumentRequest, "name" | "content">>,
+  ): Promise<void>;
+  closeVirtualDocument(id: string): Promise<void>;
+  isVirtualDocumentOpen(id: string): boolean;
   executionSnapshot(): WorkbenchExecutionSnapshot;
   subscribeExecution(listener: (snapshot: WorkbenchExecutionSnapshot) => void): Disposable;
   updateExecutionData(profileId: string, providerId: string, data: unknown): Promise<void>;
@@ -199,6 +207,25 @@ class AppWorkbenchApi implements WorkbenchApi {
       if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
       return this.#binding.readWorkspaceResource(path);
     },
+  };
+
+  readonly documents = {
+    open: async (request: WorkbenchVirtualDocumentRequest): Promise<string> => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      return this.#binding.openVirtualDocument(request);
+    },
+    update: async (
+      id: string,
+      changes: Partial<Pick<WorkbenchVirtualDocumentRequest, "name" | "content">>,
+    ): Promise<void> => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      await this.#binding.updateVirtualDocument(id, changes);
+    },
+    close: async (id: string): Promise<void> => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      await this.#binding.closeVirtualDocument(id);
+    },
+    isOpen: (id: string): boolean => Boolean(this.#binding?.isVirtualDocumentOpen(id)),
   };
 
   readonly output = {

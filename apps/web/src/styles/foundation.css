@@ -1,7 +1,17 @@
+/*
+ * Interruptor padrão em três tamanhos. O tamanho grande é o padrão histórico; use
+ * `checkbox-md` em formulários densos e `checkbox-sm` em listas e grades, onde o
+ * controle divide espaço com o conteúdo.
+ */
 input[type="checkbox"] {
+  --checkbox-width: 38px;
+  --checkbox-height: 21px;
+  --checkbox-knob: 13px;
+  --checkbox-inset: 3px;
+
   position: relative;
-  width: 38px;
-  height: 21px;
+  width: var(--checkbox-width);
+  height: var(--checkbox-height);
   margin: 0;
   flex: 0 0 auto;
   appearance: none;
@@ -12,12 +22,26 @@ input[type="checkbox"] {
   transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
 }
 
+input[type="checkbox"].checkbox-md {
+  --checkbox-width: 30px;
+  --checkbox-height: 17px;
+  --checkbox-knob: 11px;
+  --checkbox-inset: 2px;
+}
+
+input[type="checkbox"].checkbox-sm {
+  --checkbox-width: 24px;
+  --checkbox-height: 14px;
+  --checkbox-knob: 8px;
+  --checkbox-inset: 2px;
+}
+
 input[type="checkbox"]::after {
   position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 13px;
-  height: 13px;
+  top: var(--checkbox-inset);
+  left: var(--checkbox-inset);
+  width: var(--checkbox-knob);
+  height: var(--checkbox-knob);
   border-radius: 50%;
   background: #909aaa;
   box-shadow: 0 1px 3px rgb(0 0 0 / 45%);
@@ -31,8 +55,18 @@ input[type="checkbox"]:checked {
 }
 
 input[type="checkbox"]:checked::after {
-  transform: translateX(17px);
+  transform: translateX(calc(var(--checkbox-width) - var(--checkbox-knob) - var(--checkbox-inset) * 2 - 2px));
   background: #f0f4fb;
+}
+
+input[type="checkbox"]:indeterminate {
+  border-color: #5b82c2;
+  background: #2c4467;
+}
+
+input[type="checkbox"]:indeterminate::after {
+  transform: translateX(calc((var(--checkbox-width) - var(--checkbox-knob)) / 2 - var(--checkbox-inset)));
+  background: #cddcf5;
 }
 
 input[type="checkbox"]:focus-visible {

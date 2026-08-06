@@ -10,6 +10,37 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
  * Workspace descartável com um pouco de tudo que a IDE precisa reconhecer: código,
  * texto, um arquivo dentro de subdiretório e um binário que a indexação deve ignorar.
  */
+/**
+ * Perfil de execução equivalente ao que a IDE grava quando o usuário cria uma
+ * configuração de execução pela interface.
+ */
+export function executionProfile({ name, executable, parameters, workingDirectory }) {
+  const id = `e2e.${name.replace(/\W+/g, "-")}`;
+  return {
+    id,
+    name,
+    environment: { mode: "none" },
+    saveBeforeRun: true,
+    steps: [{
+      id: `${id}:step-1`,
+      name,
+      executable,
+      command: "",
+      parameters,
+      workingDirectory,
+    }],
+  };
+}
+
+/**
+ * Ambiente Python do tipo `process`: um interpretador solto, sem venv. É o vínculo que
+ * o adaptador de depuração exige — sem ambiente do provedor Python, depurar fica
+ * indisponível mesmo que o perfil aponte para um interpretador.
+ */
+export function pythonEnvironment(executable, id = "env-e2e-python") {
+  return { id, name: "python de teste", type: "process", executable };
+}
+
 export async function createWorkspace(files) {
   const root = await mkdtemp(join(tmpdir(), "tinyide-e2e-"));
   const defaults = {
@@ -25,6 +56,18 @@ export async function createWorkspace(files) {
   return {
     root,
     file: (path) => join(root, path),
+    /** Grava configurações do workspace antes de a IDE subir. */
+    async writeSettings(settings) {
+      const path = join(root, ".tinyide", "settings.json");
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, `${JSON.stringify({ version: 1, ...settings }, undefined, 2)}\n`, "utf8");
+    },
+    /** Registra ambientes Python como o plugin faria ao importar um interpretador. */
+    async writePythonEnvironments(environments) {
+      const path = join(root, ".tinyide", "environments", "python-registry.json");
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, `${JSON.stringify(environments, undefined, 2)}\n`, "utf8");
+    },
     async dispose() {
       await rm(root, { recursive: true, force: true });
     },

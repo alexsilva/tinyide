@@ -382,6 +382,14 @@ import { DebugVariableNode } from "./debug/DebugVariableNode";
 import { DiagnosticLayer, EditorLineDiffPeek, HighlightedSource } from "./editor/editor-components";
 import { NativeImageEditor, UnsupportedBinaryEditor } from "./editor/resource-editors";
 import { resolveTextEditorNavigation } from "./editor/navigation";
+import {
+  createEditorLocationHistory,
+  navigateEditorLocationBack,
+  navigateEditorLocationForward,
+  recordEditorLocation,
+  type EditorLocation,
+  type EditorLocationHistory,
+} from "./editor/location-history";
 import { findTextMatches, replaceTextMatch, replaceTextMatches } from "./editor/text-search";
 import { textOffsetAtPosition, textPositionAtOffset } from "./editor/text-position";
 import { ProfileDialog } from "./execution/ProfileDialog";
@@ -605,6 +613,8 @@ const EXPLORER_FILTER_DEBOUNCE_MS = 40;
 const MAX_SYNTAX_HIGHLIGHT_SOURCE_LENGTH = 500_000;
 const EDITOR_NAVIGATION_LOADING_DELAY_MS = 150;
 const EDITOR_NAVIGATION_LOADING_MINIMUM_MS = 350;
+const EDITOR_POINTER_FALLBACK_FONT_SIZE = 13;
+const EDITOR_POINTER_FALLBACK_CHAR_WIDTH = 8;
 
 interface ExplorerFilterResultState {
   readonly query: string;
@@ -633,6 +643,134 @@ function decodedNewFileOption(command: string | undefined): Pick<WorkspaceFileCr
   } catch {
     return undefined;
   }
+}
+
+function cssPixelValue(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseFloat(value ?? "");
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function editorLineHeight(style: CSSStyleDeclaration): number {
+  const fontSize = cssPixelValue(style.fontSize, EDITOR_POINTER_FALLBACK_FONT_SIZE);
+  return cssPixelValue(style.lineHeight, fontSize * 1.65);
+}
+
+function editorCharacterWidth(textarea: HTMLTextAreaElement, style: CSSStyleDeclaration): number {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) return EDITOR_POINTER_FALLBACK_CHAR_WIDTH;
+  context.font = style.font || `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+  const width = context.measureText("M").width || context.measureText("0").width;
+  if (Number.isFinite(width) && width > 0) return width;
+  const columns = textarea.cols > 0 ? textarea.cols : 80;
+  return Math.max(1, textarea.clientWidth / columns);
+}
+
+function editorLineOffsetAtVisualColumn(
+  line: string,
+  rawVisualColumn: number,
+  tabSize: number,
+): number {
+  const target = Math.max(0, rawVisualColumn);
+  let visualColumn = 0;
+  for (let offset = 0; offset < line.length; offset += 1) {
+    const character = line[offset];
+    const nextVisualColumn = character === "\t"
+      ? visualColumn + Math.max(1, tabSize - (visualColumn % tabSize))
+      : visualColumn + 1;
+    if (target < (visualColumn + nextVisualColumn) / 2) return offset;
+    visualColumn = nextVisualColumn;
+  }
+  return line.length;
+}
+
+function editorTextOffsetAtClientPoint(
+  textarea: HTMLTextAreaElement,
+  clientX: number,
+  clientY: number,
+  scrollElement: HTMLElement = textarea,
+): number {
+  const style = window.getComputedStyle(textarea);
+  const bounds = textarea.getBoundingClientRect();
+  const lineHeight = editorLineHeight(style);
+  const charWidth = editorCharacterWidth(textarea, style);
+  // When a highlighted editor is scrolled by its parent, the textarea's own
+  // bounding rect already moves with that scroll. Adding the parent scroll here
+  // would therefore apply it twice. Plain textareas scroll internally and still
+  // need their own scroll offset added.
+  const scrollLeft = scrollElement === textarea ? textarea.scrollLeft : 0;
+  const scrollTop = scrollElement === textarea ? textarea.scrollTop : 0;
+  const contentX = clientX - bounds.left - cssPixelValue(style.paddingLeft, 0) + scrollLeft;
+  const contentY = clientY - bounds.top - cssPixelValue(style.paddingTop, 0) + scrollTop;
+  const lines = textarea.value.split("\n");
+  const lineIndex = Math.max(0, Math.min(lines.length - 1, Math.floor(contentY / lineHeight)));
+  const tabSize = Math.max(1, Math.round(cssPixelValue(style.tabSize, 4)));
+  const visualColumn = Math.max(0, contentX / charWidth);
+  const column = editorLineOffsetAtVisualColumn(lines[lineIndex] ?? "", visualColumn, tabSize);
+  let offset = 0;
+  for (let index = 0; index < lineIndex; index += 1) offset += (lines[index]?.length ?? 0) + 1;
+  return offset + column;
+}
+
+function editorMirrorTextOffsetAtClientPoint(
+  textarea: HTMLTextAreaElement,
+  mirror: HTMLElement,
+  clientX: number,
+  clientY: number,
+): number | undefined {
+  if (mirror.textContent !== textarea.value) return undefined;
+  const ownerDocument = mirror.ownerDocument as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  const previousPointerEvents = textarea.style.pointerEvents;
+  textarea.style.pointerEvents = "none";
+  try {
+    let node: Node | undefined;
+    let nodeOffset = 0;
+    const caretPosition = ownerDocument.caretPositionFromPoint?.(clientX, clientY);
+    if (caretPosition) {
+      node = caretPosition.offsetNode;
+      nodeOffset = caretPosition.offset;
+    } else {
+      const caretRange = ownerDocument.caretRangeFromPoint?.(clientX, clientY);
+      if (caretRange) {
+        node = caretRange.startContainer;
+        nodeOffset = caretRange.startOffset;
+      }
+    }
+    if (!node || !(node === mirror || mirror.contains(node.nodeType === Node.ELEMENT_NODE ? node : node.parentNode))) {
+      return undefined;
+    }
+    const range = ownerDocument.createRange();
+    range.selectNodeContents(mirror);
+    range.setEnd(node, nodeOffset);
+    return Math.max(0, Math.min(textarea.value.length, range.toString().length));
+  } catch {
+    return undefined;
+  } finally {
+    textarea.style.pointerEvents = previousPointerEvents;
+  }
+}
+
+function moveCollapsedEditorSelectionToPointer(
+  textarea: HTMLTextAreaElement,
+  clientX: number,
+  clientY: number,
+  scrollElement?: HTMLElement,
+  mirror?: HTMLElement,
+): number {
+  const offset = mirror
+    ? editorMirrorTextOffsetAtClientPoint(textarea, mirror, clientX, clientY)
+      ?? editorTextOffsetAtClientPoint(textarea, clientX, clientY, scrollElement ?? textarea)
+    : editorTextOffsetAtClientPoint(textarea, clientX, clientY, scrollElement ?? textarea);
+  if (
+    textarea.selectionEnd > textarea.selectionStart
+    && offset >= textarea.selectionStart
+    && offset <= textarea.selectionEnd
+  ) return offset;
+  textarea.setSelectionRange(offset, offset);
+  return offset;
 }
 
 function newFileContextMenuItems(options: readonly WorkspaceFileCreationOption[]): ResourceContextMenuItem[] {
@@ -873,6 +1011,16 @@ export function App() {
   const [selectedExplorerPaths, setSelectedExplorerPaths] = useState<ReadonlySet<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState>();
   useEffect(() => {
+    if (!contextMenu) return undefined;
+    const closeContextMenuOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".resource-context-menu")) return;
+      setContextMenu(undefined);
+    };
+    document.addEventListener("pointerdown", closeContextMenuOnOutsidePointer, true);
+    return () => document.removeEventListener("pointerdown", closeContextMenuOnOutsidePointer, true);
+  }, [contextMenu]);
+  useEffect(() => {
     const openTextContextMenu = (event: Event) => {
       const { text, x, y } = (event as CustomEvent<TextContextMenuDetail>).detail;
       if (!text) return;
@@ -907,6 +1055,7 @@ export function App() {
   const [editorSearchCaseSensitive, setEditorSearchCaseSensitive] = useState(false);
   const [editorSearchRegex, setEditorSearchRegex] = useState(false);
   const [editorNavigationLoading, setEditorNavigationLoading] = useState(false);
+  const [editorLocationHistory, setEditorLocationHistory] = useState(createEditorLocationHistory);
   const [editorViewport, setEditorViewport] = useState({ scrollTop: 0, height: 800 });
   const [editorLayoutMetrics, setEditorLayoutMetrics] = useState<EditorLayoutMetrics>({
     lineHeight: EDITOR_DEFAULT_LINE_HEIGHT,
@@ -926,6 +1075,13 @@ export function App() {
   const editorSearchReplaceInputRef = useRef<HTMLInputElement>(null);
   const syntaxLayerRef = useRef<HTMLPreElement>(null);
   const editorNavigationLoadingRef = useRef(false);
+  const editorLocationHistoryRef = useRef<EditorLocationHistory>(editorLocationHistory);
+  editorLocationHistoryRef.current = editorLocationHistory;
+  useEffect(() => {
+    const empty = createEditorLocationHistory();
+    editorLocationHistoryRef.current = empty;
+    setEditorLocationHistory(empty);
+  }, [workspaceName, workspaceRoot]);
   const restoredRef = useRef(false);
   const openWorkspaceResourceRef = useRef<
     (request: WorkbenchWorkspaceResourceOpenRequest) => Promise<void>
@@ -3166,9 +3322,15 @@ export function App() {
     setContextMenu({ target: { kind: "document", document }, x, y, items });
   };
 
-  const openEditorMenu = async (document: OpenDocument, textarea: HTMLTextAreaElement, x: number, y: number) => {
-    const selectionStart = textarea.selectionStart;
-    const selectionEnd = textarea.selectionEnd;
+  const openEditorMenu = async (
+    document: OpenDocument,
+    textarea: HTMLTextAreaElement,
+    x: number,
+    y: number,
+    preparedSelection?: { selectionStart: number; selectionEnd: number },
+  ) => {
+    const selectionStart = preparedSelection?.selectionStart ?? textarea.selectionStart;
+    const selectionEnd = preparedSelection?.selectionEnd ?? textarea.selectionEnd;
     const beforeCursor = textarea.value.slice(0, selectionStart);
     const lineStart = beforeCursor.lastIndexOf("\n") + 1;
     const context: TextEditorContextMenuContext = {
@@ -3190,10 +3352,107 @@ export function App() {
       icon: "copy",
       order: -100,
     }] : [];
-    const items = [...copyItems, ...(await Promise.all(providers.map((provider) => provider.provideItems(context)))).flat()]
+    const contributed = (await Promise.all(providers.map(async (provider) => {
+      try {
+        return await provider.provideItems(context);
+      } catch (cause) {
+        console.warn(`Falha ao obter itens do menu de contexto do editor pelo provider '${provider.id}'.`, cause);
+        return [];
+      }
+    }))).flat();
+    const items = [...copyItems, ...contributed]
       .filter((item) => item.enabled !== false)
       .sort((left, right) => (left.order ?? 0) - (right.order ?? 0));
     if (items.length) setContextMenu({ target: { kind: "editor", context }, x, y, items });
+  };
+
+  const captureEditorLocation = (
+    document: OpenDocument,
+    textarea: HTMLTextAreaElement,
+  ): EditorLocation => {
+    const selectionStart = textarea.selectionStart;
+    const selectionEnd = textarea.selectionEnd;
+    const start = textPositionAtOffset(textarea.value, selectionStart);
+    const end = textPositionAtOffset(textarea.value, selectionEnd);
+    const scrollContainer = highlightedEditorScrollRef.current ?? textarea;
+    return {
+      documentId: document.id,
+      ...(document.path ? { path: document.path } : {}),
+      line: start.line,
+      column: start.column,
+      endLine: end.line,
+      endColumn: end.column,
+      selectionStart,
+      selectionEnd,
+      scrollTop: scrollContainer.scrollTop,
+      scrollLeft: scrollContainer.scrollLeft,
+    };
+  };
+
+  const updateEditorLocationHistory = (history: EditorLocationHistory) => {
+    editorLocationHistoryRef.current = history;
+    setEditorLocationHistory(history);
+  };
+
+  const restoreEditorLocation = async (location: EditorLocation): Promise<boolean> => {
+    const opened = documentsRef.current.find((document) => document.id === location.documentId);
+    if (!opened && !location.path) {
+      setError("A origem da navegação não está mais aberta.");
+      return false;
+    }
+    if (!opened && location.path) {
+      await openWorkspaceResourceRef.current({
+        path: location.path,
+        line: location.line,
+        column: location.column,
+        endLine: location.endLine,
+        endColumn: location.endColumn,
+      });
+    } else {
+      setActiveDocumentId(location.documentId);
+    }
+    setDocuments((current) => current.map((document) => (
+      document.id === location.documentId || (!opened && document.path === location.path)
+        ? {
+            ...document,
+            selectionStart: location.selectionStart,
+            selectionEnd: location.selectionEnd,
+            scrollTop: location.scrollTop,
+            scrollLeft: location.scrollLeft,
+          }
+        : document
+    )));
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      const textarea = editorRef.current;
+      const scrollContainer = highlightedEditorScrollRef.current ?? textarea;
+      if (!textarea || !scrollContainer) return;
+      scrollContainer.scrollTop = location.scrollTop;
+      scrollContainer.scrollLeft = location.scrollLeft;
+      syncEditorLineRuler(scrollContainer.scrollTop);
+      textarea.focus({ preventScroll: true });
+      textarea.setSelectionRange(location.selectionStart, location.selectionEnd);
+    }));
+    return true;
+  };
+
+  const navigateEditorLocationHistory = async (direction: "back" | "forward") => {
+    const document = documentsRef.current.find((candidate) => candidate.id === activeDocumentId);
+    const textarea = editorRef.current;
+    if (!document || document.kind !== "text" || !textarea) return;
+    const current = captureEditorLocation(document, textarea);
+    const navigation = direction === "back"
+      ? navigateEditorLocationBack(editorLocationHistoryRef.current, current)
+      : navigateEditorLocationForward(editorLocationHistoryRef.current, current);
+    if (!navigation.location) return;
+    if (await restoreEditorLocation(navigation.location)) {
+      updateEditorLocationHistory(navigation.history);
+    }
+  };
+
+  const handleEditorAuxiliaryNavigation = (event: React.MouseEvent<HTMLTextAreaElement>) => {
+    if (event.button !== 3 && event.button !== 4) return;
+    event.preventDefault();
+    void navigateEditorLocationHistory(event.button === 3 ? "back" : "forward");
   };
 
   const navigateFromEditor = async (
@@ -3203,6 +3462,7 @@ export function App() {
   ) => {
     if (document.kind !== "text" || !document.path || editorNavigationLoadingRef.current) return;
     const offset = textarea.selectionStart;
+    const origin = captureEditorLocation(document, textarea);
     const providers = platform.capabilities.getAll<TextEditorNavigationProvider>("textEditor.navigation");
     if (!providers.length) {
       setError("Nenhum provider de navegação está ativo para este arquivo.");
@@ -3257,6 +3517,7 @@ export function App() {
           : [...current, sourceDocument]);
         setActiveDocumentId(id);
         revealEditorLocation(target.range.start.line, selectionStart, selectionEnd);
+        updateEditorLocationHistory(recordEditorLocation(editorLocationHistoryRef.current, origin));
         return;
       }
       if (!target.path) {
@@ -3270,6 +3531,7 @@ export function App() {
         endLine: target.range.end.line,
         endColumn: target.range.end.column,
       });
+      updateEditorLocationHistory(recordEditorLocation(editorLocationHistoryRef.current, origin));
     } finally {
       window.clearTimeout(loadingTimer);
       if (loadingVisibleAt !== undefined) {
@@ -3427,6 +3689,12 @@ export function App() {
 
   const handleEditorKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     event.currentTarget.classList.toggle("is-navigation-modifier", event.ctrlKey || event.metaKey);
+    if (event.altKey && !event.ctrlKey && !event.metaKey
+      && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+      event.preventDefault();
+      void navigateEditorLocationHistory(event.key === "ArrowLeft" ? "back" : "forward");
+      return;
+    }
     if (event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey) {
       event.preventDefault();
       const textarea = event.currentTarget;
@@ -3486,6 +3754,26 @@ export function App() {
           scrollLeft: scrollContainer.scrollLeft,
         }
       : document));
+  };
+
+  const prepareEditorContextMenu = (
+    textarea: HTMLTextAreaElement,
+    clientX: number,
+    clientY: number,
+    scrollContainer: HTMLElement = textarea,
+  ) => {
+    moveCollapsedEditorSelectionToPointer(
+      textarea,
+      clientX,
+      clientY,
+      scrollContainer,
+      scrollContainer === textarea ? undefined : syntaxLayerRef.current ?? undefined,
+    );
+    captureEditorState(textarea, scrollContainer);
+    return {
+      selectionStart: textarea.selectionStart,
+      selectionEnd: textarea.selectionEnd,
+    };
   };
 
   const syncEditorLineRuler = (scrollTop: number) => {
@@ -6306,6 +6594,22 @@ export function App() {
                 <div className="editor-toolbar">
                   <div className="breadcrumb">{activeDocument?.path ?? activeDocument?.origin ?? activeDocument?.name}</div>
                   <div className="editor-actions">
+                    <button
+                      className="icon-button small"
+                      type="button"
+                      aria-label="Voltar para posição anterior"
+                      title="Voltar para posição anterior (Alt+Seta esquerda)"
+                      disabled={!editorLocationHistory.back.length}
+                      onClick={() => void navigateEditorLocationHistory("back")}
+                    ><ArrowLeft size={14} /></button>
+                    <button
+                      className="icon-button small"
+                      type="button"
+                      aria-label="Avançar para próxima posição"
+                      title="Avançar para próxima posição (Alt+Seta direita)"
+                      disabled={!editorLocationHistory.forward.length}
+                      onClick={() => void navigateEditorLocationHistory("forward")}
+                    ><ArrowRight size={14} /></button>
                     {editorSearchOpen ? (
                       <div className="editor-search" role="search" data-invalid={editorSearchError ? "true" : undefined}>
                         <div className="editor-search__find-row">
@@ -6658,6 +6962,7 @@ export function App() {
                             readOnly={activeDocument.readOnly}
                             onChange={(event) => updateDocument(event.currentTarget)}
                             onKeyDown={handleEditorKeyDown}
+                            onMouseDown={handleEditorAuxiliaryNavigation}
                             onKeyUp={(event) => event.currentTarget.classList.toggle(
                               "is-navigation-modifier",
                               event.ctrlKey || event.metaKey,
@@ -6676,8 +6981,19 @@ export function App() {
                             onContextMenu={(event) => {
                               if (!activeDocument) return;
                               event.preventDefault();
-                              captureEditorState(event.currentTarget, highlightedEditorScrollRef.current ?? event.currentTarget);
-                              invoke(() => openEditorMenu(activeDocument, event.currentTarget, event.clientX, event.clientY));
+                              const preparedSelection = prepareEditorContextMenu(
+                                event.currentTarget,
+                                event.clientX,
+                                event.clientY,
+                                highlightedEditorScrollRef.current ?? event.currentTarget,
+                              );
+                              invoke(() => openEditorMenu(
+                                activeDocument,
+                                event.currentTarget,
+                                event.clientX,
+                                event.clientY,
+                                preparedSelection,
+                              ));
                             }}
                           />
                         </div>
@@ -6691,6 +7007,7 @@ export function App() {
                         readOnly={activeDocument?.readOnly}
                         onChange={(event) => updateDocument(event.currentTarget)}
                         onKeyDown={handleEditorKeyDown}
+                        onMouseDown={handleEditorAuxiliaryNavigation}
                         onKeyUp={(event) => event.currentTarget.classList.toggle(
                           "is-navigation-modifier",
                           event.ctrlKey || event.metaKey,
@@ -6709,8 +7026,19 @@ export function App() {
                         onContextMenu={(event) => {
                           if (!activeDocument) return;
                           event.preventDefault();
-                          captureEditorState(event.currentTarget);
-                          invoke(() => openEditorMenu(activeDocument, event.currentTarget, event.clientX, event.clientY));
+                          const preparedSelection = prepareEditorContextMenu(
+                            event.currentTarget,
+                            event.clientX,
+                            event.clientY,
+                            event.currentTarget,
+                          );
+                          invoke(() => openEditorMenu(
+                            activeDocument,
+                            event.currentTarget,
+                            event.clientX,
+                            event.clientY,
+                            preparedSelection,
+                          ));
                         }}
                         onScroll={(event) => {
                           syncEditorLineRuler(event.currentTarget.scrollTop);
@@ -7680,58 +8008,49 @@ export function App() {
         </Dialog.Root>
 
         {contextMenu ? (
-          <>
-            <button
-              className="resource-context-menu-backdrop"
-              type="button"
-              aria-label="Fechar menu de contexto"
-              onClick={() => setContextMenu(undefined)}
-              onContextMenu={(event) => { event.preventDefault(); setContextMenu(undefined); }}
-            />
-            <div
-              className="menu-content resource-context-menu"
-              role="menu"
-              aria-label={`Ações de ${contextMenu.target.kind === "root"
-                ? workspaceName
-                : contextMenu.target.kind === "entry"
-                  ? contextMenu.target.entry.name
-                  : contextMenu.target.kind === "document"
-                    ? contextMenu.target.document.name
-                    : contextMenu.target.kind === "editor"
-                      ? contextMenu.target.context.document.name
-                      : "texto selecionado"}`}
-              style={{ left: contextMenu.x, top: contextMenu.y }}
-            >
-              {contextMenu.items.map((item, index) => {
-                const previous = contextMenu.items[index - 1];
-                const separated = previous && previous.group !== item.group;
-                const icon = item.icon === "play" ? <Play size={14} />
-                  : item.icon === "folder" ? <FolderOpen size={14} />
-                    : item.icon === "copy" ? <Code2 size={14} />
-                      : item.icon === "terminal" ? <Terminal size={14} />
-                        : item.icon === "save" ? <Save size={14} />
-                          : item.icon === "close" ? <X size={14} />
-                            : item.icon === "plus" ? <Plus size={14} />
-                              : item.icon === "undo" ? <Undo2 size={14} />
-                                : item.icon === "diff" ? <Code2 size={14} />
-                                  : <File size={14} />;
-                return (
-                  <div key={item.id}>
-                    {separated ? <div className="menu-separator" /> : null}
-                    <button
-                      className="menu-item resource-context-menu__item"
-                      type="button"
-                      role="menuitem"
-                      disabled={busy}
-                      onClick={() => invoke(() => executeContextMenuItem(item, contextMenu.target))}
-                    >
-                      {icon}<span>{item.label}</span>
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </>
+          <div
+            className="menu-content resource-context-menu"
+            role="menu"
+            aria-label={`Ações de ${contextMenu.target.kind === "root"
+              ? workspaceName
+              : contextMenu.target.kind === "entry"
+                ? contextMenu.target.entry.name
+                : contextMenu.target.kind === "document"
+                  ? contextMenu.target.document.name
+                  : contextMenu.target.kind === "editor"
+                    ? contextMenu.target.context.document.name
+                    : "texto selecionado"}`}
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            {contextMenu.items.map((item, index) => {
+              const previous = contextMenu.items[index - 1];
+              const separated = previous && previous.group !== item.group;
+              const icon = item.icon === "play" ? <Play size={14} />
+                : item.icon === "folder" ? <FolderOpen size={14} />
+                  : item.icon === "copy" ? <Code2 size={14} />
+                    : item.icon === "terminal" ? <Terminal size={14} />
+                      : item.icon === "save" ? <Save size={14} />
+                        : item.icon === "close" ? <X size={14} />
+                          : item.icon === "plus" ? <Plus size={14} />
+                            : item.icon === "undo" ? <Undo2 size={14} />
+                              : item.icon === "diff" ? <Code2 size={14} />
+                                : <File size={14} />;
+              return (
+                <div key={item.id}>
+                  {separated ? <div className="menu-separator" /> : null}
+                  <button
+                    className="menu-item resource-context-menu__item"
+                    type="button"
+                    role="menuitem"
+                    disabled={busy}
+                    onClick={() => invoke(() => executeContextMenuItem(item, contextMenu.target))}
+                  >
+                    {icon}<span>{item.label}</span>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         ) : null}
 
         {projectOpenDialog ? (

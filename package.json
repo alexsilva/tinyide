@@ -40,7 +40,8 @@
     "chokidar": "^4.0.3",
     "mysql2": "^3.23.2",
     "node-pty": "^1.1.0",
-    "pg": "^8.22.0"
+    "pg": "^8.22.0",
+    "typescript-language-service": "npm:typescript@^5.9.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

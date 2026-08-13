@@ -48,4 +48,34 @@ describe("WorkbenchDialogHost", () => {
     expect(document.activeElement).toBe(input);
     expect(input?.value).toBe("texto preservado");
   });
+
+  it("lets a plugin resize its dialog without remounting the plugin content", () => {
+    const onSizeChange = vi.fn();
+    const mount = vi.fn(({ container, setSize }: { container: HTMLElement; setSize(size: "medium" | "large" | "full"): void }) => {
+      const button = document.createElement("button");
+      button.textContent = "Expandir";
+      button.addEventListener("click", () => setSize("full"));
+      container.append(button);
+      return { dispose: vi.fn() };
+    });
+    const provider = {
+      id: "git.stash",
+      pluginId: "tinyide.git",
+      title: "Gerenciar Stash",
+      mount,
+    } as WorkbenchDialogContribution;
+
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+
+    act(() => root?.render(<WorkbenchDialogHost provider={provider} onClose={() => undefined} onSizeChange={onSizeChange} />));
+    const button = host.querySelector("button");
+    expect(button).not.toBeNull();
+    act(() => button?.click());
+
+    expect(onSizeChange).toHaveBeenCalledWith("full");
+    expect(mount).toHaveBeenCalledTimes(1);
+    expect(host.querySelector("button")).toBe(button);
+  });
 });

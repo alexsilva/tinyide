@@ -1,16 +1,20 @@
-import type { WorkbenchDialogContribution } from "@tinyide/plugin-api";
+import type { WorkbenchDialogContribution, WorkbenchDialogSize } from "@tinyide/plugin-api";
 import { useEffect, useRef } from "react";
 
 export function WorkbenchDialogHost({
   provider,
   onClose,
+  onSizeChange,
 }: {
   readonly provider: WorkbenchDialogContribution;
   readonly onClose: () => void;
+  readonly onSizeChange?: (size: WorkbenchDialogSize) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const onCloseRef = useRef(onClose);
+  const onSizeChangeRef = useRef(onSizeChange);
   onCloseRef.current = onClose;
+  onSizeChangeRef.current = onSizeChange;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -21,6 +25,7 @@ export function WorkbenchDialogHost({
       const mounted = provider.mount({
         container,
         close: () => onCloseRef.current(),
+        setSize: (size) => onSizeChangeRef.current?.(size),
       });
       if (mounted && typeof (mounted as PromiseLike<unknown>).then === "function") {
         void Promise.resolve(mounted)

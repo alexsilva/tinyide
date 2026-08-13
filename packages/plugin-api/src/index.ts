@@ -934,6 +934,8 @@ export type WorkbenchDialogSize = "medium" | "large" | "full";
 export interface WorkbenchDialogMountContext {
   readonly container: HTMLElement;
   close(): void;
+  /** Changes the host dialog size without remounting the plugin content. */
+  setSize(size: WorkbenchDialogSize): void;
 }
 
 export interface WorkbenchDialogContribution {
@@ -942,6 +944,14 @@ export interface WorkbenchDialogContribution {
   readonly title: string;
   readonly description?: string;
   readonly size?: WorkbenchDialogSize;
+  /** Hides the generic plugin eyebrow from the host chrome for feature dialogs. */
+  readonly showPluginLabel?: boolean;
+  /**
+   * Called when the user requests to dismiss the dialog through the workbench
+   * chrome (for example the close button or Escape). Return `false` to keep
+   * the dialog open and handle the request inside the plugin instead.
+   */
+  readonly onCloseRequest?: () => boolean | void;
   mount(context: WorkbenchDialogMountContext): void | Disposable | Promise<void | Disposable>;
 }
 

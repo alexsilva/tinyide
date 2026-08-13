@@ -72,12 +72,16 @@ export function EditorLineDiffPeek({
   top,
   onClose,
   onAction,
+  onMouseEnter,
+  onMouseLeave,
 }: {
   readonly decoration: TextEditorLineDecoration;
   readonly provider: Pick<SyntaxHighlighter, "highlight"> | undefined;
   readonly top: number;
   readonly onClose: () => void;
   readonly onAction: (action: NonNullable<TextEditorLineDecoration["actions"]>[number]) => void;
+  readonly onMouseEnter?: () => void;
+  readonly onMouseLeave?: () => void;
 }) {
   const change = decoration.change;
   if (!change) return null;
@@ -92,6 +96,8 @@ export function EditorLineDiffPeek({
       className="editor-line-diff-peek"
       aria-label={`Diferença da linha ${decoration.line}`}
       style={{ "--editor-line-diff-top": `${top}px` } as CSSProperties}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       <div className="editor-line-diff-peek__heading">
         <div>

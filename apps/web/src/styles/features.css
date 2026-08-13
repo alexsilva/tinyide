@@ -88,7 +88,16 @@
 .diagnostic-tooltip > span { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px; }
 .diagnostic-tooltip strong { color: #d8dee9; font-weight: 600; }
 .code-editor--highlighted { resize: none; overflow: hidden; color: transparent; caret-color: #f2f4f8; background: transparent; -webkit-text-fill-color: transparent; }
+.code-editor--highlighted.code-editor--folded { caret-color: transparent; }
 .code-editor--highlighted::selection { background: rgb(80 110 170 / 52%); -webkit-text-fill-color: transparent; }
+.code-editor--highlighted.code-editor--folded::selection { background: transparent; }
+.editor-projected-selection { position: absolute; z-index: 3; inset: 0; pointer-events: none; }
+.editor-projected-selection[hidden] { display: none; }
+.editor-projected-selection__rect { position: absolute; background: rgb(80 110 170 / 52%); }
+.editor-projected-caret { position: absolute; z-index: 4; width: 1px; min-height: 1em; pointer-events: none; background: #f2f4f8; animation: editor-projected-caret-blink 1s steps(1, end) infinite; }
+.editor-projected-caret[hidden] { display: none; }
+.highlight-editor:not(:focus-within) .editor-projected-caret { opacity: 0; }
+@keyframes editor-projected-caret-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
 .syntax-keyword { color: #c586c0; }
 .syntax-string { color: #ce9178; }
 .syntax-number { color: #b5cea8; }
@@ -388,12 +397,17 @@
 .editor-line-ruler { min-height: 0; overflow: hidden; border-right: 1px solid #303b4c; background: #171d27; color: #91a0b6; user-select: none; scrollbar-width: none; }
 .editor-line-ruler::-webkit-scrollbar { display: none; }
 .editor-line-ruler pre { position: relative; min-height: 100%; margin: 0; padding: 0; font: 13px/1.65 "JetBrains Mono", "Fira Code", Consolas, monospace; white-space: normal; }
-.editor-line-ruler__line { position: absolute; left: 0; display: grid; width: 100%; grid-template-columns: 9px 8px minmax(0, 1fr); align-items: center; height: var(--editor-line-height, 21.45px); border: 0; padding: 0 7px 0 3px; background: transparent; color: inherit; font: inherit; text-align: right; cursor: pointer; }
+.editor-line-ruler__line { position: absolute; left: 0; display: grid; width: 100%; grid-template-columns: 9px 11px minmax(0, 1fr); align-items: center; height: var(--editor-line-height, 21.45px); border: 0; padding: 0 7px 0 3px; background: transparent; color: inherit; font: inherit; text-align: right; cursor: pointer; }
 .editor-line-ruler__line:hover,
 .editor-line-ruler__line:focus-visible { outline: none; background: #222b39; color: #c9d5e8; }
-.editor-line-ruler__line b { grid-column: 3; overflow: hidden; font: inherit; font-weight: 400; text-overflow: clip; }
-.editor-line-ruler__marker { display: block; grid-column: 1; justify-self: start; width: 3px; height: 100%; border-radius: 1px; background: transparent; }
-.editor-line-ruler__execution-marker { display: block; grid-column: 2; justify-self: start; width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 7px solid transparent; }
+.editor-line-ruler__line b { grid-row: 1; grid-column: 3; overflow: hidden; font: inherit; font-weight: 400; text-overflow: clip; }
+.editor-line-ruler__marker { position: relative; display: block; grid-row: 1; grid-column: 1; justify-self: stretch; width: 100%; height: 100%; }
+.editor-line-ruler__marker::before { content: ""; position: absolute; top: 0; left: 0; width: 3px; height: 100%; border-radius: 1px; background: transparent; transition: width .12s ease; }
+.editor-line-ruler__breakpoint { display: block; grid-row: 1; grid-column: 2; justify-self: center; width: 9px; height: 9px; border-radius: 50%; background: transparent; box-shadow: none; transition: background-color .12s ease, box-shadow .12s ease; }
+.editor-line-ruler__line:hover .editor-line-ruler__breakpoint { background: rgb(224 82 82 / 26%); box-shadow: inset 0 0 0 1px rgb(224 82 82 / 45%); }
+.editor-line-ruler__breakpoint.is-active,
+.editor-line-ruler__line:hover .editor-line-ruler__breakpoint.is-active { background: #e05252; box-shadow: 0 0 0 1px #7f2020, 0 0 4px rgb(224 82 82 / 45%); }
+.editor-line-ruler__execution-marker { display: block; z-index: 1; grid-row: 1; grid-column: 2; justify-self: center; width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 7px solid transparent; }
 .editor-line-ruler__execution-marker.is-current { border-left-color: #f0c75e; filter: drop-shadow(0 0 2px rgb(240 199 94 / 45%)); }
 .editor-fold-overlay { position: absolute; z-index: 3; top: 0; bottom: 0; left: var(--editor-gutter-width); width: 20px; pointer-events: none; }
 .editor-fold-toggle { position: absolute; top: calc(var(--fold-line-top) - var(--editor-scroll-top, 0px)); left: 1px; display: flex; width: 14px; height: var(--editor-line-height, 21.45px); align-items: center; justify-content: center; border: 1px solid rgb(108 140 255 / 30%); border-radius: 3px; padding: 0; background: rgb(23 29 39 / 88%); color: #91a0b6; font: 12px/1 "JetBrains Mono", "Fira Code", Consolas, monospace; pointer-events: auto; cursor: pointer; }
@@ -405,13 +419,18 @@
 .editor-fold-preview pre { flex: 1 1 auto; min-height: 0; overflow: auto; margin: 0; padding: 10px 12px; white-space: pre-wrap; color: #dbe4f5; font: 12px/1.45 "JetBrains Mono", "Fira Code", Consolas, monospace; }
 .editor-fold-preview__footer { flex: 0 0 auto; border-top: 1px solid rgb(145 160 182 / 16%); padding: 6px 10px; color: #91a0b6; font: 11px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 .editor-line-ruler__line.is-debug-current { background: #293044; color: #f4f7fb; }
-.editor-line-ruler__line.has-added .editor-line-ruler__marker { background: #55b876; }
-.editor-line-ruler__line.has-modified .editor-line-ruler__marker { background: #d2a84a; }
-.editor-line-ruler__line.has-deleted .editor-line-ruler__marker { height: 4px; align-self: start; margin-top: -2px; background: #e06c75; box-shadow: 0 0 0 1px #171d27; }
-.editor-line-ruler__line.has-information .editor-line-ruler__marker { background: #6d91df; }
-.editor-line-ruler__line.has-warning .editor-line-ruler__marker { background: #d2a84a; }
-.editor-line-ruler__line.has-error .editor-line-ruler__marker { background: #e06c75; }
-.editor-line-ruler__marker.is-breakpoint { width: 8px; height: 8px; align-self: center; border-radius: 50%; background: #e05252; box-shadow: 0 0 0 1px #7f2020; }
+.editor-line-ruler__line.has-added .editor-line-ruler__marker::before { background: #55b876; }
+.editor-line-ruler__line.has-modified .editor-line-ruler__marker::before { background: #d2a84a; }
+.editor-line-ruler__line.has-deleted .editor-line-ruler__marker::before { top: -2px; height: 4px; background: #e06c75; box-shadow: 0 0 0 1px #171d27; }
+.editor-line-ruler__line.has-information .editor-line-ruler__marker::before { background: #6d91df; }
+.editor-line-ruler__line.has-warning .editor-line-ruler__marker::before { background: #d2a84a; }
+.editor-line-ruler__line.has-error .editor-line-ruler__marker::before { background: #e06c75; }
+.editor-line-ruler__line.has-added .editor-line-ruler__marker:hover::before,
+.editor-line-ruler__line.has-modified .editor-line-ruler__marker:hover::before,
+.editor-line-ruler__line.has-deleted .editor-line-ruler__marker:hover::before,
+.editor-line-ruler__line.is-change-hover .editor-line-ruler__marker::before { width: 6px; }
+/* Linhas do mesmo bloco de diff formam uma faixa contínua: sem raio entre segmentos. */
+.editor-line-ruler__line.is-change-hover .editor-line-ruler__marker::before { border-radius: 0; }
 .editor-debug-current-line { position: absolute; z-index: 1; top: calc(var(--debug-line-content-top) - var(--editor-scroll-top, 0px)); right: 0; left: var(--editor-gutter-width); height: var(--editor-line-height, 21.45px); pointer-events: none; background: rgb(91 107 155 / 24%); border-top: 1px solid rgb(129 151 214 / 18%); border-bottom: 1px solid rgb(129 151 214 / 18%); }
 .execution-panel-view { display: flex; height: calc(100% - var(--execution-tab-height, 30px)); min-height: 0; flex-direction: column; }
 .execution-panel-view[hidden] { display: none; }
@@ -486,10 +505,10 @@
 .debug-variable__value.is-boolean { color: #569cd6; }
 .debug-variable__value.is-null { color: #808b9b; font-style: italic; }
 .debug-variable__children { border-left: 2px solid #303b4c; margin-left: 6px; }
-.editor-line-ruler.decorations-only .editor-line-ruler__line { grid-template-columns: 9px 8px; padding: 0 2px; }
-.editor-line-ruler.decorations-only .editor-line-ruler__marker { width: 4px; }
+.editor-line-ruler.decorations-only .editor-line-ruler__line { grid-template-columns: 9px 11px; padding: 0 2px; }
+.editor-line-ruler.decorations-only .editor-line-ruler__marker::before { width: 4px; }
 
-.editor-line-diff-peek { position: absolute; z-index: 8; top: clamp(4px, var(--editor-line-diff-top, 4px), calc(100% - 96px)); right: 12px; left: 64px; max-width: 780px; overflow: hidden; border: 1px solid #354052; border-radius: 6px; background: #111720; box-shadow: 0 8px 22px rgb(0 0 0 / 30%); }
+.editor-line-diff-peek { position: absolute; z-index: 8; top: clamp(4px, var(--editor-line-diff-top, 4px), calc(100% - 140px)); left: 64px; width: max-content; min-width: 300px; max-width: min(780px, calc(100% - 76px)); overflow: hidden; border: 1px solid #354052; border-radius: 6px; background: #111720; box-shadow: 0 8px 22px rgb(0 0 0 / 30%); }
 .editor-line-diff-peek__heading { display: flex; align-items: center; justify-content: space-between; min-height: 30px; gap: 8px; padding: 3px 5px 3px 8px; border-bottom: 1px solid #293342; background: #171e29; }
 .editor-line-diff-peek__heading > div { display: flex; align-items: center; min-width: 0; gap: 8px; }
 .editor-line-diff-peek__actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
@@ -507,7 +526,7 @@
 .editor-line-diff-peek__side > header { padding: 3px 8px; border-bottom: 1px solid #28313e; color: #8794a7; font-size: 8px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .editor-line-diff-peek__side.is-before > header { color: #d58a91; }
 .editor-line-diff-peek__side.is-after > header { color: #75c894; }
-.editor-line-diff-peek__code { min-width: 0; }
+.editor-line-diff-peek__code { min-width: 0; max-height: 176px; overflow: auto; }
 .editor-line-diff-peek__row { display: grid; min-height: 20px; grid-template-columns: 22px 38px minmax(0, 1fr); }
 .editor-line-diff-peek__row.is-before { background: rgb(113 38 49 / 18%); }
 .editor-line-diff-peek__row.is-after { background: rgb(34 111 66 / 18%); }

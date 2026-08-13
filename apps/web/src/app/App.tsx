@@ -482,6 +482,12 @@ function foldMarker(id: string, hiddenLineCount: number): string {
 const FOLD_PREVIEW_MAX_HEIGHT = 520;
 const FOLD_PREVIEW_MIN_HEIGHT = 140;
 const FOLD_PREVIEW_MARGIN = 12;
+// Medidas do popup em features.css: cabeçalho (padding 7px×2 + fonte 11px/1.2 + borda),
+// <pre> com padding 10px×2 e fonte 12px/1.45, rodapé opcional e bordas externas.
+const FOLD_PREVIEW_TITLE_HEIGHT = 28;
+const FOLD_PREVIEW_CHROME_HEIGHT = FOLD_PREVIEW_TITLE_HEIGHT + 20 + 2;
+const FOLD_PREVIEW_TEXT_LINE_HEIGHT = 17.4;
+const FOLD_PREVIEW_FOOTER_HEIGHT = 24;
 
 function collapseFolds(content: string, folds: readonly DocumentFold[]): FoldProjection {
   const lines = content.split("\n");
@@ -712,13 +718,53 @@ function editorTextOffsetAtClientPoint(
   return offset + column;
 }
 
+function editorProjectedTextOffsetAtClientPoint(
+  textarea: HTMLTextAreaElement,
+  projection: FoldProjection,
+  clientX: number,
+  clientY: number,
+  scrollElement: HTMLElement = textarea,
+): number {
+  const style = window.getComputedStyle(textarea);
+  const bounds = textarea.getBoundingClientRect();
+  const lineHeight = editorLineHeight(style);
+  const charWidth = editorCharacterWidth(textarea, style);
+  const scrollLeft = scrollElement === textarea ? textarea.scrollLeft : 0;
+  const scrollTop = scrollElement === textarea ? textarea.scrollTop : 0;
+  const contentX = clientX - bounds.left - cssPixelValue(style.paddingLeft, 0) + scrollLeft;
+  const contentY = clientY - bounds.top - cssPixelValue(style.paddingTop, 0) + scrollTop;
+  const visibleLines = projection.content.split("\n");
+  const sourceLines = textarea.value.split("\n");
+  const visibleLineIndex = Math.max(0, Math.min(visibleLines.length - 1, Math.floor(contentY / lineHeight)));
+  const visibleLine = visibleLineIndex + 1;
+
+  // The marker is synthetic text and has no editable counterpart. Anchor a
+  // click on it at the end of the fold header instead of inside hidden text.
+  const markerFoldId = projection.foldIdByMarkerVisibleLine.get(visibleLine);
+  let fileLine = projection.fileLineByVisibleLine[visibleLineIndex] ?? visibleLine;
+  if (markerFoldId) {
+    fileLine = projection.fileLineByVisibleLine[Math.max(0, visibleLineIndex - 1)] ?? Math.max(1, fileLine - 1);
+  }
+
+  const sourceLineIndex = Math.max(0, Math.min(sourceLines.length - 1, fileLine - 1));
+  const sourceLine = sourceLines[sourceLineIndex] ?? "";
+  const tabSize = Math.max(1, Math.round(cssPixelValue(style.tabSize, 4)));
+  const visualColumn = Math.max(0, contentX / charWidth);
+  const column = markerFoldId
+    ? sourceLine.length
+    : editorLineOffsetAtVisualColumn(sourceLine, visualColumn, tabSize);
+  let offset = 0;
+  for (let index = 0; index < sourceLineIndex; index += 1) offset += (sourceLines[index]?.length ?? 0) + 1;
+  return offset + column;
+}
+
 function editorMirrorTextOffsetAtClientPoint(
   textarea: HTMLTextAreaElement,
   mirror: HTMLElement,
   clientX: number,
   clientY: number,
 ): number | undefined {
-  if (mirror.textContent !== textarea.value) return undefined;
+  const mirrorText = mirror.textContent ?? "";
   const ownerDocument = mirror.ownerDocument as Document & {
     caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
     caretRangeFromPoint?: (x: number, y: number) => Range | null;
@@ -745,12 +791,233 @@ function editorMirrorTextOffsetAtClientPoint(
     const range = ownerDocument.createRange();
     range.selectNodeContents(mirror);
     range.setEnd(node, nodeOffset);
-    return Math.max(0, Math.min(textarea.value.length, range.toString().length));
+    return Math.max(0, Math.min(mirrorText.length, range.toString().length));
   } catch {
     return undefined;
   } finally {
     textarea.style.pointerEvents = previousPointerEvents;
   }
+}
+
+function editorSourceOffsetFromProjectedOffset(
+  source: string,
+  projection: FoldProjection,
+  rawProjectedOffset: number,
+): number {
+  const projectedPosition = textPositionAtOffset(projection.content, rawProjectedOffset);
+  const visibleLineIndex = Math.max(0, projectedPosition.line - 1);
+  const markerFoldId = projection.foldIdByMarkerVisibleLine.get(projectedPosition.line);
+  if (markerFoldId) {
+    const headerVisibleLineIndex = Math.max(0, visibleLineIndex - 1);
+    const headerFileLine = projection.fileLineByVisibleLine[headerVisibleLineIndex] ?? 1;
+    return textOffsetAtPosition(source, {
+      line: headerFileLine,
+      column: (source.split("\n")[headerFileLine - 1]?.length ?? 0) + 1,
+    });
+  }
+  const fileLine = projection.fileLineByVisibleLine[visibleLineIndex] ?? projectedPosition.line;
+  return textOffsetAtPosition(source, {
+    line: fileLine,
+    column: projectedPosition.column,
+  });
+}
+
+function editorProjectedOffsetFromSourceOffset(
+  source: string,
+  projection: FoldProjection,
+  rawSourceOffset: number,
+): number {
+  const sourcePosition = textPositionAtOffset(source, rawSourceOffset);
+  let visibleLine = projection.visibleLineByFileLine[sourcePosition.line - 1] ?? sourcePosition.line;
+  let visibleColumn = sourcePosition.column;
+  if (projection.hiddenLineByFileLine[sourcePosition.line - 1]) {
+    visibleLine = Math.max(1, visibleLine - 1);
+    visibleColumn = (projection.content.split("\n")[visibleLine - 1]?.length ?? 0) + 1;
+  }
+  return textOffsetAtPosition(projection.content, {
+    line: visibleLine,
+    column: visibleColumn,
+  });
+}
+
+function editorMirrorCaretRectAtTextOffset(
+  mirror: HTMLElement,
+  rawOffset: number,
+): { left: number; top: number; height: number } | undefined {
+  const text = mirror.textContent ?? "";
+  const offset = Math.max(0, Math.min(text.length, Math.trunc(rawOffset)));
+  const ownerDocument = mirror.ownerDocument;
+  const position = textPositionAtOffset(text, offset);
+  const lineStart = textOffsetAtPosition(text, { line: position.line, column: 1 });
+  const lineBreak = text.indexOf("\n", lineStart);
+  const lineEnd = lineBreak < 0 ? text.length : lineBreak;
+  if (lineStart === lineEnd) {
+    const style = ownerDocument.defaultView?.getComputedStyle(mirror);
+    if (style) {
+      const bounds = mirror.getBoundingClientRect();
+      const lineHeight = editorLineHeight(style);
+      const fontSize = cssPixelValue(style.fontSize, EDITOR_POINTER_FALLBACK_FONT_SIZE);
+      const height = Math.min(lineHeight, Math.max(1, fontSize * 1.3));
+      return {
+        left: bounds.left + cssPixelValue(style.paddingLeft, 0),
+        top: bounds.top
+          + cssPixelValue(style.paddingTop, 0)
+          + (position.line - 1) * lineHeight
+          + Math.max(0, (lineHeight - height) / 2),
+        height,
+      };
+    }
+  }
+  const walker = ownerDocument.createTreeWalker(mirror, NodeFilter.SHOW_TEXT);
+  let consumed = 0;
+  let node: Node | null;
+  let lastTextNode: Text | undefined;
+  while ((node = walker.nextNode())) {
+    if (node.nodeType !== Node.TEXT_NODE) continue;
+    const textNode = node as Text;
+    const length = textNode.data.length;
+    lastTextNode = textNode;
+    if (offset > consumed + length) {
+      consumed += length;
+      continue;
+    }
+    const localOffset = Math.max(0, Math.min(length, offset - consumed));
+    const collapsed = ownerDocument.createRange();
+    collapsed.setStart(textNode, localOffset);
+    collapsed.collapse(true);
+    const collapsedRect = collapsed.getBoundingClientRect();
+    if (collapsedRect.height > 0) {
+      return { left: collapsedRect.left, top: collapsedRect.top, height: collapsedRect.height };
+    }
+    if (length > 0 && localOffset < length && textNode.data[localOffset] !== "\n") {
+      const character = ownerDocument.createRange();
+      character.setStart(textNode, localOffset);
+      character.setEnd(textNode, localOffset + 1);
+      const rect = character.getBoundingClientRect();
+      if (rect.height > 0) return { left: rect.left, top: rect.top, height: rect.height };
+    }
+    if (length > 0 && localOffset > 0) {
+      const previous = ownerDocument.createRange();
+      previous.setStart(textNode, localOffset - 1);
+      previous.setEnd(textNode, localOffset);
+      const rect = previous.getBoundingClientRect();
+      if (rect.height > 0) return { left: rect.right, top: rect.top, height: rect.height };
+    }
+    consumed += length;
+  }
+  if (lastTextNode?.data.length) {
+    const range = ownerDocument.createRange();
+    range.setStart(lastTextNode, lastTextNode.data.length - 1);
+    range.setEnd(lastTextNode, lastTextNode.data.length);
+    const rect = range.getBoundingClientRect();
+    if (rect.height > 0) return { left: rect.right, top: rect.top, height: rect.height };
+  }
+  return undefined;
+}
+
+function editorMirrorRectsAtTextRange(
+  mirror: HTMLElement,
+  rawStart: number,
+  rawEnd: number,
+): readonly DOMRect[] {
+  const text = mirror.textContent ?? "";
+  const start = Math.max(0, Math.min(text.length, Math.trunc(rawStart)));
+  const end = Math.max(start, Math.min(text.length, Math.trunc(rawEnd)));
+  if (start === end) return [];
+  const ownerDocument = mirror.ownerDocument;
+  const locate = (offset: number): { node: Text; offset: number } | undefined => {
+    const walker = ownerDocument.createTreeWalker(mirror, NodeFilter.SHOW_TEXT);
+    let consumed = 0;
+    let node: Node | null;
+    let last: Text | undefined;
+    while ((node = walker.nextNode())) {
+      if (node.nodeType !== Node.TEXT_NODE) continue;
+      const textNode = node as Text;
+      last = textNode;
+      const length = textNode.data.length;
+      if (offset <= consumed + length) {
+        return { node: textNode, offset: Math.max(0, Math.min(length, offset - consumed)) };
+      }
+      consumed += length;
+    }
+    return last ? { node: last, offset: last.data.length } : undefined;
+  };
+  const startPosition = locate(start);
+  const endPosition = locate(end);
+  if (!startPosition || !endPosition) return [];
+  const range = ownerDocument.createRange();
+  range.setStart(startPosition.node, startPosition.offset);
+  range.setEnd(endPosition.node, endPosition.offset);
+  return Array.from(range.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0);
+}
+
+function editorWordRangeAtOffset(source: string, rawOffset: number): { start: number; end: number } {
+  const offset = Math.max(0, Math.min(source.length, Math.trunc(rawOffset)));
+  const wordCharacter = /[\p{L}\p{N}_$]/u;
+  const candidate = offset < source.length && wordCharacter.test(source[offset] ?? "")
+    ? offset
+    : offset > 0 && wordCharacter.test(source[offset - 1] ?? "")
+      ? offset - 1
+      : -1;
+  if (candidate < 0) return { start: offset, end: Math.min(source.length, offset + 1) };
+  let start = candidate;
+  let end = candidate + 1;
+  while (start > 0 && wordCharacter.test(source[start - 1] ?? "")) start -= 1;
+  while (end < source.length && wordCharacter.test(source[end] ?? "")) end += 1;
+  return { start, end };
+}
+
+function lineStartOffset(source: string, line: number): number {
+  return textOffsetAtPosition(source, { line, column: 1 });
+}
+
+function remapDocumentFoldsAfterEdit(
+  previousSource: string,
+  nextSource: string,
+  folds: readonly DocumentFold[],
+): readonly DocumentFold[] {
+  if (!folds.length || previousSource === nextSource) return folds;
+  let prefix = 0;
+  const commonLength = Math.min(previousSource.length, nextSource.length);
+  while (prefix < commonLength && previousSource[prefix] === nextSource[prefix]) prefix += 1;
+  let previousSuffix = previousSource.length;
+  let nextSuffix = nextSource.length;
+  while (
+    previousSuffix > prefix
+    && nextSuffix > prefix
+    && previousSource[previousSuffix - 1] === nextSource[nextSuffix - 1]
+  ) {
+    previousSuffix -= 1;
+    nextSuffix -= 1;
+  }
+  const removed = previousSource.slice(prefix, previousSuffix);
+  const inserted = nextSource.slice(prefix, nextSuffix);
+  const lineDelta = (inserted.match(/\n/g)?.length ?? 0) - (removed.match(/\n/g)?.length ?? 0);
+  const insertedHasLineBreak = inserted.includes("\n") || removed.includes("\n");
+
+  return folds.flatMap((fold) => {
+    const headerStart = lineStartOffset(previousSource, fold.startLine);
+    const hiddenStart = lineStartOffset(previousSource, fold.startLine + 1);
+    const afterFold = fold.endLine < previousSource.split("\n").length
+      ? lineStartOffset(previousSource, fold.endLine + 1)
+      : previousSource.length;
+
+    // Editing hidden content invalidates only that fold. Editing the header may
+    // keep the fold as long as its line structure did not change.
+    const touchesHidden = previousSuffix > prefix
+      ? prefix < afterFold && previousSuffix > hiddenStart
+      : prefix >= hiddenStart && prefix < afterFold;
+    if (touchesHidden) return [];
+    if (prefix < hiddenStart && previousSuffix > headerStart && insertedHasLineBreak) return [];
+
+    if (previousSuffix <= headerStart && lineDelta !== 0) {
+      return [{ ...fold, startLine: fold.startLine + lineDelta, endLine: fold.endLine + lineDelta }];
+    }
+    if (previousSuffix <= hiddenStart && lineDelta !== 0) {
+      return [{ ...fold, endLine: fold.endLine + lineDelta }];
+    }
+    return [fold];
+  });
 }
 
 function moveCollapsedEditorSelectionToPointer(
@@ -759,11 +1026,18 @@ function moveCollapsedEditorSelectionToPointer(
   clientY: number,
   scrollElement?: HTMLElement,
   mirror?: HTMLElement,
+  projection?: FoldProjection,
 ): number {
-  const offset = mirror
+  const mirrorOffset = mirror
     ? editorMirrorTextOffsetAtClientPoint(textarea, mirror, clientX, clientY)
-      ?? editorTextOffsetAtClientPoint(textarea, clientX, clientY, scrollElement ?? textarea)
-    : editorTextOffsetAtClientPoint(textarea, clientX, clientY, scrollElement ?? textarea);
+    : undefined;
+  const offset = projection
+    ? mirrorOffset !== undefined
+      ? editorSourceOffsetFromProjectedOffset(textarea.value, projection, mirrorOffset)
+      : editorProjectedTextOffsetAtClientPoint(textarea, projection, clientX, clientY, scrollElement ?? textarea)
+    : mirrorOffset !== undefined
+      ? mirrorOffset
+      : editorTextOffsetAtClientPoint(textarea, clientX, clientY, scrollElement ?? textarea);
   if (
     textarea.selectionEnd > textarea.selectionStart
     && offset >= textarea.selectionStart
@@ -797,11 +1071,19 @@ function newFileContextMenuItems(options: readonly WorkspaceFileCreationOption[]
 interface ActiveWorkbenchDialog {
   readonly token: symbol;
   readonly contribution: WorkbenchDialogContribution;
+  readonly size?: WorkbenchDialogContribution["size"];
 }
 
 function lineDecorationClassName(decorations: readonly TextEditorLineDecoration[]): string {
   const kinds = [...new Set(decorations.map((decoration) => decoration.kind))];
   return kinds.map((kind) => ` has-${kind}`).join("");
+}
+
+function editorChangeBlockKey(decoration: TextEditorLineDecoration | undefined): string | undefined {
+  const after = decoration?.change?.after;
+  const first = after?.[0];
+  if (!after?.length || !first) return undefined;
+  return `${first.line}:${after.length}:${decoration?.change?.before.length ?? 0}`;
 }
 
 function lintSettingsStorageKey(workspaceName: string, providerId: string): string {
@@ -987,6 +1269,21 @@ export function App() {
   const [projectOpenBusy, setProjectOpenBusy] = useState(false);
   const [editorLineDecorations, setEditorLineDecorations] = useState<readonly TextEditorLineDecoration[]>([]);
   const [selectedEditorLineDecoration, setSelectedEditorLineDecoration] = useState<TextEditorLineDecoration>();
+  const [hoveredEditorChangeKey, setHoveredEditorChangeKey] = useState<string>();
+  const editorDiffPeekHoverTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const cancelEditorDiffPeekHoverTimer = () => {
+    if (editorDiffPeekHoverTimerRef.current === undefined) return;
+    clearTimeout(editorDiffPeekHoverTimerRef.current);
+    editorDiffPeekHoverTimerRef.current = undefined;
+  };
+  const openEditorDiffPeekOnHover = (decoration: TextEditorLineDecoration) => {
+    cancelEditorDiffPeekHoverTimer();
+    editorDiffPeekHoverTimerRef.current = setTimeout(() => setSelectedEditorLineDecoration(decoration), 140);
+  };
+  const scheduleEditorDiffPeekClose = () => {
+    cancelEditorDiffPeekHoverTimer();
+    editorDiffPeekHoverTimerRef.current = setTimeout(() => setSelectedEditorLineDecoration(undefined), 260);
+  };
   const [editorDecorationRevision, setEditorDecorationRevision] = useState(0);
   const [resourceDecorations, setResourceDecorations] = useState<ReadonlyMap<string, ResourceDecoration>>(new Map());
   const [resourceDecorationRevision, setResourceDecorationRevision] = useState(0);
@@ -1066,6 +1363,20 @@ export function App() {
   const [activeFoldRangeState, setActiveFoldRangeState] = useState<ActiveFoldRangeState>();
   const [hoveredFoldLine, setHoveredFoldLine] = useState<number | undefined>(undefined);
   const [foldPreviewLine, setFoldPreviewLine] = useState<number | undefined>(undefined);
+  const foldPreviewCloseTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const cancelFoldPreviewClose = () => {
+    if (foldPreviewCloseTimerRef.current === undefined) return;
+    clearTimeout(foldPreviewCloseTimerRef.current);
+    foldPreviewCloseTimerRef.current = undefined;
+  };
+  const openFoldPreview = (line: number) => {
+    cancelFoldPreviewClose();
+    setFoldPreviewLine(line);
+  };
+  const scheduleFoldPreviewClose = () => {
+    cancelFoldPreviewClose();
+    foldPreviewCloseTimerRef.current = setTimeout(() => setFoldPreviewLine(undefined), 600);
+  };
   const documentFoldsRef = useRef<ReadonlyMap<string, readonly DocumentFold[]>>(documentFolds);
   documentFoldsRef.current = documentFolds;
   const foldIdCounterRef = useRef(0);
@@ -1074,6 +1385,8 @@ export function App() {
   const editorSearchInputRef = useRef<HTMLInputElement>(null);
   const editorSearchReplaceInputRef = useRef<HTMLInputElement>(null);
   const syntaxLayerRef = useRef<HTMLPreElement>(null);
+  const foldedEditorCaretRef = useRef<HTMLSpanElement>(null);
+  const foldedEditorSelectionRef = useRef<HTMLDivElement>(null);
   const editorNavigationLoadingRef = useRef(false);
   const editorLocationHistoryRef = useRef<EditorLocationHistory>(editorLocationHistory);
   editorLocationHistoryRef.current = editorLocationHistory;
@@ -1536,6 +1849,79 @@ export function App() {
       : undefined
   ), [activeDocument?.id, activeDocument?.kind, activeEditorContent, activeDocumentFolds]);
   const activeEditorDisplayContent = activeFoldProjection?.content ?? activeEditorContent;
+  useLayoutEffect(() => {
+    const caret = foldedEditorCaretRef.current;
+    const selection = foldedEditorSelectionRef.current;
+    const textarea = editorRef.current;
+    const mirror = syntaxLayerRef.current;
+    const content = mirror?.parentElement;
+    if (
+      !caret
+      || !selection
+      || !textarea
+      || !mirror
+      || !content
+      || !activeFoldProjection
+      || activeDocument?.kind !== "text"
+    ) {
+      if (caret) caret.hidden = true;
+      if (selection) selection.hidden = true;
+      return;
+    }
+    const contentRect = content.getBoundingClientRect();
+    if (textarea.selectionStart !== textarea.selectionEnd) {
+      caret.hidden = true;
+      const projectedStart = editorProjectedOffsetFromSourceOffset(
+        textarea.value,
+        activeFoldProjection,
+        textarea.selectionStart,
+      );
+      const projectedEnd = editorProjectedOffsetFromSourceOffset(
+        textarea.value,
+        activeFoldProjection,
+        textarea.selectionEnd,
+      );
+      const rects = editorMirrorRectsAtTextRange(mirror, projectedStart, projectedEnd);
+      selection.replaceChildren(...rects.map((rect) => {
+        const highlight = document.createElement("span");
+        highlight.className = "editor-projected-selection__rect";
+        highlight.style.left = `${rect.left - contentRect.left}px`;
+        highlight.style.top = `${rect.top - contentRect.top}px`;
+        highlight.style.width = `${rect.width}px`;
+        highlight.style.height = `${rect.height}px`;
+        return highlight;
+      }));
+      selection.hidden = rects.length === 0;
+      return;
+    }
+    selection.hidden = true;
+    selection.replaceChildren();
+    const projectedOffset = editorProjectedOffsetFromSourceOffset(
+      textarea.value,
+      activeFoldProjection,
+      textarea.selectionStart,
+    );
+    const rect = editorMirrorCaretRectAtTextOffset(mirror, projectedOffset);
+    if (!rect) {
+      caret.hidden = true;
+      return;
+    }
+    caret.style.left = `${rect.left - contentRect.left}px`;
+    caret.style.top = `${rect.top - contentRect.top}px`;
+    caret.style.height = `${rect.height}px`;
+    caret.hidden = false;
+    // Restart blink after navigation, matching native caret behavior.
+    caret.style.animation = "none";
+    void caret.offsetHeight;
+    caret.style.animation = "";
+  }, [
+    activeDocument?.id,
+    activeDocument?.kind,
+    activeDocument?.selectionStart,
+    activeDocument?.selectionEnd,
+    activeFoldProjection,
+    activeEditorDisplayContent,
+  ]);
   const editorMetrics = useMemo(
     () => activeDocument?.kind === "text"
       ? editorDocumentMetrics(activeEditorDisplayContent)
@@ -1611,6 +1997,13 @@ export function App() {
     }
     return grouped;
   }, [editorLineDecorations, activeFoldProjection]);
+  // Peeks de bloco ancoram na primeira linha do bloco (change.after), não na
+  // linha do marcador que recebeu o hover — um bloco tem um único popup.
+  const editorDiffPeekAnchorLine = (decoration: TextEditorLineDecoration): number => {
+    const fileLine = decoration.change?.after?.[0]?.line;
+    if (fileLine === undefined) return decoration.line;
+    return activeFoldProjection?.visibleLineByFileLine?.[fileLine - 1] ?? fileLine;
+  };
   const activeFoldRanges: readonly FoldRange[] = activeFoldRangeState
     && activeFoldRangeState.documentId === activeDocument?.id
     && activeFoldRangeState.providerId === activeLanguageProvider?.id
@@ -1622,6 +2015,7 @@ export function App() {
     return new Map(activeFoldRanges.map((range) => [range.startLine, range]));
   }, [activeDocument?.kind, activeFoldRanges]);
   const foldedHeaderLines = activeFoldProjection?.foldIdByHeaderVisibleLine ?? new Map<number, string>();
+  const foldedMarkerLines = activeFoldProjection?.foldIdByMarkerVisibleLine ?? new Map<number, string>();
   const activeDebugVisibleLine = activeDocument?.kind === "text"
     && activeDocument.path === activeDebugPath
     && activeDebugLine
@@ -1636,13 +2030,24 @@ export function App() {
       ? { line: foldPreviewLine, text: hiddenText, lineCount: hiddenText.split("\n").length }
       : undefined;
   }, [activeDocument?.kind, activeFoldProjection, foldedHeaderLines, foldPreviewLine]);
+  // Cabeçalho do popup centrado verticalmente na linha do botão de expandir.
   const foldPreviewRawTop = foldPreview
-    ? editorLineTop(foldPreview.line) - editorViewport.scrollTop + editorLayoutMetrics.lineHeight
+    ? editorLineTop(foldPreview.line) - editorViewport.scrollTop
+      + (editorLayoutMetrics.lineHeight - FOLD_PREVIEW_TITLE_HEIGHT) / 2
     : FOLD_PREVIEW_MARGIN;
+  // Só desloca para cima o necessário para caber a altura real do conteúdo, não o teto de 520px.
+  const foldPreviewEstimatedHeight = foldPreview
+    ? Math.min(
+        FOLD_PREVIEW_MAX_HEIGHT,
+        FOLD_PREVIEW_CHROME_HEIGHT
+          + foldPreview.lineCount * FOLD_PREVIEW_TEXT_LINE_HEIGHT
+          + (foldPreview.lineCount > 12 ? FOLD_PREVIEW_FOOTER_HEIGHT : 0),
+      )
+    : FOLD_PREVIEW_MAX_HEIGHT;
   const foldPreviewTop = foldPreview
     ? Math.min(
         Math.max(FOLD_PREVIEW_MARGIN, foldPreviewRawTop),
-        Math.max(FOLD_PREVIEW_MARGIN, editorViewport.height - FOLD_PREVIEW_MAX_HEIGHT - FOLD_PREVIEW_MARGIN),
+        Math.max(FOLD_PREVIEW_MARGIN, editorViewport.height - foldPreviewEstimatedHeight - FOLD_PREVIEW_MARGIN),
       )
     : FOLD_PREVIEW_MARGIN;
   const foldPreviewMaxHeight = foldPreview
@@ -1663,6 +2068,8 @@ export function App() {
       hoveredFoldLine !== undefined
       && hoveredFileLine !== undefined
       && !foldedHeaderLines.has(hoveredFoldLine)
+      // A linha do marcador representa conteúdo já oculto; recolher ali não faz sentido.
+      && !foldedMarkerLines.has(hoveredFoldLine)
       && foldRangeByStartLine.has(hoveredFileLine)
     ) controls.push({ line: hoveredFoldLine, folded: false });
     return controls;
@@ -1670,6 +2077,7 @@ export function App() {
     activeDocument?.kind,
     activeDocument?.readOnly,
     foldedHeaderLines,
+    foldedMarkerLines,
     foldRangeByStartLine,
     hoveredFoldLine,
     fileLineByVisibleLine,
@@ -1684,7 +2092,9 @@ export function App() {
     const contentY = event.clientY - bounds.top + (scroller?.scrollTop ?? 0) - editorLayoutMetrics.contentPadding;
     const line = Math.floor(contentY / editorLayoutMetrics.lineHeight) + 1;
     const fileLine = fileLineOf(line);
-    const next = foldRangeByStartLine.has(fileLine) || foldedHeaderLines.has(line) ? line : undefined;
+    const next = !foldedMarkerLines.has(line) && (foldRangeByStartLine.has(fileLine) || foldedHeaderLines.has(line))
+      ? line
+      : undefined;
     setHoveredFoldLine((current) => current === next ? current : next);
   };
   const toggleFold = (line: number) => {
@@ -1801,7 +2211,7 @@ export function App() {
     },
     openDialog(contribution) {
       const token = Symbol(contribution.id);
-      setWorkbenchDialog({ token, contribution });
+      setWorkbenchDialog({ token, contribution, size: contribution.size });
       return {
         dispose: () => {
           setWorkbenchDialog((current) => current?.token === token ? undefined : current);
@@ -1824,8 +2234,15 @@ export function App() {
       const nextDocuments = documentsRef.current.map((document) => document.id === request.documentId ? changedDocument : document);
       documentsRef.current = nextDocuments;
       setDocuments(nextDocuments);
-      /** O conteúdo veio de fora do editor: as dobras registradas não valem mais para este texto. */
-      clearDocumentFolds(request.documentId);
+      const currentFolds = documentFoldsRef.current.get(request.documentId) ?? [];
+      if (currentFolds.length) {
+        const remapped = remapDocumentFoldsAfterEdit(previousContent, request.content, currentFolds);
+        const nextFolds = new Map(documentFoldsRef.current);
+        if (remapped.length) nextFolds.set(request.documentId, remapped);
+        else nextFolds.delete(request.documentId);
+        documentFoldsRef.current = nextFolds;
+        setDocumentFolds(nextFolds);
+      }
       setDiagnostics([]);
       await platform.events.emit<TextEditorDocumentChangedEvent>(TEXT_EDITOR_DOCUMENT_CHANGED_EVENT, {
         document: {
@@ -3578,7 +3995,15 @@ export function App() {
     const content = textarea.value;
     const selectionStart = textarea.selectionStart;
     const selectionEnd = textarea.selectionEnd;
-    if (documentFoldsRef.current.has(activeDocumentId)) clearDocumentFolds(activeDocumentId);
+    const currentFolds = documentFoldsRef.current.get(activeDocumentId) ?? [];
+    if (currentFolds.length) {
+      const remapped = remapDocumentFoldsAfterEdit(previous.content, content, currentFolds);
+      const nextFolds = new Map(documentFoldsRef.current);
+      if (remapped.length) nextFolds.set(activeDocumentId, remapped);
+      else nextFolds.delete(activeDocumentId);
+      documentFoldsRef.current = nextFolds;
+      setDocumentFolds(nextFolds);
+    }
     setDocuments((current) => current.map((document) => {
       if (document.id !== activeDocumentId) return document;
       const history = editorHistoriesRef.current.get(document.id)
@@ -3768,12 +4193,55 @@ export function App() {
       clientY,
       scrollContainer,
       scrollContainer === textarea ? undefined : syntaxLayerRef.current ?? undefined,
+      activeFoldProjection,
     );
     captureEditorState(textarea, scrollContainer);
     return {
       selectionStart: textarea.selectionStart,
       selectionEnd: textarea.selectionEnd,
     };
+  };
+
+  const correctFoldedEditorPointerSelection = (event: React.MouseEvent<HTMLTextAreaElement>) => {
+    if (!activeFoldProjection || event.button !== 0 || event.shiftKey) return;
+    const textarea = event.currentTarget;
+    // Preserve native drag selections. A plain click remains collapsed and can
+    // be remapped from the projected (folded) visual line to the real file.
+    if (textarea.selectionStart !== textarea.selectionEnd) return;
+    const scrollContainer = highlightedEditorScrollRef.current ?? textarea;
+    const offset = moveCollapsedEditorSelectionToPointer(
+      textarea,
+      event.clientX,
+      event.clientY,
+      scrollContainer,
+      syntaxLayerRef.current ?? undefined,
+      activeFoldProjection,
+    );
+    captureEditorState(textarea, scrollContainer);
+  };
+
+  const selectFoldedEditorWordAtPointer = (event: React.MouseEvent<HTMLTextAreaElement>) => {
+    if (!activeFoldProjection || event.button !== 0) return;
+    const textarea = event.currentTarget;
+    const mirror = syntaxLayerRef.current;
+    const scrollContainer = highlightedEditorScrollRef.current ?? textarea;
+    if (!mirror) return;
+    const projectedOffset = editorMirrorTextOffsetAtClientPoint(
+      textarea,
+      mirror,
+      event.clientX,
+      event.clientY,
+    );
+    if (projectedOffset === undefined) return;
+    event.preventDefault();
+    const sourceOffset = editorSourceOffsetFromProjectedOffset(
+      textarea.value,
+      activeFoldProjection,
+      projectedOffset,
+    );
+    const word = editorWordRangeAtOffset(textarea.value, sourceOffset);
+    textarea.setSelectionRange(word.start, word.end);
+    captureEditorState(textarea, scrollContainer);
   };
 
   const syncEditorLineRuler = (scrollTop: number) => {
@@ -3926,6 +4394,17 @@ export function App() {
     setSelectedExplorerPath(nextPath);
     setExpanded(nextExpanded);
     await refreshExplorer(nextExpanded);
+    await platform.events.emit<WorkspaceResourcesChangedEvent>(
+      WORKSPACE_RESOURCES_CHANGED_EVENT,
+      {
+        source: "core-explorer",
+        reason: "workspace",
+        operation: "move",
+        ...(workspaceRoot ? { workspaceRoot } : {}),
+        paths: [sourcePath, nextPath],
+        renames: [{ from: sourcePath, to: nextPath }],
+      },
+    );
   };
 
   const relocateExplorerEntry = async (sourcePath: string, targetPath: string) => {
@@ -4563,7 +5042,9 @@ export function App() {
 
   const debugCommand = async (command: DebugAdapterCommand) => {
     if (!debugSession || !debugAdapter) throw new Error("Nenhuma sessão de debug ativa.");
-    if (debugCommandPromiseRef.current) return debugCommandPromiseRef.current;
+    // "stop" e "pause" precisam funcionar mesmo com outro comando em andamento:
+    // um continue pode ficar rodando indefinidamente e são eles a saída.
+    if (debugCommandPromiseRef.current && !["stop", "pause"].includes(command)) return debugCommandPromiseRef.current;
     const sessionId = debugSession.id;
     const pending = (async () => {
       setDebugCommandPending({ sessionId, command });
@@ -6847,7 +7328,7 @@ export function App() {
                       "--editor-content-padding": `${editorLayoutMetrics.contentPadding}px`,
                     } as React.CSSProperties}
                     onMouseMove={trackFoldHover}
-                    onMouseLeave={() => { setHoveredFoldLine(undefined); setFoldPreviewLine(undefined); }}
+                    onMouseLeave={() => { setHoveredFoldLine(undefined); scheduleFoldPreviewClose(); }}
                   >
                     {showEditorGutter ? (
                       <div className={`editor-line-ruler${editorSettings.lineNumbers ? "" : " decorations-only"}`}>
@@ -6863,37 +7344,41 @@ export function App() {
                             const currentDebugLine = activeDebugVisibleLine === line;
                             const decorations = editorDecorationsByLine.get(line) ?? [];
                             const changeDecoration = decorations.find((decoration) => decoration.change);
+                            const changeKey = editorChangeBlockKey(changeDecoration);
                             const tooltip = decorations
                               .map((decoration) => decoration.tooltip ?? decoration.label)
                               .filter((value): value is string => Boolean(value))
                               .join("\n");
                             const content = <>
-                              <i className={`editor-line-ruler__marker${breakpoint ? " is-breakpoint" : ""}`} />
+                              <i
+                                className="editor-line-ruler__marker"
+                                onMouseEnter={changeDecoration
+                                  ? () => { setHoveredEditorChangeKey(changeKey); openEditorDiffPeekOnHover(changeDecoration); }
+                                  : undefined}
+                                onMouseLeave={changeDecoration
+                                  ? () => { setHoveredEditorChangeKey(undefined); scheduleEditorDiffPeekClose(); }
+                                  : undefined}
+                              />
+                              <i className={`editor-line-ruler__breakpoint${breakpoint ? " is-active" : ""}`} />
                               <i className={`editor-line-ruler__execution-marker${currentDebugLine ? " is-current" : ""}`} />
                               {editorSettings.lineNumbers ? <b>{String(fileLine).padStart(editorMetrics.lineNumberWidth, "0")}</b> : null}
                             </>;
-                            return changeDecoration ? (
+                            const ariaLabel = changeDecoration
+                              ? `${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${fileLine} (alteração: ${tooltip || "Exibir alteração"})`
+                              : `${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${fileLine}`;
+                            return (
                               <button
-                                className={`editor-line-ruler__line${lineDecorationClassName(decorations)}${currentDebugLine ? " is-debug-current" : ""}`}
+                                className={`editor-line-ruler__line${lineDecorationClassName(decorations)}${changeKey && changeKey === hoveredEditorChangeKey ? " is-change-hover" : ""}${currentDebugLine ? " is-debug-current" : ""}`}
                                 key={line}
                                 style={{ top: `${editorLineTop(line)}px` }}
                                 type="button"
-                                title={tooltip || undefined}
-                                aria-label={`${tooltip || "Exibir alteração"}, linha ${fileLine}`}
-                                onClick={() => setSelectedEditorLineDecoration((current) => current === changeDecoration ? undefined : changeDecoration)}
-                                onDoubleClick={() => { if (activeDocument?.path) toggleBreakpoint(activeDocument.path, fileLine); }}
+                                title={changeDecoration ? tooltip || undefined : undefined}
+                                aria-label={ariaLabel}
+                                onClick={() => { if (activeDocument?.path) toggleBreakpoint(activeDocument.path, fileLine); }}
+                                onMouseEnter={() => { if (selectedEditorLineDecoration) scheduleEditorDiffPeekClose(); }}
                               >
                                 {content}
                               </button>
-                            ) : (
-                              <button
-                                className={`editor-line-ruler__line${currentDebugLine ? " is-debug-current" : ""}`}
-                                key={line}
-                                style={{ top: `${editorLineTop(line)}px` }}
-                                type="button"
-                                aria-label={`${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${fileLine}`}
-                                onClick={() => { if (activeDocument?.path) toggleBreakpoint(activeDocument.path, fileLine); }}
-                              >{content}</button>
                             );
                           })}
                         </pre>
@@ -6955,7 +7440,7 @@ export function App() {
                           />
                           <textarea
                             ref={editorRef}
-                            className="code-editor code-editor--highlighted"
+                            className={`code-editor code-editor--highlighted${activeFoldProjection ? " code-editor--folded" : ""}`}
                             spellCheck={false}
                             wrap="off"
                             value={activeEditorContent}
@@ -6963,6 +7448,8 @@ export function App() {
                             onChange={(event) => updateDocument(event.currentTarget)}
                             onKeyDown={handleEditorKeyDown}
                             onMouseDown={handleEditorAuxiliaryNavigation}
+                            onMouseUp={correctFoldedEditorPointerSelection}
+                            onDoubleClick={selectFoldedEditorWordAtPointer}
                             onKeyUp={(event) => event.currentTarget.classList.toggle(
                               "is-navigation-modifier",
                               event.ctrlKey || event.metaKey,
@@ -6996,6 +7483,22 @@ export function App() {
                               ));
                             }}
                           />
+                          {activeFoldProjection ? (
+                            <>
+                              <div
+                                ref={foldedEditorSelectionRef}
+                                className="editor-projected-selection"
+                                aria-hidden="true"
+                                hidden
+                              />
+                              <span
+                                ref={foldedEditorCaretRef}
+                                className="editor-projected-caret"
+                                aria-hidden="true"
+                                hidden
+                              />
+                            </>
+                          ) : null}
                         </div>
                       </div>
                     ) : (
@@ -7008,6 +7511,7 @@ export function App() {
                         onChange={(event) => updateDocument(event.currentTarget)}
                         onKeyDown={handleEditorKeyDown}
                         onMouseDown={handleEditorAuxiliaryNavigation}
+                        onMouseUp={correctFoldedEditorPointerSelection}
                         onKeyUp={(event) => event.currentTarget.classList.toggle(
                           "is-navigation-modifier",
                           event.ctrlKey || event.metaKey,
@@ -7065,15 +7569,15 @@ export function App() {
                             aria-label={folded ? `Expandir bloco, linha ${line}` : `Recolher bloco, linha ${line}`}
                             style={{ "--fold-line-top": `${editorLineTop(line)}px` } as React.CSSProperties}
                             onMouseDown={(event) => event.preventDefault()}
-                            onMouseEnter={() => { if (folded) setFoldPreviewLine(line); else setFoldPreviewLine(undefined); }}
-                            onFocus={() => { if (folded) setFoldPreviewLine(line); else setFoldPreviewLine(undefined); }}
+                            onMouseEnter={() => { if (folded) openFoldPreview(line); else scheduleFoldPreviewClose(); }}
+                            onFocus={() => { if (folded) openFoldPreview(line); else scheduleFoldPreviewClose(); }}
                             onMouseLeave={(event) => {
                               if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".editor-fold-preview")) return;
-                              setFoldPreviewLine(undefined);
+                              scheduleFoldPreviewClose();
                             }}
                             onBlur={(event) => {
                               if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".editor-fold-preview")) return;
-                              setFoldPreviewLine(undefined);
+                              scheduleFoldPreviewClose();
                             }}
                             onClick={() => toggleFold(line)}
                           >{folded ? "+" : "-"}</button>
@@ -7089,10 +7593,12 @@ export function App() {
                         } as React.CSSProperties}
                         role="tooltip"
                         onMouseMove={(event) => event.stopPropagation()}
-                        onMouseLeave={() => setFoldPreviewLine(undefined)}
+                        onMouseEnter={cancelFoldPreviewClose}
+                        onMouseLeave={scheduleFoldPreviewClose}
+                        onFocus={cancelFoldPreviewClose}
                         onBlur={(event) => {
                           if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".editor-fold-toggle.is-folded")) return;
-                          setFoldPreviewLine(undefined);
+                          scheduleFoldPreviewClose();
                         }}
                         onWheel={(event) => event.stopPropagation()}
                       >
@@ -7100,7 +7606,12 @@ export function App() {
                           <span>Trecho recolhido</span>
                           <span>{foldPreview.lineCount} linha(s)</span>
                         </div>
-                        <pre tabIndex={0} aria-label="Conteúdo completo do trecho recolhido">{foldPreview.text}</pre>
+                        <pre tabIndex={0} aria-label="Conteúdo completo do trecho recolhido">
+                          <HighlightedSource
+                            source={foldPreview.text}
+                            {...(activeSyntaxHighlighter ? { provider: activeSyntaxHighlighter } : {})}
+                          />
+                        </pre>
                         {foldPreview.lineCount > 12 ? (
                           <div className="editor-fold-preview__footer">Role para visualizar o trecho completo.</div>
                         ) : null}
@@ -7110,8 +7621,11 @@ export function App() {
                       <EditorLineDiffPeek
                         decoration={selectedEditorLineDecoration}
                         provider={activeSyntaxHighlighter}
-                        top={editorLineTop(selectedEditorLineDecoration.line) - activeDocument.scrollTop + editorLayoutMetrics.lineHeight}
-                        onClose={() => setSelectedEditorLineDecoration(undefined)}
+                        // 30 = altura do cabeçalho do peek (features.css); centraliza o cabeçalho na linha da régua
+                        top={editorLineTop(editorDiffPeekAnchorLine(selectedEditorLineDecoration)) - activeDocument.scrollTop + (editorLayoutMetrics.lineHeight - 30) / 2}
+                        onClose={() => { cancelEditorDiffPeekHoverTimer(); setSelectedEditorLineDecoration(undefined); }}
+                        onMouseEnter={cancelEditorDiffPeekHoverTimer}
+                        onMouseLeave={scheduleEditorDiffPeekClose}
                         onAction={(action) => {
                           invoke(async () => {
                             await platform.commands.execute(action.command, {
@@ -7309,7 +7823,7 @@ export function App() {
                                   className="icon-button small"
                                   type="button"
                                   aria-label={tabDebugSession.status === "paused" ? "Continuar depuração" : "Pausar depuração"}
-                                  disabled={debugRestarting || debugCommandBusy || debugEnded || !["running", "paused"].includes(tabDebugSession.status)}
+                                  disabled={debugRestarting || debugEnded || (debugCommandBusy && tabDebugSession.status !== "running") || !["running", "paused"].includes(tabDebugSession.status)}
                                   onClick={() => invoke(() => debugCommand(tabDebugSession.status === "paused" ? "resume" : "pause"))}
                                 >{tabDebugSession.status === "paused" ? <Play size={14} /> : <Pause size={14} />}</button>
                               </ButtonTooltip>
@@ -7326,7 +7840,7 @@ export function App() {
                                 <button className="icon-button small" type="button" aria-label="Reiniciar depuração" disabled={debugRestarting || debugCommandBusy} onClick={() => invoke(() => restartDebugSession(tab.profileId))}><RotateCw className={debugRestarting ? "is-spinning" : undefined} size={13} /></button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Parar depuração" side="top">
-                                <button className="icon-button small danger" type="button" aria-label="Parar depuração" disabled={debugRestarting || debugCommandBusy || debugEnded} onClick={() => invoke(() => debugCommand("stop"))}><Square size={13} /></button>
+                                <button className="icon-button small danger" type="button" aria-label="Parar depuração" disabled={debugRestarting || debugEnded} onClick={() => invoke(() => debugCommand("stop"))}><Square size={13} /></button>
                               </ButtonTooltip>
                             </>
                           ) : tab.profile ? (
@@ -7591,14 +8105,17 @@ export function App() {
         </Dialog.Root>
 
         <Dialog.Root open={Boolean(workbenchDialog)} onOpenChange={(open) => {
-          if (!open) setWorkbenchDialog(undefined);
+          if (!open) {
+            const shouldClose = workbenchDialog?.contribution.onCloseRequest?.() !== false;
+            if (shouldClose) setWorkbenchDialog(undefined);
+          }
         }}>
           <Dialog.Portal>
             <Dialog.Overlay className="dialog-overlay" />
-            <Dialog.Content className={`workbench-plugin-dialog workbench-plugin-dialog--${workbenchDialog?.contribution.size ?? "large"}`}>
+            <Dialog.Content className={`workbench-plugin-dialog workbench-plugin-dialog--${workbenchDialog?.size ?? workbenchDialog?.contribution.size ?? "large"}`}>
               <div className="dialog-heading">
                 <div>
-                  <span className="eyebrow">PLUGIN</span>
+                  {workbenchDialog?.contribution.showPluginLabel === false ? null : <span className="eyebrow">PLUGIN</span>}
                   <Dialog.Title>{workbenchDialog?.contribution.title ?? "Plugin"}</Dialog.Title>
                   {workbenchDialog?.contribution.description ? (
                     <Dialog.Description>{workbenchDialog.contribution.description}</Dialog.Description>
@@ -7612,6 +8129,7 @@ export function App() {
                 <WorkbenchDialogHost
                   provider={workbenchDialog.contribution}
                   onClose={() => setWorkbenchDialog(undefined)}
+                  onSizeChange={(size) => setWorkbenchDialog((current) => current ? { ...current, size } : current)}
                 />
               ) : null}
             </Dialog.Content>

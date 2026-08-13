@@ -10,7 +10,7 @@ coverage/
 .vite/
 .DS_Store
 *.log
-
+__pycache__/
 
 # Playwright
 e2e/test-results/

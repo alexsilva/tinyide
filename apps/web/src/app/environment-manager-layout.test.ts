@@ -20,4 +20,11 @@ describe("environment manager layout", () => {
     expect(rule(".package-manager")).toContain("flex: 0 0 auto");
     expect(rule(".package-list")).toContain("overflow: visible");
   });
+
+  it("renders the default-environment choice as a compact radio control", () => {
+    expect(rule(".environment-default-choice")).toContain("cursor: pointer");
+    expect(rule(".environment-default-choice input")).toContain("width: 13px");
+    expect(rule(".environment-default-choice input")).toContain("height: 13px");
+    expect(featuresCss).toContain(".environment-default-choice:has(input:checked),\n.environment-default-single { border-color: #5875cf");
+  });
 });

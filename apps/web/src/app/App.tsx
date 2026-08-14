@@ -249,6 +249,7 @@ import {
   type StoredDocumentFold,
 } from "./persistence";
 import { resolveSyntaxHighlighter, type SyntaxHighlighter } from "./generic-syntax";
+import { resolveEnvironmentSelections } from "./environment-selection";
 import {
   debugAdapterProviders,
   debugAdapterForProfile,
@@ -1435,6 +1436,14 @@ export function App() {
   environmentsRef.current = environments;
   const selectedEnvironmentIdRef = useRef<string | undefined>(selectedEnvironmentId);
   selectedEnvironmentIdRef.current = selectedEnvironmentId;
+  const selectedEnvironmentIds = useMemo(() => {
+    const legacySelectedId = selectedEnvironmentId ?? workspaceSettings.environment?.selectedId;
+    return resolveEnvironmentSelections(
+      environments,
+      workspaceSettings.environment?.selectedByProvider ?? {},
+      legacySelectedId ? { legacySelectedId } : {},
+    );
+  }, [environments, selectedEnvironmentId, workspaceSettings.environment]);
   const profileExecutionsRef = useRef(profileExecutions);
   profileExecutionsRef.current = profileExecutions;
   const debugSessionRef = useRef<DebugSessionSnapshot | undefined>(debugSession);
@@ -1459,6 +1468,9 @@ export function App() {
     ...(activeToolWindowId ? { activeToolWindowId } : {}),
     toolWindowVisible,
     ...(selectedEnvironmentId ? { selectedExecutionEnvironmentId: selectedEnvironmentId } : {}),
+    ...(Object.keys(selectedEnvironmentIds).length
+      ? { selectedExecutionEnvironmentIds: selectedEnvironmentIds }
+      : {}),
     pluginSettings: workspaceSettings.plugins ?? {},
   });
   const executionStateListenersRef = useRef(new Set<(snapshot: WorkbenchExecutionSnapshot) => void>());
@@ -2155,11 +2167,14 @@ export function App() {
       ...(activeToolWindowId ? { activeToolWindowId } : {}),
       toolWindowVisible,
       ...(selectedEnvironmentId ? { selectedExecutionEnvironmentId: selectedEnvironmentId } : {}),
+      ...(Object.keys(selectedEnvironmentIds).length
+        ? { selectedExecutionEnvironmentIds: selectedEnvironmentIds }
+        : {}),
       pluginSettings: workspaceSettings.plugins ?? {},
     };
     workbenchStateRef.current = snapshot;
     for (const listener of workbenchStateListenersRef.current) listener(snapshot);
-  }, [workspaceName, workspaceRoot, sidebarView, sidebarVisible, panelTab, panelVisible, activeToolWindowId, toolWindowVisible, selectedEnvironmentId, workspaceSettings.plugins]);
+  }, [workspaceName, workspaceRoot, sidebarView, sidebarVisible, panelTab, panelVisible, activeToolWindowId, toolWindowVisible, selectedEnvironmentId, selectedEnvironmentIds, workspaceSettings.plugins]);
 
   useEffect(() => {
     const snapshot = executionSnapshot();
@@ -5638,10 +5653,28 @@ export function App() {
   };
 
   const selectEnvironment = (environmentId: string | undefined) => {
+    const environment = environmentId
+      ? environments.find((candidate) => candidate.id === environmentId)
+      : undefined;
+    const currentProviderSelections = workspaceSettingsRef.current.environment?.selectedByProvider ?? {};
     setSelectedEnvironmentId(environmentId);
     void updateWorkspaceSettings((current) => ({
       ...current,
-      environment: environmentId ? { selectedId: environmentId } : {},
+      environment: environmentId ? {
+        selectedId: environmentId,
+        ...(environment?.providerId
+          ? {
+              selectedByProvider: {
+                ...(current.environment?.selectedByProvider ?? currentProviderSelections),
+                [environment.providerId]: environmentId,
+              },
+            }
+          : current.environment?.selectedByProvider
+            ? { selectedByProvider: current.environment.selectedByProvider }
+            : {}),
+      } : current.environment?.selectedByProvider
+        ? { selectedByProvider: current.environment.selectedByProvider }
+        : {},
     })).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
   };
 
@@ -6116,7 +6149,10 @@ export function App() {
   const registeredEnvironmentProviders = environmentProviders();
   const activeEnvironmentManagerProvider = environmentProviderById(environmentManagerProviderId)
     ?? registeredEnvironmentProviders[0];
-  const visibleEnvironments = environments.filter((environment) => {
+  const providerEnvironments = activeEnvironmentManagerProvider
+    ? environments.filter((environment) => environment.providerId === activeEnvironmentManagerProvider.id)
+    : environments;
+  const visibleEnvironments = providerEnvironments.filter((environment) => {
     const query = environmentSearch.trim().toLocaleLowerCase();
     if (!query) return true;
     return [
@@ -6126,9 +6162,9 @@ export function App() {
       environment.path ?? "",
     ].some((value) => value.toLocaleLowerCase().includes(query));
   });
-  const managedEnvironmentCount = environments.filter((environment) => environment.type === "venv" && environment.managed !== false).length;
-  const importedEnvironmentCount = environments.filter((environment) => environment.type === "venv" && environment.managed === false).length;
-  const executableEnvironmentCount = environments.filter((environment) => environment.type === "process").length;
+  const managedEnvironmentCount = providerEnvironments.filter((environment) => environment.type === "venv" && environment.managed !== false).length;
+  const importedEnvironmentCount = providerEnvironments.filter((environment) => environment.type === "venv" && environment.managed === false).length;
+  const executableEnvironmentCount = providerEnvironments.filter((environment) => environment.type === "process").length;
 
   const openSettings = (sectionId = "editor") => {
     setSettingsSectionId(sectionId);
@@ -6641,7 +6677,7 @@ export function App() {
                     </div>
                   ) : null}
                   <div className="environment-manager__summary">
-                    <span><CheckCircle2 size={13} /> {environments.length} ambientes</span>
+                    <span><CheckCircle2 size={13} /> {providerEnvironments.length} ambientes</span>
                     <span><Package size={13} /> {managedEnvironmentCount} gerenciados</span>
                     <span><FolderOpen size={13} /> {importedEnvironmentCount} importados</span>
                     <span><Terminal size={13} /> {executableEnvironmentCount} executáveis</span>
@@ -6696,8 +6732,13 @@ export function App() {
                   ) : null}
 
                   <div className="environment-list">
-                    {visibleEnvironments.map((environment) => (
-                      <article className={`environment-card${selectedEnvironmentId === environment.id ? " is-active" : ""}`} key={environment.id}>
+                    {visibleEnvironments.map((environment) => {
+                      const environmentSelected = environment.providerId
+                        ? selectedEnvironmentIds[environment.providerId] === environment.id
+                        : selectedEnvironmentId === environment.id;
+                      const canChooseDefault = providerEnvironments.length > 1;
+                      return (
+                      <article className={`environment-card${environmentSelected ? " is-active" : ""}`} key={environment.id}>
                         <button className="card-delete" type="button" aria-label={`Remover ${environment.name}`} title={`Remover ${environment.name}`} onClick={() => invoke(() => removeEnvironment(environment.id))}><X size={14} /></button>
                         <div>
                           <strong>{environment.name}</strong>
@@ -6709,9 +6750,21 @@ export function App() {
                           <small>{environment.executable ?? environment.path}</small>
                         </div>
                         <div className="environment-card__actions">
-                          <ButtonTooltip label={selectedEnvironmentId === environment.id ? "Ambiente selecionado" : `Selecionar ${environment.name}`}>
-                            <button className="button secondary compact" aria-label={selectedEnvironmentId === environment.id ? "Ambiente selecionado" : `Selecionar ${environment.name}`} disabled={selectedEnvironmentId === environment.id} type="button" onClick={() => selectEnvironment(environment.id)}><Check size={13} /><span className="responsive-action__label">{selectedEnvironmentId === environment.id ? "Selecionado" : "Selecionar"}</span></button>
-                          </ButtonTooltip>
+                          {canChooseDefault ? (
+                            <label className="environment-default-choice" title={environmentSelected ? "Ambiente padrão deste provider" : `Definir ${environment.name} como ambiente padrão`}>
+                              <input
+                                type="radio"
+                                name={`default-environment-${environment.providerId ?? "global"}`}
+                                checked={environmentSelected}
+                                disabled={environment.status !== "ready"}
+                                onChange={() => selectEnvironment(environment.id)}
+                                aria-label={environmentSelected ? `${environment.name}: ambiente padrão` : `Definir ${environment.name} como ambiente padrão`}
+                              />
+                              <span>{environmentSelected ? "Padrão" : "Definir padrão"}</span>
+                            </label>
+                          ) : environmentSelected ? (
+                            <span className="environment-default-single"><Check size={13} /> Padrão</span>
+                          ) : null}
                           {environmentProviderById(environment.providerId)?.update ? (
                             <ButtonTooltip label={`Editar ${environment.name}`}>
                               <button className="button secondary compact" type="button" aria-label={`Editar ${environment.name}`} onClick={() => { setEnvironmentManagerProviderId(environment.providerId); setEditingEnvironmentId(environment.id); setEnvironmentPath(environment.type === "venv" ? environment.path ?? "" : environment.executable ?? ""); setEnvironmentForm("edit"); }}><Settings2 size={13} /><span className="responsive-action__label">Editar</span></button>
@@ -6719,13 +6772,14 @@ export function App() {
                           ) : null}
                           {environment.type === "venv" ? (
                             <ButtonTooltip label={`Gerenciar pacotes de ${environment.name}`}>
-                              <button className="button secondary compact" type="button" aria-label={`Gerenciar pacotes de ${environment.name}`} onClick={() => { selectEnvironment(environment.id); setPackageManagerEnvironmentId(environment.id); }}><Package size={13} /><span className="responsive-action__label">Pacotes</span></button>
+                              <button className="button secondary compact" type="button" aria-label={`Gerenciar pacotes de ${environment.name}`} onClick={() => setPackageManagerEnvironmentId(environment.id)}><Package size={13} /><span className="responsive-action__label">Pacotes</span></button>
                             </ButtonTooltip>
                           ) : null}
                         </div>
                       </article>
-                    ))}
-                    {!visibleEnvironments.length ? <div className="empty-sidebar"><HardDrive size={26} /><p>{environmentSearch ? "Nenhum ambiente corresponde à busca." : "Nenhum ambiente cadastrado."}</p></div> : null}
+                      );
+                    })}
+                    {!visibleEnvironments.length ? <div className="empty-sidebar"><HardDrive size={26} /><p>{environmentSearch ? "Nenhum ambiente corresponde à busca." : `Nenhum ambiente em ${activeEnvironmentManagerProvider?.name ?? "este provider"}.`}</p></div> : null}
                   </div>
                   </>
                   )}

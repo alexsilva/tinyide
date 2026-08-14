@@ -233,6 +233,13 @@
 .environment-card__actions { display: flex; flex-wrap: nowrap; min-width: 0; gap: 5px; overflow: hidden; }
 .environment-card__actions .button { flex: 0 1 auto; min-width: 0; overflow: hidden; }
 .environment-card__actions .button .responsive-action__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.environment-default-choice,
+.environment-default-single { display: inline-flex; min-width: 0; height: 26px; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-1); color: var(--muted); font-size: 10px; white-space: nowrap; }
+.environment-default-choice { cursor: pointer; }
+.environment-default-choice:has(input:checked),
+.environment-default-single { border-color: #5875cf; background: #202b43; color: #dce6ff; }
+.environment-default-choice input { width: 13px; height: 13px; margin: 0; accent-color: #6d91df; cursor: pointer; }
+.environment-default-choice input:disabled { cursor: not-allowed; }
 .package-manager { display: flex; min-height: 0; flex: 0 0 auto; flex-direction: column; gap: 8px; }
 .package-manager__header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .package-manager__header > div { display: grid; min-width: 0; gap: 2px; }

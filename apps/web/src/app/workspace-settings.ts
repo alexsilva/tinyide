@@ -13,7 +13,10 @@ export interface WorkspaceExecutionProfiles {
 }
 
 export interface WorkspaceEnvironmentSettings {
+  /** Legacy single environment selection kept for backwards compatibility. */
   readonly selectedId?: string;
+  /** One independently selected environment per execution-environment provider. */
+  readonly selectedByProvider?: Readonly<Record<string, string>>;
 }
 
 export interface WorkspaceEditorSettings {

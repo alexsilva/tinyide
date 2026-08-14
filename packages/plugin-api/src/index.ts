@@ -471,6 +471,8 @@ export interface ScriptExecutionContribution {
   readonly id: string;
   readonly name: string;
   readonly extensions: readonly string[];
+  /** Environment provider whose selected runtime should execute this script. */
+  readonly environmentProviderId?: string;
   readonly executable?: string;
   readonly arguments?: readonly string[];
 }
@@ -727,7 +729,10 @@ export interface WorkbenchStateSnapshot {
   readonly panelVisible: boolean;
   readonly activeToolWindowId?: string;
   readonly toolWindowVisible: boolean;
+  /** Legacy single selection. Prefer selectedExecutionEnvironmentIds for provider-aware integrations. */
   readonly selectedExecutionEnvironmentId?: string;
+  /** One independently selected execution environment per provider. */
+  readonly selectedExecutionEnvironmentIds?: Readonly<Record<string, string>>;
   readonly pluginSettings: PluginSettingsMap;
 }
 
@@ -1068,7 +1073,10 @@ export interface WorkbenchExecutionSnapshot {
   readonly profiles: readonly ExecutionProfile[];
   readonly selectedProfileId?: string;
   readonly environments: readonly ExecutionEnvironment[];
+  /** Legacy single selection. Prefer selectedEnvironmentIds for provider-aware integrations. */
   readonly selectedEnvironmentId?: string;
+  /** One independently selected execution environment per provider. */
+  readonly selectedEnvironmentIds?: Readonly<Record<string, string>>;
   readonly executions: readonly WorkbenchProfileExecutionSnapshot[];
   readonly debugSession?: DebugSessionSnapshot;
 }
@@ -1392,6 +1400,8 @@ export interface TerminalSessionInfo {
   readonly workspaceRoot: string;
   readonly shell: string;
   readonly platform: string;
+  readonly configurationKey?: string;
+  readonly hasUserInput?: boolean;
 }
 
 export interface TerminalSessionOutput {
@@ -1406,11 +1416,24 @@ export interface TerminalSessionCreateOptions {
   readonly title?: string;
   readonly cols?: number;
   readonly rows?: number;
+  readonly configurationKey?: string;
   readonly environmentVariables?: Readonly<Record<string, string>>;
   readonly unsetEnvironmentVariables?: readonly string[];
   readonly prependPathEntries?: readonly string[];
-  readonly promptPrefix?: string;
+  readonly shellStartupCommands?: TerminalShellStartupCommands;
 }
+
+export type TerminalShellFamily = "posix" | "fish" | "powershell" | "cmd";
+
+/**
+ * Commands that must run inside the interactive shell after its own startup
+ * files have been evaluated. This is intentionally shell-generic: plugins
+ * contribute commands per shell family and the terminal selects the matching
+ * family without knowing what feature supplied them.
+ */
+export type TerminalShellStartupCommands = Readonly<
+  Partial<Record<TerminalShellFamily, readonly string[]>>
+>;
 
 export interface TerminalSessionHookContext {
   readonly workspaceRoot?: string;
@@ -1428,13 +1451,15 @@ export interface TerminalSessionHookContribution {
   readonly environmentVariables?: Readonly<Record<string, string>>;
   readonly unsetEnvironmentVariables?: readonly string[];
   readonly prependPathEntries?: readonly string[];
-  readonly promptPrefix?: string;
+  readonly shellStartupCommands?: TerminalShellStartupCommands;
   readonly indicators?: readonly TerminalSessionIndicator[];
 }
 
 export interface TerminalSessionHookProvider {
   readonly id: string;
   readonly pluginId: string;
+  /** Optional execution-environment provider whose project selection this hook consumes. */
+  readonly environmentProviderId?: string;
   prepare(
     context: TerminalSessionHookContext,
   ): Promise<TerminalSessionHookContribution | undefined> | TerminalSessionHookContribution | undefined;

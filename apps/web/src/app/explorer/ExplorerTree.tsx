@@ -3,9 +3,11 @@ import { useEffect, useRef } from "react";
 import type { ResourceDecoration } from "@tinyide/plugin-api";
 import type { WorkspaceEntry } from "../../browser-filesystem";
 import {
+  explorerEntryVisible,
   explorerCreationInsertionIndex,
   explorerDirectoryEmptyState,
   hiddenExplorerEntryCount,
+  ignoredExplorerEntryCount,
 } from "../explorer";
 import { resourceIconFor } from "../runtime";
 
@@ -77,6 +79,8 @@ export function EntryTree({
   parentPath,
   expanded,
   showHidden,
+  showIgnored,
+  ignoredPaths,
   revealHidden,
   revealedHiddenPaths,
   filterVisiblePaths,
@@ -94,6 +98,7 @@ export function EntryTree({
   onDraggingPathChange,
   onDropTargetPathChange,
   onShowHiddenDirectory,
+  onShowIgnoredEntries,
   renamePath,
   renameName,
   renameError,
@@ -114,6 +119,8 @@ export function EntryTree({
   readonly parentPath: string;
   readonly expanded: ReadonlySet<string>;
   readonly showHidden: boolean;
+  readonly showIgnored: boolean;
+  readonly ignoredPaths: ReadonlySet<string>;
   readonly revealHidden: boolean;
   readonly revealedHiddenPaths: ReadonlySet<string>;
   readonly filterVisiblePaths: ReadonlySet<string> | undefined;
@@ -131,6 +138,7 @@ export function EntryTree({
   readonly onDraggingPathChange: (path: string | undefined) => void;
   readonly onDropTargetPathChange: (path: string | undefined) => void;
   readonly onShowHiddenDirectory: (path: string) => void;
+  readonly onShowIgnoredEntries: () => void;
   readonly renamePath: string | undefined;
   readonly renameName: string;
   readonly renameError: string | undefined;
@@ -150,9 +158,9 @@ export function EntryTree({
   const filteredEntries = filterVisiblePaths
     ? entries.filter((entry) => filterVisiblePaths.has(entry.path))
     : entries;
-  const visibleEntries = revealHidden
-    ? filteredEntries
-    : filteredEntries.filter((entry) => !entry.name.startsWith("."));
+  const visibleEntries = filteredEntries.filter((entry) => (
+    explorerEntryVisible(entry, revealHidden, showIgnored, ignoredPaths)
+  ));
   const creationIndex = creationKind && creationParentPath === parentPath
     ? explorerCreationInsertionIndex(visibleEntries, creationKind, creationName.trim())
     : -1;
@@ -189,6 +197,14 @@ export function EntryTree({
             })
           : undefined;
         const decoration = resourceDecorations.get(entry.path);
+        const childEmptyState = entry.kind === "directory" && expanded.has(entry.path)
+          ? explorerDirectoryEmptyState(
+              entry.children,
+              showHidden || revealedHiddenPaths.has(entry.path),
+              showIgnored,
+              ignoredPaths,
+            )
+          : undefined;
         return <div key={entry.path}>
           <div className="tree-entry-row">
             {renamePath === entry.path ? (
@@ -307,6 +323,8 @@ export function EntryTree({
                   parentPath={entry.path}
                   expanded={expanded}
                   showHidden={showHidden}
+                  showIgnored={showIgnored}
+                  ignoredPaths={ignoredPaths}
                   revealHidden={showHidden || revealedHiddenPaths.has(entry.path)}
                   revealedHiddenPaths={revealedHiddenPaths}
                   filterVisiblePaths={filterVisiblePaths}
@@ -324,6 +342,7 @@ export function EntryTree({
                   onDraggingPathChange={onDraggingPathChange}
                   onDropTargetPathChange={onDropTargetPathChange}
                   onShowHiddenDirectory={onShowHiddenDirectory}
+                  onShowIgnoredEntries={onShowIgnoredEntries}
                   renamePath={renamePath}
                   renameName={renameName}
                   renameError={renameError}
@@ -340,11 +359,19 @@ export function EntryTree({
                   workspaceName={workspaceName}
                   {...(workspaceRoot ? { workspaceRoot } : {})}
                 />
-              ) : explorerDirectoryEmptyState(entry.children, showHidden || revealedHiddenPaths.has(entry.path)) === "hidden-only" ? (
+              ) : childEmptyState === "hidden-only" ? (
                 <button className="tree-empty-state tree-empty-state--action" type="button" onClick={() => onShowHiddenDirectory(entry.path)}>
                   Contém {hiddenExplorerEntryCount(entry.children)} {hiddenExplorerEntryCount(entry.children) === 1 ? "arquivo oculto" : "arquivos ocultos"}. Exibir?
                 </button>
-              ) : explorerDirectoryEmptyState(entry.children, showHidden || revealedHiddenPaths.has(entry.path)) === "empty" ? (
+              ) : childEmptyState === "ignored-only" ? (
+                <button className="tree-empty-state tree-empty-state--action" type="button" onClick={onShowIgnoredEntries}>
+                  Contém {ignoredExplorerEntryCount(entry.children, ignoredPaths)} {ignoredExplorerEntryCount(entry.children, ignoredPaths) === 1 ? "item ignorado" : "itens ignorados"}. Exibir?
+                </button>
+              ) : childEmptyState === "filtered-only" ? (
+                <button className="tree-empty-state tree-empty-state--action" type="button" onClick={() => { onShowHiddenDirectory(entry.path); onShowIgnoredEntries(); }}>
+                  Contém apenas itens ocultos ou ignorados. Exibir?
+                </button>
+              ) : childEmptyState === "empty" ? (
                 <div className="tree-empty-state">Pasta vazia</div>
               ) : (
                 <EntryTree
@@ -352,6 +379,8 @@ export function EntryTree({
                   parentPath={entry.path}
                   expanded={expanded}
                   showHidden={showHidden}
+                  showIgnored={showIgnored}
+                  ignoredPaths={ignoredPaths}
                   revealHidden={showHidden || revealedHiddenPaths.has(entry.path)}
                   revealedHiddenPaths={revealedHiddenPaths}
                   filterVisiblePaths={filterVisiblePaths}
@@ -369,6 +398,7 @@ export function EntryTree({
                   onDraggingPathChange={onDraggingPathChange}
                   onDropTargetPathChange={onDropTargetPathChange}
                   onShowHiddenDirectory={onShowHiddenDirectory}
+                  onShowIgnoredEntries={onShowIgnoredEntries}
                   renamePath={renamePath}
                   renameName={renameName}
                   renameError={renameError}

@@ -7,9 +7,11 @@ import {
   explorerDropTargetDirectory,
   explorerTargetDirectoryPath,
   explorerDirectoryEmptyState,
+  explorerEntryVisible,
   explorerCreationInsertionIndex,
   explorerFilterView,
   hiddenExplorerEntryCount,
+  ignoredExplorerEntryCount,
   findWorkspaceEntry,
   flattenVisibleEntries,
   joinWorkspacePath,
@@ -85,6 +87,21 @@ describe("explorer model", () => {
       { name: ".meta", path: ".meta", kind: "file" },
       { name: "main.py", path: "main.py", kind: "file" },
     ])).toBe(2);
+  });
+
+  it("treats project-ignored entries separately from dot-hidden entries", () => {
+    const ignoredPaths = new Set(["__pycache__", "node_modules"]);
+    const pycache = { name: "__pycache__", path: "__pycache__", kind: "directory" } satisfies WorkspaceEntry;
+    const dotCache = { name: ".cache", path: ".cache", kind: "directory" } satisfies WorkspaceEntry;
+    const source = { name: "src", path: "src", kind: "directory" } satisfies WorkspaceEntry;
+
+    expect(explorerEntryVisible(pycache, false, false, ignoredPaths)).toBe(false);
+    expect(explorerEntryVisible(pycache, false, true, ignoredPaths)).toBe(true);
+    expect(explorerEntryVisible(dotCache, false, true, ignoredPaths)).toBe(false);
+    expect(explorerEntryVisible(source, false, false, ignoredPaths)).toBe(true);
+    expect(explorerDirectoryEmptyState([pycache], false, false, ignoredPaths)).toBe("ignored-only");
+    expect(explorerDirectoryEmptyState([dotCache, pycache], false, false, ignoredPaths)).toBe("filtered-only");
+    expect(ignoredExplorerEntryCount([pycache, source], ignoredPaths)).toBe(1);
   });
 
   it("positions virtual creations using the same directory-first ordering as real entries", () => {

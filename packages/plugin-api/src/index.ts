@@ -146,6 +146,7 @@ export interface PluginExtensionApi {
   registerWorkbenchTitlebarContribution(contribution: WorkbenchTitlebarContribution): Disposable;
   registerWorkbenchStatusbarContribution(contribution: WorkbenchStatusbarContribution): Disposable;
   registerWorkbenchExplorerFilterProvider(provider: WorkbenchExplorerFilterProvider): Disposable;
+  registerWorkbenchExplorerIgnoreProvider(provider: WorkbenchExplorerIgnoreProvider): Disposable;
   registerWorkbenchEditorToolbarProvider(provider: WorkbenchEditorToolbarProvider): Disposable;
   registerTextEditorLineDecorationProvider(provider: TextEditorLineDecorationProvider): Disposable;
   registerWorkbenchResourceEditorProvider(provider: WorkbenchResourceEditorProvider): Disposable;
@@ -1165,6 +1166,33 @@ export interface WorkbenchExplorerFilterProvider {
 }
 
 export const WORKBENCH_EXPLORER_FILTER_CAPABILITY = "workbench.explorerFilter";
+
+export interface WorkbenchExplorerIgnoreRequest {
+  /** Workspace-relative paths that are currently known to the Explorer. */
+  readonly paths: readonly string[];
+}
+
+export interface WorkbenchExplorerIgnoreResult {
+  /** Subset of request.paths that should be treated as generated/ignored resources. */
+  readonly paths: readonly string[];
+}
+
+/**
+ * Lets plugins contribute project-aware ignore semantics without coupling the Explorer
+ * to a specific VCS or language. For example, a Git plugin can expose .gitignore rules.
+ */
+export interface WorkbenchExplorerIgnoreProvider {
+  readonly id: string;
+  readonly pluginId: string;
+  readonly priority?: number;
+  ignored(
+    request: WorkbenchExplorerIgnoreRequest,
+  ): WorkbenchExplorerIgnoreResult | Promise<WorkbenchExplorerIgnoreResult>;
+  /** Notifies the host that ignore rules or repository state changed. */
+  subscribe?(listener: () => void): Disposable;
+}
+
+export const WORKBENCH_EXPLORER_IGNORE_CAPABILITY = "workbench.explorerIgnore";
 
 export type WorkbenchResourceKind = "text" | "image" | "binary";
 

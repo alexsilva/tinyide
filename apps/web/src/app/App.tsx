@@ -136,6 +136,7 @@ import type {
   WorkbenchStateSnapshot,
   WorkbenchTitlebarContribution,
   WorkbenchExplorerFilterProvider,
+  WorkbenchExplorerIgnoreProvider,
   WorkbenchConfirmRequest,
   WorkbenchVirtualDocumentRequest,
   WorkbenchWorkspaceResourceOpenRequest,
@@ -1202,7 +1203,10 @@ export function App() {
   const [entries, setEntries] = useState<readonly WorkspaceEntry[]>([]);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set(initialSession.expandedDirectories));
   const [explorerShowHidden, setExplorerShowHidden] = useState(initialSession.explorerShowHidden);
+  const [explorerShowIgnored, setExplorerShowIgnored] = useState(initialSession.explorerShowIgnored);
   const [explorerRevealedHiddenPaths, setExplorerRevealedHiddenPaths] = useState<ReadonlySet<string>>(new Set());
+  const [explorerIgnoredPaths, setExplorerIgnoredPaths] = useState<ReadonlySet<string>>(new Set());
+  const [explorerIgnoreRevision, setExplorerIgnoreRevision] = useState(0);
   const [documents, setDocuments] = useState<readonly OpenDocument[]>([]);
   const [activeDocumentId, setActiveDocumentId] = useState<string | undefined>(initialSession.activeDocumentId);
   const [draggingDocumentId, setDraggingDocumentId] = useState<string>();
@@ -1656,6 +1660,7 @@ export function App() {
     titlebar: workbenchTitlebarContributions,
     statusbar: workbenchStatusbarContributions,
     explorerFilter: explorerFilterProvider,
+    explorerIgnore: explorerIgnoreProviders,
   } = useWorkbenchContributions(platformSnapshot);
   const activePluginSidebar = workbenchSidebars.find((sidebar) => sidebar.id === sidebarView);
   useEffect(() => {
@@ -2685,6 +2690,7 @@ export function App() {
         setActivityButtonPlacements(persistedSession.activityButtonPlacements);
         setExpanded(new Set(persistedSession.expandedDirectories));
         setExplorerShowHidden(persistedSession.explorerShowHidden);
+        setExplorerShowIgnored(persistedSession.explorerShowIgnored);
 
         const snapshot = await readReactSnapshot();
         let restoredDocuments: readonly OpenDocument[] = [];
@@ -3031,10 +3037,11 @@ export function App() {
       ...(activeDocumentId ? { activeDocumentId } : {}),
       expandedDirectories: [...expanded],
       explorerShowHidden,
+      explorerShowIgnored,
       activityButtonPlacements,
       sidebarViewsBySide,
     });
-  }, [restorationComplete, sidebarView, sidebarVisible, sidebarViewsBySide, verticalPanelWidths, panelVisible, panelHeight, panelTab, problemsVisible, toolWindowVisible, toolWindowHeight, activeToolWindowId, workspaceName, workspaceRoot, activeDocumentId, expanded, explorerShowHidden, activityButtonPlacements]);
+  }, [restorationComplete, sidebarView, sidebarVisible, sidebarViewsBySide, verticalPanelWidths, panelVisible, panelHeight, panelTab, problemsVisible, toolWindowVisible, toolWindowHeight, activeToolWindowId, workspaceName, workspaceRoot, activeDocumentId, expanded, explorerShowHidden, explorerShowIgnored, activityButtonPlacements]);
 
   useEffect(() => {
     if (!restoredRef.current) return;
@@ -4614,6 +4621,42 @@ export function App() {
     });
     return () => subscription?.dispose();
   }, [explorerFilterProvider]);
+
+  useEffect(() => {
+    const subscriptions = explorerIgnoreProviders
+      .map((provider) => provider.subscribe?.(() => setExplorerIgnoreRevision((current) => current + 1)))
+      .filter((subscription): subscription is { dispose(): void } => Boolean(subscription));
+    return () => subscriptions.forEach((subscription) => subscription.dispose());
+  }, [explorerIgnoreProviders]);
+
+  useEffect(() => {
+    if (!explorerIgnoreProviders.length || workspaceName === "Sem workspace") {
+      setExplorerIgnoredPaths(new Set());
+      return;
+    }
+    const collect = (items: readonly WorkspaceEntry[]): readonly string[] => items.flatMap((entry) => [
+      entry.path,
+      ...(entry.children ? collect(entry.children) : []),
+    ]);
+    const paths = collect(entries);
+    if (!paths.length) {
+      setExplorerIgnoredPaths(new Set());
+      return;
+    }
+    const requestedPaths = new Set(paths);
+    let cancelled = false;
+    void Promise.all(explorerIgnoreProviders.map(async (provider) => {
+      try {
+        return await provider.ignored({ paths });
+      } catch {
+        return { paths: [] as readonly string[] };
+      }
+    })).then((results) => {
+      if (cancelled) return;
+      setExplorerIgnoredPaths(new Set(results.flatMap((result) => result.paths).filter((path) => requestedPaths.has(path))));
+    });
+    return () => { cancelled = true; };
+  }, [entries, explorerIgnoreProviders, explorerIgnoreRevision, workspaceName, workspaceRoot]);
 
   useEffect(() => {
     const query = explorerFilterQuery.trim();
@@ -6352,6 +6395,12 @@ export function App() {
                               {explorerHiddenEntriesVisible ? <EyeOff size={15} /> : <Eye size={15} />}
                               {explorerHiddenEntriesVisible ? "Ocultar arquivos ocultos" : "Mostrar arquivos ocultos"}
                             </DropdownMenu.Item>
+                            {explorerIgnoreProviders.length ? (
+                              <DropdownMenu.Item className="menu-item" onSelect={() => setExplorerShowIgnored((visible) => !visible)}>
+                                {explorerShowIgnored ? <EyeOff size={15} /> : <Eye size={15} />}
+                                {explorerShowIgnored ? "Ocultar arquivos ignorados" : "Mostrar arquivos ignorados"}
+                              </DropdownMenu.Item>
+                            ) : null}
                           </DropdownMenu.Content>
                         </DropdownMenu.Portal>
                       </DropdownMenu.Root>
@@ -6524,6 +6573,8 @@ export function App() {
                       parentPath=""
                       expanded={expanded}
                       showHidden={explorerShowHidden || explorerFilterActive}
+                      showIgnored={explorerShowIgnored || explorerFilterActive}
+                      ignoredPaths={explorerIgnoredPaths}
                       revealHidden={explorerShowHidden || explorerFilterActive}
                       revealedHiddenPaths={explorerRevealedHiddenPaths}
                       filterVisiblePaths={explorerFilterResult?.visiblePaths}
@@ -6552,6 +6603,7 @@ export function App() {
                         : new Set())}
                       onDropTargetPathChange={setDropTargetExplorerPath}
                       onShowHiddenDirectory={(path) => setExplorerRevealedHiddenPaths((current) => new Set(current).add(path))}
+                      onShowIgnoredEntries={() => setExplorerShowIgnored(true)}
                       renamePath={explorerRenamePath}
                       renameName={explorerRenameName}
                       renameError={explorerRenameError}

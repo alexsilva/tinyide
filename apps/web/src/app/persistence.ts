@@ -53,6 +53,7 @@ export interface SessionState extends LayoutState {
   readonly activeDocumentId?: string;
   readonly expandedDirectories: readonly string[];
   readonly explorerShowHidden: boolean;
+  readonly explorerShowIgnored: boolean;
   readonly selectedEnvironmentId?: string;
   readonly activityButtonPlacements: ActivityButtonPlacements;
   readonly sidebarViewsBySide: PersistedSidebarViewsBySide;
@@ -147,6 +148,7 @@ function defaultSession(): SessionState {
     workspaceName: "Sem workspace",
     expandedDirectories: [],
     explorerShowHidden: false,
+    explorerShowIgnored: false,
     activityButtonPlacements: {},
     sidebarViewsBySide: { left: DEFAULT_LAYOUT.sidebarView },
   };
@@ -216,6 +218,7 @@ function normalizeSession(value: unknown): SessionState {
         ? parsed.expandedDirectories.filter((value): value is string => typeof value === "string")
         : [],
       explorerShowHidden: parsed.explorerShowHidden === true,
+      explorerShowIgnored: parsed.explorerShowIgnored === true,
       ...(typeof parsed.selectedEnvironmentId === "string"
         ? { selectedEnvironmentId: parsed.selectedEnvironmentId }
         : {}),

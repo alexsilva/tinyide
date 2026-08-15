@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type {
   WorkbenchExplorerFilterProvider,
+  WorkbenchExplorerIgnoreProvider,
   WorkbenchPanelHook,
   WorkbenchSidebarHook,
   WorkbenchStatusbarContribution,
@@ -76,6 +77,11 @@ export function useWorkbenchContributions(revision: unknown) {
     .sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0) || left.id.localeCompare(right.id))
     .at(0), [revision]);
 
+  const explorerIgnore = useMemo(() => platform.capabilities
+    .getAll<WorkbenchExplorerIgnoreProvider>("workbench.explorerIgnore")
+    .slice()
+    .sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0) || left.id.localeCompare(right.id)), [revision]);
+
   return {
     sidebars,
     panels,
@@ -84,5 +90,6 @@ export function useWorkbenchContributions(revision: unknown) {
     titlebar,
     statusbar,
     explorerFilter,
+    explorerIgnore,
   };
 }

@@ -92,17 +92,39 @@ export function workspacePathContainsHiddenSegment(path: string): boolean {
   return path.split("/").filter(Boolean).some((segment) => segment.startsWith("."));
 }
 
+export function explorerEntryVisible(
+  entry: WorkspaceEntry,
+  showHidden: boolean,
+  showIgnored = true,
+  ignoredPaths: ReadonlySet<string> = new Set(),
+): boolean {
+  if (!showHidden && entry.name.startsWith(".")) return false;
+  if (!showIgnored && ignoredPaths.has(entry.path)) return false;
+  return true;
+}
+
 export function explorerDirectoryEmptyState(
   entries: readonly WorkspaceEntry[] | undefined,
   showHidden: boolean,
-): "empty" | "hidden-only" | undefined {
+  showIgnored = true,
+  ignoredPaths: ReadonlySet<string> = new Set(),
+): "empty" | "hidden-only" | "ignored-only" | "filtered-only" | undefined {
   if (!entries?.length) return "empty";
+  if (entries.some((entry) => explorerEntryVisible(entry, showHidden, showIgnored, ignoredPaths))) return undefined;
   if (!showHidden && entries.every((entry) => entry.name.startsWith("."))) return "hidden-only";
-  return undefined;
+  if (!showIgnored && entries.every((entry) => ignoredPaths.has(entry.path))) return "ignored-only";
+  return "filtered-only";
 }
 
 export function hiddenExplorerEntryCount(entries: readonly WorkspaceEntry[] | undefined): number {
   return entries?.filter((entry) => entry.name.startsWith(".")).length ?? 0;
+}
+
+export function ignoredExplorerEntryCount(
+  entries: readonly WorkspaceEntry[] | undefined,
+  ignoredPaths: ReadonlySet<string>,
+): number {
+  return entries?.filter((entry) => ignoredPaths.has(entry.path)).length ?? 0;
 }
 
 export function explorerCreationInsertionIndex(
@@ -141,11 +163,13 @@ export function expandNextExplorerLevel(
   entries: readonly WorkspaceEntry[],
   expanded: ReadonlySet<string>,
   showHidden: boolean,
+  showIgnored = true,
+  ignoredPaths: ReadonlySet<string> = new Set(),
 ): ReadonlySet<string> {
   const next = new Set(expanded);
   const visit = (items: readonly WorkspaceEntry[]) => {
     for (const entry of items) {
-      if (!showHidden && entry.name.startsWith(".")) continue;
+      if (!explorerEntryVisible(entry, showHidden, showIgnored, ignoredPaths)) continue;
       if (entry.kind !== "directory") continue;
       if (!expanded.has(entry.path)) {
         next.add(entry.path);
@@ -187,13 +211,15 @@ export function flattenVisibleEntries(
   entries: readonly WorkspaceEntry[],
   expanded: ReadonlySet<string>,
   showHidden: boolean,
+  showIgnored = true,
+  ignoredPaths: ReadonlySet<string> = new Set(),
 ): readonly WorkspaceEntry[] {
   const flattened: WorkspaceEntry[] = [];
   for (const entry of entries) {
-    if (!showHidden && entry.name.startsWith(".")) continue;
+    if (!explorerEntryVisible(entry, showHidden, showIgnored, ignoredPaths)) continue;
     flattened.push(entry);
     if (entry.kind === "directory" && expanded.has(entry.path) && entry.children) {
-      flattened.push(...flattenVisibleEntries(entry.children, expanded, showHidden));
+      flattened.push(...flattenVisibleEntries(entry.children, expanded, showHidden, showIgnored, ignoredPaths));
     }
   }
   return flattened;

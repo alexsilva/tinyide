@@ -47,19 +47,18 @@ describe("execution panel layout", () => {
     expect(featureStyles).not.toContain(".execution-text-output__toolbar");
   });
 
-  it("keeps tool windows visible until the panel X is used", () => {
+  it("toggles plugin tool windows from their activity bar button", () => {
     const toggle = appSource.slice(
       appSource.indexOf("const toggleToolWindow = (toolWindowId: string) => {"),
       appSource.indexOf("const togglePluginSidebar = (sidebarId: string) => {"),
     );
-    expect(toggle).toContain("if (!toolWindowVisible)");
-    expect(toggle).not.toContain("const next = !visible");
-    expect(toggle).not.toContain("return next");
+    expect(toggle).toContain("setToolWindowVisible((visible) => !visible)");
     expect(appSource).toContain("onClose={closeToolWindow}");
     expect(pluginHostsSource).toContain('aria-label={`Ocultar painel ${provider.label}`}');
     expect(pluginHostsSource).toContain('title="Ocultar painel"');
-    expect(activityBarSource).toContain('const disabled = pluginItem.kind === "toolWindow" && active;');
-    expect(activityBarSource).toContain('disabled={disabled}');
+    expect(activityBarSource).not.toContain('const disabled = pluginItem.kind === "toolWindow" && active;');
+    expect(activityBarSource).not.toContain('disabled={disabled}');
+    expect(activityBarSource).toContain('`Ocultar ${pluginItem.label}`');
     expect(activityBarSource).toContain('`Exibir ${pluginItem.label}`');
   });
 });

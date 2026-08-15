@@ -6113,10 +6113,8 @@ export function App() {
 
   const toggleToolWindow = (toolWindowId: string) => {
     if (activeToolWindowId === toolWindowId) {
-      if (!toolWindowVisible) {
-        setPanelVisible(false);
-        setToolWindowVisible(true);
-      }
+      setPanelVisible(false);
+      setToolWindowVisible((visible) => !visible);
       return;
     }
     setActiveToolWindowId(toolWindowId);

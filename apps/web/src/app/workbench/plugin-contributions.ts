@@ -13,6 +13,7 @@ export function expandWorkbenchPanelContribution(
     id: tab.id,
     pluginId: contribution.pluginId,
     label: tab.label,
+    ...((tab.icon ?? contribution.icon) ? { icon: tab.icon ?? contribution.icon } : {}),
     ...((tab.order ?? contribution.order) !== undefined ? { order: tab.order ?? contribution.order } : {}),
     mount: tab.mount,
   }));

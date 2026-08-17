@@ -824,6 +824,7 @@ export interface WorkbenchPanelContribution {
   readonly id: string;
   readonly pluginId: string;
   readonly label: string;
+  readonly icon?: WorkbenchActivityIcon;
   readonly order?: number;
   mount(context: WorkbenchPanelMountContext): void | Disposable | Promise<void | Disposable>;
 }
@@ -831,6 +832,7 @@ export interface WorkbenchPanelContribution {
 export interface WorkbenchPanelTabContribution {
   readonly id: string;
   readonly label: string;
+  readonly icon?: WorkbenchActivityIcon;
   readonly order?: number;
   mount(context: WorkbenchPanelMountContext): void | Disposable | Promise<void | Disposable>;
 }
@@ -839,6 +841,7 @@ export interface WorkbenchPanelTabGroupContribution {
   readonly id: string;
   readonly pluginId: string;
   readonly label: string;
+  readonly icon?: WorkbenchActivityIcon;
   readonly order?: number;
   readonly tabs: readonly WorkbenchPanelTabContribution[];
 }

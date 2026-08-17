@@ -7896,7 +7896,10 @@ export function App() {
                         type="button"
                         key={panel.id}
                         onClick={() => setPanelTab(panel.id)}
-                      >{panel.label}</button>
+                      >
+                        {panel.icon ? <WorkbenchActivityIconView icon={panel.icon} /> : null}
+                        <span className="panel-tab__label">{panel.label}</span>
+                      </button>
                     ))}
                   </div>
                   <button className="icon-button small" type="button" aria-label="Fechar painel" onClick={() => setPanelVisible(false)}><X size={14} /></button>

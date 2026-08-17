@@ -1,5 +1,5 @@
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { Box, Database, Files, History, Terminal } from "lucide-react";
+import { Box, Database, Files, History } from "lucide-react";
 import { useEffect, useState, type KeyboardEventHandler, type ReactElement, type ReactNode } from "react";
 import type {
   WorkbenchActivityBadgeProvider,
@@ -322,6 +322,26 @@ function PythonBrandIcon() {
   );
 }
 
+function TerminalBrandIcon() {
+  return (
+    <svg className="workbench-brand-icon" data-workbench-icon="terminal" viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="6" fill="#171b22" />
+      <rect x="3.5" y="5" width="25" height="22" rx="3" fill="#222934" stroke="#596579" />
+      <circle cx="7" cy="8.5" r="1" fill="#ef6a6a" />
+      <circle cx="10.5" cy="8.5" r="1" fill="#e5b95c" />
+      <circle cx="14" cy="8.5" r="1" fill="#67c587" />
+      <path
+        fill="none"
+        stroke="#72e39a"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="m8 15 4 3-4 3m7 0h7"
+      />
+    </svg>
+  );
+}
+
 export function WorkbenchActivityIconView({ icon }: { readonly icon: WorkbenchActivityIcon | undefined }) {
   if (icon === "docker") return <DockerBrandIcon />;
   if (icon === "git" || icon === "source-control") return <GitBrandIcon />;
@@ -330,6 +350,6 @@ export function WorkbenchActivityIconView({ icon }: { readonly icon: WorkbenchAc
   if (icon === "database") return <Database size={16} />;
   if (icon === "files") return <Files size={16} />;
   if (icon === "history") return <History size={16} />;
-  if (icon === "terminal") return <Terminal size={16} />;
+  if (icon === "terminal") return <TerminalBrandIcon />;
   return <Box size={16} />;
 }

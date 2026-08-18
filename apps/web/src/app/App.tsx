@@ -346,6 +346,7 @@ import {
   moveOpenSidebar,
   openSidebarViewForSide,
   reconcileToolWindowLayout,
+  retainMountedToolWindows,
   sidebarActivityKey,
   sidebarViewFromActivityKey,
   sidebarWidthForView,
@@ -1198,6 +1199,7 @@ export function App() {
   const [activityButtonPlacements, setActivityButtonPlacements] = useState(initialSession.activityButtonPlacements);
   const [draggingActivityButtonKey, setDraggingActivityButtonKey] = useState<string>();
   const [toolWindowViewRequest, setToolWindowViewRequest] = useState<WorkbenchToolWindowViewRequest>();
+  const [mountedToolWindowIds, setMountedToolWindowIds] = useState<ReadonlySet<string>>(new Set());
   const toolWindowViewRequestSequenceRef = useRef(0);
   // A região inferior mostra apenas um painel horizontal por vez: abrir a saída de
   // execução/debug oculta a tool window ativa (e vice-versa).
@@ -1689,7 +1691,6 @@ export function App() {
     });
     return () => { cancelled = true; };
   }, [activeDocument, platformSnapshot, resourceEditorRevision]);
-  const activeToolWindow = workbenchToolWindows.find((toolWindow) => toolWindow.id === activeToolWindowId);
   const selectedProfile = profilesState.profiles.find((profile) => profile.id === profilesState.selectedId);
   const selectedProfileDebugAdapter = selectedProfile
     ? debugAdapterForProfile({
@@ -2619,6 +2620,14 @@ export function App() {
       setToolWindowVisible(next.toolWindowVisible);
     }
   }, [platformSnapshot.plugins, platformSnapshot.initialized, activeToolWindowId, toolWindowVisible]);
+
+  useEffect(() => {
+    setMountedToolWindowIds((previous) => retainMountedToolWindows(previous, {
+      ...(activeToolWindowId ? { activeToolWindowId } : {}),
+      toolWindowVisible,
+      availableIds: workbenchToolWindows.map((toolWindow) => toolWindow.id),
+    }));
+  }, [activeToolWindowId, toolWindowVisible, workbenchToolWindows]);
 
   useEffect(() => {
     if (!platformSnapshot.initialized) return;
@@ -8309,18 +8318,21 @@ export function App() {
               </section>
             ) : null}
 
-            {restorationComplete && activeToolWindow ? (
-              <WorkbenchToolWindowHost
-                provider={activeToolWindow}
-                state={workbenchState}
-                visible={toolWindowVisible}
-                height={toolWindowHeight}
-                {...(toolWindowViewRequest ? { viewRequest: toolWindowViewRequest } : {})}
-                onClose={closeToolWindow}
-                onResize={beginToolWindowResize}
-                onResetHeight={() => setToolWindowHeight(DEFAULT_LAYOUT.toolWindowHeight)}
-              />
-            ) : null}
+            {restorationComplete ? workbenchToolWindows
+              .filter((toolWindow) => mountedToolWindowIds.has(toolWindow.id))
+              .map((toolWindow) => (
+                <WorkbenchToolWindowHost
+                  key={toolWindow.id}
+                  provider={toolWindow}
+                  state={workbenchState}
+                  visible={toolWindowVisible && toolWindow.id === activeToolWindowId}
+                  height={toolWindowHeight}
+                  {...(toolWindowViewRequest ? { viewRequest: toolWindowViewRequest } : {})}
+                  onClose={closeToolWindow}
+                  onResize={beginToolWindowResize}
+                  onResetHeight={() => setToolWindowHeight(DEFAULT_LAYOUT.toolWindowHeight)}
+                />
+              )) : null}
           </div>
         </div>
 

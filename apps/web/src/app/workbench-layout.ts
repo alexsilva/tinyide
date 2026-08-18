@@ -95,6 +95,28 @@ export function sidebarWidthForView(width: number, viewId: string): number {
   );
 }
 
+/**
+ * Tool windows já ativados permanecem montados (apenas ocultos) para preservar
+ * estado vivo — um terminal com TUI não sobrevive a desmontar/remontar, porque a
+ * reconexão reproduz o histórico cru do PTY. Remove apenas ids desinstalados.
+ */
+export function retainMountedToolWindows(
+  previous: ReadonlySet<string>,
+  input: {
+    readonly activeToolWindowId?: string;
+    readonly toolWindowVisible: boolean;
+    readonly availableIds: readonly string[];
+  },
+): ReadonlySet<string> {
+  const available = new Set(input.availableIds);
+  const next = new Set([...previous].filter((id) => available.has(id)));
+  if (input.toolWindowVisible && input.activeToolWindowId && available.has(input.activeToolWindowId)) {
+    next.add(input.activeToolWindowId);
+  }
+  if (next.size === previous.size && [...next].every((id) => previous.has(id))) return previous;
+  return next;
+}
+
 export function reconcileToolWindowLayout(input: {
   readonly initialized: boolean;
   readonly availableIds: readonly string[];

@@ -4,6 +4,7 @@ import {
   maximumSidebarWidth,
   moveOpenSidebar,
   reconcileToolWindowLayout,
+  retainMountedToolWindows,
   sidebarActivityKey,
   openSidebarViewForSide,
   sidebarViewFromActivityKey,
@@ -105,5 +106,62 @@ describe("workbench layout restoration", () => {
       availableIds: [],
       current: { activeToolWindowId: "terminal", toolWindowVisible: true },
     })).toEqual({ toolWindowVisible: false });
+  });
+});
+
+describe("mounted tool window retention", () => {
+  it("mounts the active tool window when the region is visible", () => {
+    expect([...retainMountedToolWindows(new Set(), {
+      activeToolWindowId: "terminal",
+      toolWindowVisible: true,
+      availableIds: ["terminal", "database"],
+    })]).toEqual(["terminal"]);
+  });
+
+  it("does not mount anything while the region is hidden", () => {
+    expect(retainMountedToolWindows(new Set(), {
+      activeToolWindowId: "terminal",
+      toolWindowVisible: false,
+      availableIds: ["terminal"],
+    }).size).toBe(0);
+  });
+
+  it("keeps previously mounted tool windows alive when another becomes active", () => {
+    const previous = retainMountedToolWindows(new Set(), {
+      activeToolWindowId: "terminal",
+      toolWindowVisible: true,
+      availableIds: ["terminal", "database"],
+    });
+    expect([...retainMountedToolWindows(previous, {
+      activeToolWindowId: "database",
+      toolWindowVisible: true,
+      availableIds: ["terminal", "database"],
+    })].sort()).toEqual(["database", "terminal"]);
+  });
+
+  it("keeps mounted tool windows when the region closes", () => {
+    const previous = new Set(["terminal"]);
+    expect(retainMountedToolWindows(previous, {
+      activeToolWindowId: "terminal",
+      toolWindowVisible: false,
+      availableIds: ["terminal"],
+    })).toBe(previous);
+  });
+
+  it("prunes tool windows that are no longer available", () => {
+    expect([...retainMountedToolWindows(new Set(["terminal", "removed"]), {
+      activeToolWindowId: "terminal",
+      toolWindowVisible: true,
+      availableIds: ["terminal"],
+    })]).toEqual(["terminal"]);
+  });
+
+  it("returns the same reference when nothing changes", () => {
+    const previous = new Set(["terminal"]);
+    expect(retainMountedToolWindows(previous, {
+      activeToolWindowId: "terminal",
+      toolWindowVisible: true,
+      availableIds: ["terminal", "database"],
+    })).toBe(previous);
   });
 });

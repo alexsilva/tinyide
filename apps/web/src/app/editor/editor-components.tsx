@@ -8,25 +8,34 @@ export const HighlightedSource = memo(function HighlightedSource({
   source,
   provider,
   highlight,
+  contextTarget,
 }: {
   readonly source: string;
   readonly provider?: Pick<SyntaxHighlighter, "highlight">;
   readonly highlight?: { readonly start: number; readonly end: number };
+  readonly contextTarget?: { readonly start: number; readonly end: number };
 }) {
   const tokens = useMemo(() => [...(provider?.highlight(source) ?? [])]
     .filter((token) => token.start >= 0 && token.start < token.end && token.end <= source.length)
     .sort((left, right) => left.start - right.start), [provider, source]);
-  const highlightStart = Math.max(0, Math.min(source.length, highlight?.start ?? 0));
-  const highlightEnd = Math.max(highlightStart, Math.min(source.length, highlight?.end ?? 0));
+  const ranges = ([
+    [highlight, "editor-search-match"],
+    [contextTarget, "editor-context-target"],
+  ] as const)
+    .flatMap(([range, className]) => {
+      const start = Math.max(0, Math.min(source.length, range?.start ?? 0));
+      const end = Math.max(start, Math.min(source.length, range?.end ?? 0));
+      return range && end > start ? [{ start, end, className }] : [];
+    });
   const boundaries = new Set([0, source.length]);
   tokens.forEach((token) => {
     boundaries.add(token.start);
     boundaries.add(token.end);
   });
-  if (highlightEnd > highlightStart) {
-    boundaries.add(highlightStart);
-    boundaries.add(highlightEnd);
-  }
+  ranges.forEach((range) => {
+    boundaries.add(range.start);
+    boundaries.add(range.end);
+  });
   const offsets = [...boundaries].sort((left, right) => left - right);
   const fragments: ReactNode[] = [];
   let tokenIndex = 0;
@@ -38,9 +47,7 @@ export const HighlightedSource = memo(function HighlightedSource({
     const token = tokens[tokenIndex];
     const classes = [
       token && token.start <= start && token.end >= end ? `syntax-${token.scope}` : undefined,
-      start >= highlightStart && end <= highlightEnd && highlightEnd > highlightStart
-        ? "editor-search-match"
-        : undefined,
+      ...ranges.map((range) => (start >= range.start && end <= range.end ? range.className : undefined)),
     ].filter(Boolean).join(" ");
     const content = source.slice(start, end);
     fragments.push(classes

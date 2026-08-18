@@ -29,7 +29,7 @@ describe("folded editor pointer mapping", () => {
 
   it("renders projected selections and resolves double-click words from the folded visual layer", () => {
     expect(appSource).toContain("function editorMirrorRectsAtTextRange(");
-    expect(appSource).toContain("function editorWordRangeAtOffset(");
+    expect(appSource).toContain('import { editorContextMenuTargetRange, editorWordRangeAtOffset } from "./editor/context-target"');
     expect(appSource).toContain("onDoubleClick={selectFoldedEditorWordAtPointer}");
     expect(appSource).toContain('className="editor-projected-selection"');
   });
@@ -44,6 +44,20 @@ describe("folded editor pointer mapping", () => {
     expect(appSource).toContain("if (lineStart === lineEnd) {");
     expect(appSource).toContain("(position.line - 1) * lineHeight");
     expect(appSource).toContain("Math.max(0, (lineHeight - height) / 2)");
+  });
+
+  it("reveals folded search matches and projects the highlight instead of dropping it", () => {
+    expect(appSource).toContain("const projection = revealFoldsForFileLine(activeDocument.id, matchFileLine)");
+    expect(appSource).toContain("scrollEditorToLine(foldSearchVisibleLine(projection, matchFileLine))");
+    expect(appSource).toContain("const remainingFolds = foldsRevealingFileLine(currentFolds, fileLine)");
+    expect(appSource).toContain("{...(activeEditorSearchHighlight ? { highlight: activeEditorSearchHighlight } : {})}");
+    expect(appSource).not.toContain("activeEditorSearchMatch && !activeFoldProjection ? { highlight: activeEditorSearchMatch }");
+  });
+
+  it("projects the context menu target highlight through the folded layer", () => {
+    expect(appSource).toContain("const range = editorContextMenuTargetRange(activeEditorContent, context.selectionStart, context.selectionEnd)");
+    expect(appSource).toContain("if (!foldSearchMatchVisible(activeEditorContent, activeFoldProjection, range)) return undefined;");
+    expect(appSource).toContain("{...(editorContextTargetHighlight ? { contextTarget: editorContextTargetHighlight } : {})}");
   });
 
   it("remaps folds for programmatic replacements such as line-diff undo", () => {

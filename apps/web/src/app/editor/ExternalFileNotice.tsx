@@ -35,13 +35,14 @@ export function ExternalFileNotice({
     >
       {notice.kind === "conflict" ? <FileWarning size={15} /> : <RefreshCw size={15} />}
       <div className="editor-external-file-notice__message">
-        <strong>{notice.kind === "conflict" ? "Arquivo alterado fora da IDE" : "Arquivo atualizado externamente"}</strong>
-        <span>
-          {notice.kind === "conflict"
-            ? "As alterações locais foram preservadas. Escolha qual versão deve continuar."
-            : "O conteúdo do editor foi recarregado automaticamente."}
-          {` Detectado às ${detectedAt}.`}
-        </span>
+        {notice.kind === "conflict" ? (
+          <>
+            <strong>Arquivo alterado fora da IDE</strong>
+            <span>As alterações locais foram preservadas. Escolha qual versão deve continuar. Detectado às {detectedAt}.</span>
+          </>
+        ) : (
+          <span><strong>Arquivo atualizado externamente.</strong> Recarregado automaticamente às {detectedAt}.</span>
+        )}
       </div>
       <div className="editor-external-file-notice__actions">
         {notice.kind === "conflict" ? (

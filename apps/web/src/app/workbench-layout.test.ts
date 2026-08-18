@@ -5,6 +5,7 @@ import {
   moveOpenSidebar,
   reconcileToolWindowLayout,
   sidebarActivityKey,
+  openSidebarViewForSide,
   sidebarViewFromActivityKey,
   sidebarWidthForView,
   toggleSidebarViewForSide,
@@ -19,6 +20,19 @@ describe("vertical sidebar layout", () => {
     expect(toggleSidebarViewForSide(withRightGit, "left", "plugins")).toEqual({
       left: "plugins",
       right: "git.changes",
+    });
+  });
+
+  it("never keeps the same view open on both sides", () => {
+    const current = { left: "git.changes" } as const;
+    expect(toggleSidebarViewForSide(current, "right", "git.changes")).toEqual({
+      right: "git.changes",
+    });
+    expect(openSidebarViewForSide(current, "right", "git.changes")).toEqual({
+      right: "git.changes",
+    });
+    expect(openSidebarViewForSide({ left: "git.changes" }, "left", "git.changes")).toEqual({
+      left: "git.changes",
     });
   });
 

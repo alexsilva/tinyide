@@ -31,6 +31,18 @@ export function sidebarViewFromActivityKey(key: string): string | undefined {
   return key.startsWith("sidebar:") ? key.slice("sidebar:".length) : undefined;
 }
 
+export function openSidebarViewForSide(
+  current: SidebarViewsBySide,
+  side: ActivityBarSide,
+  viewId: string,
+): SidebarViewsBySide {
+  const other: ActivityBarSide = side === "left" ? "right" : "left";
+  if (current[side] === viewId && current[other] !== viewId) return current;
+  const next = { ...current, [side]: viewId };
+  if (next[other] === viewId) delete next[other];
+  return next;
+}
+
 export function toggleSidebarViewForSide(
   current: SidebarViewsBySide,
   side: ActivityBarSide,
@@ -41,7 +53,7 @@ export function toggleSidebarViewForSide(
     delete next[side];
     return next;
   }
-  return { ...current, [side]: viewId };
+  return openSidebarViewForSide(current, side, viewId);
 }
 
 export function closeSidebarForSide(

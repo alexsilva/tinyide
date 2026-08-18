@@ -175,11 +175,18 @@ function normalizeSession(value: unknown): SessionState {
     const hasStoredSidebarViews = Object.prototype.hasOwnProperty.call(parsed, "sidebarViewsBySide");
     const storedSidebarViews = readSidebarViewsBySide(parsed.sidebarViewsBySide);
     const legacySidebarSide = activityButtonPlacements[sidebarActivityKey(sidebarView)]?.side ?? "left";
-    const sidebarViewsBySide = hasStoredSidebarViews
+    const candidateSidebarViews = hasStoredSidebarViews
       ? storedSidebarViews
       : parsed.sidebarVisible !== false
         ? { [legacySidebarSide]: sidebarView }
         : {};
+    // Uma mesma view nunca pode ocupar os dois lados: mantém o lado do botão.
+    const sidebarViewsBySide = candidateSidebarViews.left
+      && candidateSidebarViews.left === candidateSidebarViews.right
+      ? (activityButtonPlacements[sidebarActivityKey(candidateSidebarViews.left)]?.side === "right"
+        ? { right: candidateSidebarViews.right }
+        : { left: candidateSidebarViews.left })
+      : candidateSidebarViews;
     return {
       sidebarVisible: Boolean(sidebarViewsBySide.left || sidebarViewsBySide.right),
       sidebarWidth: clamp(Number(parsed.sidebarWidth) || DEFAULT_LAYOUT.sidebarWidth, 180, 720),

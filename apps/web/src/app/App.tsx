@@ -344,6 +344,7 @@ import {
   closeSidebarForSide,
   maximumSidebarWidth,
   moveOpenSidebar,
+  openSidebarViewForSide,
   reconcileToolWindowLayout,
   sidebarActivityKey,
   sidebarViewFromActivityKey,
@@ -2301,7 +2302,7 @@ export function App() {
         throw new Error(`Sidebar não registrada: ${id}`);
       }
       const side = activitySideFor(`sidebar:${id}`);
-      setSidebarViewsBySide((current) => ({ ...current, [side]: id }));
+      setSidebarViewsBySide((current) => openSidebarViewForSide(current, side, id));
       setSidebarView(id);
       setSidebarVisible(true);
     },

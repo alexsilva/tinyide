@@ -233,6 +233,22 @@ describe("layout persistence", () => {
     });
   });
 
+  it("collapses a view duplicated on both sides to the button side", () => {
+    vi.stubGlobal("localStorage", localStorageWith({
+      sidebarVisible: true,
+      sidebarView: "git.changes",
+      sidebarViewsBySide: {
+        left: "git.changes",
+        right: "git.changes",
+      },
+      activityButtonPlacements: {
+        "sidebar:git.changes": { side: "right", order: 2 },
+      },
+    }));
+
+    expect(readSession().sidebarViewsBySide).toEqual({ right: "git.changes" });
+  });
+
   it("migrates the legacy single sidebar to its configured side", () => {
     vi.stubGlobal("localStorage", localStorageWith({
       sidebarVisible: true,

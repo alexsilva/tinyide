@@ -1441,6 +1441,7 @@ export function App() {
   const highlightedEditorScrollRef = useRef<HTMLDivElement | null>(null);
   const editorLineRulerRef = useRef<HTMLPreElement | null>(null);
   const editorDebugCurrentLineRef = useRef<HTMLDivElement | null>(null);
+  const editorBreakpointLinesRef = useRef<HTMLDivElement | null>(null);
   const editorHistoriesRef = useRef<Map<string, EditorHistory>>(new Map());
   const documentsRef = useRef<readonly OpenDocument[]>(documents);
   documentsRef.current = documents;
@@ -2070,6 +2071,21 @@ export function App() {
     }
     return grouped;
   }, [editorLineDecorations, activeFoldProjection]);
+  /**
+   * Linhas visíveis (pós-fold) com breakpoint no documento ativo, para o realce de linha inteira.
+   * Breakpoints dentro de blocos dobrados ficam sem faixa até o bloco ser revelado.
+   */
+  const breakpointVisibleLines = useMemo(() => {
+    if (!activeDocument?.path) return [];
+    const visibleLines = activeFoldProjection?.visibleLineByFileLine;
+    const lines: number[] = [];
+    for (const breakpoint of debugBreakpoints) {
+      if (breakpoint.path !== activeDocument.path) continue;
+      const line = visibleLines ? visibleLines[breakpoint.line - 1] : breakpoint.line;
+      if (line !== undefined) lines.push(line);
+    }
+    return lines;
+  }, [debugBreakpoints, activeDocument?.path, activeFoldProjection]);
   // Peeks de bloco ancoram na primeira linha do bloco (change.after), não na
   // linha do marcador que recebeu o hover — um bloco tem um único popup.
   const editorDiffPeekAnchorLine = (decoration: TextEditorLineDecoration): number => {
@@ -4361,6 +4377,7 @@ export function App() {
 
   const syncEditorLineRuler = (scrollTop: number) => {
     editorDebugCurrentLineRef.current?.style.setProperty("--editor-scroll-top", `${scrollTop}px`);
+    editorBreakpointLinesRef.current?.style.setProperty("--editor-scroll-top", `${scrollTop}px`);
     editorFoldOverlayRef.current?.style.setProperty("--editor-scroll-top", `${scrollTop}px`);
     if (!editorLineRulerRef.current) return;
     const rulerViewport = editorLineRulerRef.current.parentElement;
@@ -4430,6 +4447,21 @@ export function App() {
       return next;
     });
   };
+
+  /** O aviso "reloaded" só expira depois de visível: os 60s contam com o arquivo ativo, não da detecção. */
+  useEffect(() => {
+    if (!activeDocument || activeExternalDocumentNotice?.kind !== "reloaded") return;
+    const documentId = activeDocument.id;
+    const timer = window.setTimeout(() => {
+      setExternalDocumentNotices((current) => {
+        if (current.get(documentId) !== activeExternalDocumentNotice) return current;
+        const next = new Map(current);
+        next.delete(documentId);
+        return next;
+      });
+    }, 60_000);
+    return () => window.clearTimeout(timer);
+  }, [activeDocument?.id, activeExternalDocumentNotice]);
 
   const dismissExternalDocumentNotice = (documentId: string) => {
     setExternalDocumentNotices((current) => {
@@ -4611,7 +4643,6 @@ export function App() {
               kind: "reloaded",
               detectedAt,
             });
-            window.setTimeout(() => dismissExternalDocumentNotice(change.id), 60_000);
           }
         }
         return next;
@@ -7575,14 +7606,14 @@ export function App() {
                               />
                               <i className={`editor-line-ruler__breakpoint${breakpoint ? " is-active" : ""}`} />
                               <i className={`editor-line-ruler__execution-marker${currentDebugLine ? " is-current" : ""}`} />
-                              {editorSettings.lineNumbers ? <b>{String(fileLine).padStart(editorMetrics.lineNumberWidth, "0")}</b> : null}
+                              {editorSettings.lineNumbers ? <b>{fileLine}</b> : null}
                             </>;
                             const ariaLabel = changeDecoration
                               ? `${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${fileLine} (alteração: ${tooltip || "Exibir alteração"})`
                               : `${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${fileLine}`;
                             return (
                               <button
-                                className={`editor-line-ruler__line${lineDecorationClassName(decorations)}${changeKey && changeKey === hoveredEditorChangeKey ? " is-change-hover" : ""}${currentDebugLine ? " is-debug-current" : ""}`}
+                                className={`editor-line-ruler__line${lineDecorationClassName(decorations)}${changeKey && changeKey === hoveredEditorChangeKey ? " is-change-hover" : ""}${currentDebugLine ? " is-debug-current" : ""}${breakpoint ? " has-breakpoint" : ""}`}
                                 key={line}
                                 style={{ top: `${editorLineTop(line)}px` }}
                                 type="button"
@@ -7596,6 +7627,24 @@ export function App() {
                             );
                           })}
                         </pre>
+                      </div>
+                    ) : null}
+                    {activeDocument && breakpointVisibleLines.length > 0 ? (
+                      <div
+                        ref={editorBreakpointLinesRef}
+                        className="editor-breakpoint-lines"
+                        aria-hidden="true"
+                        style={{
+                          "--editor-scroll-top": `${(highlightedEditorScrollRef.current ?? editorRef.current)?.scrollTop ?? activeDocument.scrollTop}px`,
+                        } as React.CSSProperties}
+                      >
+                        {breakpointVisibleLines.map((line) => (
+                          <div
+                            key={line}
+                            className="editor-breakpoint-line"
+                            style={{ "--breakpoint-line-top": `${editorLineTop(line)}px` } as React.CSSProperties}
+                          />
+                        ))}
                       </div>
                     ) : null}
                     {activeDocument && activeDebugLine && activeDebugVisibleLine ? (

@@ -1,0 +1,7 @@
+{
+  "id": "themes",
+  "name": "Temas",
+  "description": "Temas visuais básicos do workbench com tokens semânticos extensíveis.",
+  "version": "0.1.0",
+  "entrypoint": "./src/index.ts"
+}

@@ -143,6 +143,8 @@ export interface PluginExtensionApi {
   registerWorkbenchSidebarHook(hook: WorkbenchSidebarHook): Disposable;
   registerWorkbenchPanelHook(hook: WorkbenchPanelHook): Disposable;
   registerWorkbenchToolWindowHook(hook: WorkbenchToolWindowHook): Disposable;
+  registerWorkbenchThemeProvider(provider: WorkbenchThemeProvider): Disposable;
+  registerWorkbenchFontProvider(provider: WorkbenchFontProvider): Disposable;
   registerWorkbenchTitlebarContribution(contribution: WorkbenchTitlebarContribution): Disposable;
   registerWorkbenchStatusbarContribution(contribution: WorkbenchStatusbarContribution): Disposable;
   registerWorkbenchExplorerFilterProvider(provider: WorkbenchExplorerFilterProvider): Disposable;
@@ -758,6 +760,157 @@ export type WorkbenchActivityIcon =
   | "python"
   | "source-control"
   | "terminal";
+
+export type WorkbenchThemeAppearance = "light" | "neutral" | "dark";
+
+/**
+ * Tokens semânticos do shell. Plugins que desejem acompanhar o tema devem usar as
+ * variáveis CSS públicas listadas em `WORKBENCH_THEME_CSS_VARIABLES`, em vez de
+ * codificar uma paleta própria de superfícies, bordas e texto.
+ */
+export interface WorkbenchThemeTokens {
+  readonly background: string;
+  readonly surface1: string;
+  readonly surface2: string;
+  readonly surface3: string;
+  readonly surface4: string;
+  readonly surfaceRaised: string;
+  readonly surfaceInput: string;
+  readonly surfaceEditor: string;
+  readonly surfacePanel: string;
+  readonly surfaceSidebar: string;
+  readonly surfaceTitlebar: string;
+  readonly surfaceActivityBar: string;
+  readonly surfaceStatusbar: string;
+  readonly border: string;
+  readonly borderStrong: string;
+  readonly text: string;
+  readonly textMuted: string;
+  readonly textSubtle: string;
+  readonly textInverse: string;
+  readonly accent: string;
+  readonly accentStrong: string;
+  readonly accentSoft: string;
+  readonly danger: string;
+  readonly dangerSoft: string;
+  readonly success: string;
+  readonly successSoft: string;
+  readonly warning: string;
+  readonly information: string;
+  readonly directory: string;
+  readonly scrollbarThumb: string;
+  readonly scrollbarThumbHover: string;
+  readonly selection: string;
+  readonly editorForeground: string;
+  readonly editorCaret: string;
+  readonly syntaxKeyword: string;
+  readonly syntaxString: string;
+  readonly syntaxNumber: string;
+  readonly syntaxComment: string;
+  readonly syntaxFunction: string;
+  readonly syntaxClass: string;
+  readonly syntaxDecorator: string;
+  readonly syntaxBuiltin: string;
+  readonly syntaxOperator: string;
+}
+
+/**
+ * Contrato público entre temas e UI de plugins.
+ *
+ * Estes nomes são aplicados no elemento raiz do workbench e ficam disponíveis a
+ * qualquer contribuição visual de plugin via CSS custom properties.
+ */
+export const WORKBENCH_THEME_CSS_VARIABLES = {
+  background: "--bg",
+  surface1: "--surface-1",
+  surface2: "--surface-2",
+  surface3: "--surface-3",
+  surface4: "--surface-4",
+  surfaceRaised: "--surface-raised",
+  surfaceInput: "--surface-input",
+  surfaceEditor: "--surface-editor",
+  surfacePanel: "--surface-panel",
+  surfaceSidebar: "--surface-sidebar",
+  surfaceTitlebar: "--surface-titlebar",
+  surfaceActivityBar: "--surface-activity-bar",
+  surfaceStatusbar: "--surface-statusbar",
+  border: "--border",
+  borderStrong: "--border-strong",
+  text: "--text",
+  textMuted: "--muted",
+  textSubtle: "--text-subtle",
+  textInverse: "--text-inverse",
+  accent: "--accent",
+  accentStrong: "--accent-strong",
+  accentSoft: "--accent-soft",
+  danger: "--danger",
+  dangerSoft: "--danger-soft",
+  success: "--success",
+  successSoft: "--success-soft",
+  warning: "--warning",
+  information: "--information",
+  directory: "--directory",
+  scrollbarThumb: "--scrollbar-thumb",
+  scrollbarThumbHover: "--scrollbar-thumb-hover",
+  selection: "--selection",
+  editorForeground: "--editor-foreground",
+  editorCaret: "--editor-caret",
+  syntaxKeyword: "--syntax-keyword",
+  syntaxString: "--syntax-string",
+  syntaxNumber: "--syntax-number",
+  syntaxComment: "--syntax-comment",
+  syntaxFunction: "--syntax-function",
+  syntaxClass: "--syntax-class",
+  syntaxDecorator: "--syntax-decorator",
+  syntaxBuiltin: "--syntax-builtin",
+  syntaxOperator: "--syntax-operator",
+} as const satisfies Readonly<Record<keyof WorkbenchThemeTokens, string>>;
+
+export interface WorkbenchThemeDefinition {
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly appearance: WorkbenchThemeAppearance;
+  readonly order?: number;
+  readonly tokens: WorkbenchThemeTokens;
+}
+
+/** Um provider pode adicionar temas ou substituir um tema existente pelo mesmo id. */
+export interface WorkbenchThemeProvider {
+  readonly id: string;
+  readonly priority?: number;
+  themes(): readonly WorkbenchThemeDefinition[];
+}
+
+/** Onde a fonte se aplica: no editor de código ou na interface geral da IDE. */
+export type WorkbenchFontTarget = "editor" | "interface";
+
+export interface WorkbenchFontDefinition {
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly target: WorkbenchFontTarget;
+  /** Pilha CSS completa (com fallbacks), aplicada como valor de `font-family`. */
+  readonly family: string;
+  readonly order?: number;
+}
+
+/** Um provider pode adicionar fontes ou substituir uma fonte existente pelo mesmo id. */
+export interface WorkbenchFontProvider {
+  readonly id: string;
+  readonly priority?: number;
+  fonts(): readonly WorkbenchFontDefinition[];
+}
+
+/**
+ * Contrato público de tipografia. Contribuições visuais de plugins devem usar estas
+ * variáveis CSS em vez de codificar pilhas de fontes próprias.
+ */
+export const WORKBENCH_FONT_CSS_VARIABLES = {
+  interface: "--font-ui",
+  editor: "--font-editor",
+  editorFontSize: "--editor-font-size",
+} as const;
 
 export interface WorkbenchSidebarMountContext extends WorkbenchPanelMountContext {
   close(): void;

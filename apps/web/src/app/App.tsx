@@ -32,6 +32,7 @@ import {
   MoreVertical,
   Package,
   PackageCheck,
+  Palette,
   Pause,
   Play,
   Plug,
@@ -48,6 +49,7 @@ import {
   CornerUpRight,
   Terminal,
   Trash2,
+  Type,
   Undo2,
   Upload,
   X,
@@ -394,6 +396,8 @@ import {
 } from "./editor/location-history";
 import { findTextMatches, replaceTextMatch, replaceTextMatches } from "./editor/text-search";
 import { textOffsetAtPosition, textPositionAtOffset } from "./editor/text-position";
+import { foldSearchMatchVisible, foldSearchVisibleLine, foldsRevealingFileLine } from "./editor/fold-search";
+import { editorContextMenuTargetRange, editorWordRangeAtOffset } from "./editor/context-target";
 import { ProfileDialog } from "./execution/ProfileDialog";
 import { EnvironmentPackageManager } from "./execution/EnvironmentPackageManager";
 import { FollowedExecutionOutput } from "./execution/FollowedExecutionOutput";
@@ -406,6 +410,26 @@ import { ButtonTooltip, PluginCardIcon, WorkbenchActivityIconView } from "./work
 import { WorkbenchActivityBar } from "./workbench/WorkbenchActivityBar";
 import { ProblemsPanel } from "./workbench/ProblemsPanel";
 import { useWorkbenchContributions } from "./workbench/useWorkbenchContributions";
+import {
+  applyWorkbenchTheme,
+  persistThemePreference,
+  readPersistedThemePreference,
+  readThemePreference,
+  resolveTheme,
+  workbenchThemes,
+} from "./workbench/theme-manager";
+import {
+  applyWorkbenchFonts,
+  clampEditorFontSize,
+  persistFontPreferences,
+  readFontPreferences,
+  readPersistedFontPreferences,
+  resolveFont,
+  workbenchFontDefaults,
+  workbenchFonts,
+  workbenchFontsForTarget,
+  type WorkbenchFontPreferences,
+} from "./workbench/font-manager";
 import { nextDebugSession } from "./debug-session-updates";
 import {
   applyVirtualDocumentChanges,
@@ -953,22 +977,6 @@ function editorMirrorRectsAtTextRange(
   return Array.from(range.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0);
 }
 
-function editorWordRangeAtOffset(source: string, rawOffset: number): { start: number; end: number } {
-  const offset = Math.max(0, Math.min(source.length, Math.trunc(rawOffset)));
-  const wordCharacter = /[\p{L}\p{N}_$]/u;
-  const candidate = offset < source.length && wordCharacter.test(source[offset] ?? "")
-    ? offset
-    : offset > 0 && wordCharacter.test(source[offset - 1] ?? "")
-      ? offset - 1
-      : -1;
-  if (candidate < 0) return { start: offset, end: Math.min(source.length, offset + 1) };
-  let start = candidate;
-  let end = candidate + 1;
-  while (start > 0 && wordCharacter.test(source[start - 1] ?? "")) start -= 1;
-  while (end < source.length && wordCharacter.test(source[end] ?? "")) end += 1;
-  return { start, end };
-}
-
 function lineStartOffset(source: string, line: number): number {
   return textOffsetAtPosition(source, { line, column: 1 });
 }
@@ -1262,6 +1270,8 @@ export function App() {
   const [pluginRemovalId, setPluginRemovalId] = useState<string>();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSectionId, setSettingsSectionId] = useState("editor");
+  const [preferredThemeId, setPreferredThemeId] = useState(() => readThemePreference());
+  const [fontPreferences, setFontPreferences] = useState<WorkbenchFontPreferences>(() => readFontPreferences());
   const [pluginSettingsDraft, setPluginSettingsDraft] = useState<PluginSettingValues>({});
   const [pluginStringArrayDrafts, setPluginStringArrayDrafts] = useState<Record<string, string>>({});
   const [watcherIgnoredDraft, setWatcherIgnoredDraft] = useState("");
@@ -1821,8 +1831,24 @@ export function App() {
   const bottomPanelAvailable = profileOutputTabs.length > 0
     || Boolean(debugSession)
     || workbenchPanels.some((panel) => panel.id === panelTab);
+  const availableThemes = useMemo(() => workbenchThemes(platform), [platformSnapshot]);
+  const availableFonts = useMemo(() => workbenchFonts(platform), [platformSnapshot]);
+  const availableEditorFonts = useMemo(() => workbenchFontsForTarget(availableFonts, "editor"), [availableFonts]);
+  const availableInterfaceFonts = useMemo(() => workbenchFontsForTarget(availableFonts, "interface"), [availableFonts]);
+  const activeEditorFont = useMemo(
+    () => resolveFont(availableFonts, "editor", fontPreferences.editorFontId),
+    [availableFonts, fontPreferences.editorFontId],
+  );
+  const activeInterfaceFont = useMemo(
+    () => resolveFont(availableFonts, "interface", fontPreferences.interfaceFontId),
+    [availableFonts, fontPreferences.interfaceFontId],
+  );
+  const activeTheme = useMemo(
+    () => resolveTheme(availableThemes, preferredThemeId),
+    [availableThemes, preferredThemeId],
+  );
   const settingsProviders = pluginSettingsProviders();
-  const activePluginSettingsProvider = settingsSectionId === "editor"
+  const activePluginSettingsProvider = ["editor", "appearance", "fonts", "watcher"].includes(settingsSectionId)
     ? undefined
     : settingsProviders.find((provider) => provider.pluginId === settingsSectionId);
   const fileCreationTargetPath = explorerTargetDirectoryPath(entries, selectedExplorerPath);
@@ -1866,6 +1892,36 @@ export function App() {
       : undefined
   ), [activeDocument?.id, activeDocument?.kind, activeEditorContent, activeDocumentFolds]);
   const activeEditorDisplayContent = activeFoldProjection?.content ?? activeEditorContent;
+  /**
+   * O realce da busca é desenhado na camada visual, que com dobras usa o texto projetado. Os offsets
+   * do match vêm do texto real, então precisam ser convertidos antes de virar faixa pintada.
+   */
+  const activeEditorSearchHighlight = useMemo<{ start: number; end: number } | undefined>(() => {
+    if (!activeEditorSearchMatch) return undefined;
+    if (!activeFoldProjection) return activeEditorSearchMatch;
+    if (!foldSearchMatchVisible(activeEditorContent, activeFoldProjection, activeEditorSearchMatch)) return undefined;
+    return {
+      start: editorProjectedOffsetFromSourceOffset(activeEditorContent, activeFoldProjection, activeEditorSearchMatch.start),
+      end: editorProjectedOffsetFromSourceOffset(activeEditorContent, activeFoldProjection, activeEditorSearchMatch.end),
+    };
+  }, [activeEditorSearchMatch, activeFoldProjection, activeEditorContent]);
+  /**
+   * Enquanto o menu de contexto do editor está aberto, o texto que o originou (a seleção ou a
+   * palavra sob o ponteiro) fica realçado para deixar claro sobre o que as ações vão agir.
+   */
+  const editorContextTargetHighlight = useMemo<{ start: number; end: number } | undefined>(() => {
+    if (contextMenu?.target.kind !== "editor") return undefined;
+    const { context } = contextMenu.target;
+    if (context.document.id !== activeDocument?.id) return undefined;
+    const range = editorContextMenuTargetRange(activeEditorContent, context.selectionStart, context.selectionEnd);
+    if (!range) return undefined;
+    if (!activeFoldProjection) return range;
+    if (!foldSearchMatchVisible(activeEditorContent, activeFoldProjection, range)) return undefined;
+    return {
+      start: editorProjectedOffsetFromSourceOffset(activeEditorContent, activeFoldProjection, range.start),
+      end: editorProjectedOffsetFromSourceOffset(activeEditorContent, activeFoldProjection, range.end),
+    };
+  }, [contextMenu, activeDocument?.id, activeEditorContent, activeFoldProjection]);
   useLayoutEffect(() => {
     const caret = foldedEditorCaretRef.current;
     const selection = foldedEditorSelectionRef.current;
@@ -1975,7 +2031,7 @@ export function App() {
       cancelled = true;
       window.cancelAnimationFrame(frame);
     };
-  }, [activeDocument?.id, activeDocument?.kind, activeEditorDisplayContent, editorMetrics.lineCount]);
+  }, [activeDocument?.id, activeDocument?.kind, activeEditorDisplayContent, editorMetrics.lineCount, activeEditorFont, fontPreferences.editorFontSize]);
   const editorRulerRange = editorVisibleLineRange(
     editorMetrics.lineCount,
     editorViewport.scrollTop,
@@ -2113,6 +2169,23 @@ export function App() {
       ? line
       : undefined;
     setHoveredFoldLine((current) => current === next ? current : next);
+  };
+  /**
+   * Abre as dobras que escondem uma linha do arquivo e devolve a projeção resultante já atualizada
+   * (o estado só chega no próximo render, mas quem revela precisa posicionar agora).
+   */
+  const revealFoldsForFileLine = (documentId: string, fileLine: number): FoldProjection | undefined => {
+    const currentFolds = documentFoldsRef.current.get(documentId) ?? [];
+    if (!currentFolds.length) return undefined;
+    const remainingFolds = foldsRevealingFileLine(currentFolds, fileLine);
+    if (remainingFolds.length === currentFolds.length) return activeFoldProjection;
+    const nextFolds = new Map(documentFoldsRef.current);
+    if (remainingFolds.length) nextFolds.set(documentId, remainingFolds);
+    else nextFolds.delete(documentId);
+    documentFoldsRef.current = nextFolds;
+    setDocumentFolds(nextFolds);
+    setFoldPreviewLine(undefined);
+    return remainingFolds.length ? collapseFolds(activeEditorContent, remainingFolds) : undefined;
   };
   const toggleFold = (line: number) => {
     if (!activeDocument || activeDocument.kind !== "text" || activeDocument.readOnly) return;
@@ -2637,6 +2710,22 @@ export function App() {
   useEffect(() => {
     return platform.subscribe(() => setPlatformSnapshot(platform.snapshot()));
   }, []);
+
+  useEffect(() => {
+    void readPersistedThemePreference().then(setPreferredThemeId);
+    void readPersistedFontPreferences().then(setFontPreferences);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (activeTheme) applyWorkbenchTheme(activeTheme);
+  }, [activeTheme]);
+  useEffect(() => {
+    applyWorkbenchFonts({
+      editorFont: activeEditorFont,
+      interfaceFont: activeInterfaceFont,
+      editorFontSize: fontPreferences.editorFontSize,
+    });
+  }, [activeEditorFont, activeInterfaceFont, fontPreferences.editorFontSize]);
 
   const loadLocalWorkspaceSettings = useCallback(async (
     name: string,
@@ -3397,7 +3486,11 @@ export function App() {
     setDocuments((current) => current.map((document) => document.id === activeDocument.id
       ? { ...document, selectionStart: match.start, selectionEnd: match.end }
       : document));
-    scrollEditorToLine(textPositionAtOffset(activeEditorContent, match.start).line);
+    // Um match dentro de um bloco dobrado não tem posição visível: sem abrir a dobra o realce e a
+    // seleção projetada colapsam no marcador e a rolagem cai na linha errada.
+    const matchFileLine = textPositionAtOffset(activeEditorContent, match.start).line;
+    const projection = revealFoldsForFileLine(activeDocument.id, matchFileLine);
+    scrollEditorToLine(foldSearchVisibleLine(projection, matchFileLine));
     window.requestAnimationFrame(() => {
       editorRef.current?.setSelectionRange(match.start, match.end);
       editorSearchInputRef.current?.focus({ preventScroll: true });
@@ -4518,6 +4611,7 @@ export function App() {
               kind: "reloaded",
               detectedAt,
             });
+            window.setTimeout(() => dismissExternalDocumentNotice(change.id), 60_000);
           }
         }
         return next;
@@ -6225,6 +6319,22 @@ export function App() {
       : {});
   };
 
+  const selectTheme = (themeId: string) => {
+    setPreferredThemeId(themeId);
+    void persistThemePreference(themeId);
+  };
+  const updateFontPreferences = (patch: Partial<WorkbenchFontPreferences>) => {
+    setFontPreferences((current) => {
+      const next = {
+        ...current,
+        ...patch,
+        editorFontSize: clampEditorFontSize(patch.editorFontSize ?? current.editorFontSize),
+      };
+      void persistFontPreferences(next);
+      return next;
+    });
+  };
+
   const applyEditorLineNumbers = async (lineNumbers: boolean) => {
     await updateWorkspaceSettings((current) => ({
       ...current,
@@ -7501,7 +7611,7 @@ export function App() {
                         } as React.CSSProperties}
                       />
                     ) : null}
-                    {(activeSyntaxHighlighter || activeEditorSearchMatch || activeFoldProjection) && activeDocument ? (
+                    {(activeSyntaxHighlighter || activeEditorSearchMatch || activeFoldProjection || editorContextTargetHighlight) && activeDocument ? (
                       <div
                         ref={highlightedEditorScrollRef}
                         className="highlight-editor"
@@ -7534,7 +7644,8 @@ export function App() {
                             <HighlightedSource
                               source={activeEditorDisplayContent}
                               {...(activeSyntaxHighlighter ? { provider: activeSyntaxHighlighter } : {})}
-                              {...(activeEditorSearchMatch && !activeFoldProjection ? { highlight: activeEditorSearchMatch } : {})}
+                              {...(activeEditorSearchHighlight ? { highlight: activeEditorSearchHighlight } : {})}
+                              {...(editorContextTargetHighlight ? { contextTarget: editorContextTargetHighlight } : {})}
                             />
                           </pre>
                           <DiagnosticLayer
@@ -8283,6 +8394,22 @@ export function App() {
                     <span>Editor</span>
                   </button>
                   <button
+                    className={settingsSectionId === "appearance" ? "is-active" : ""}
+                    type="button"
+                    onClick={() => selectSettingsSection("appearance")}
+                  >
+                    <Palette size={15} />
+                    <span>Aparência</span>
+                  </button>
+                  <button
+                    className={settingsSectionId === "fonts" ? "is-active" : ""}
+                    type="button"
+                    onClick={() => selectSettingsSection("fonts")}
+                  >
+                    <Type size={15} />
+                    <span>Fontes</span>
+                  </button>
+                  <button
                     className={settingsSectionId === "watcher" ? "is-active" : ""}
                     type="button"
                     onClick={() => selectSettingsSection("watcher")}
@@ -8330,6 +8457,151 @@ export function App() {
                             <i aria-hidden="true" />
                           </span>
                         </label>
+                      </div>
+                    </>
+                  ) : settingsSectionId === "appearance" ? (
+                    <>
+                      <div className="settings-section-heading">
+                        <span className="settings-section-heading__icon"><Palette size={18} /></span>
+                        <div>
+                          <span className="eyebrow">NATIVO</span>
+                          <h3>Aparência</h3>
+                          <p>Escolha o tema visual da aplicação. A preferência vale para todos os projetos.</p>
+                        </div>
+                      </div>
+                      <div className="theme-setting-grid" role="radiogroup" aria-label="Tema da aplicação">
+                        {availableThemes.map((theme) => {
+                          const selected = activeTheme?.id === theme.id;
+                          return (
+                            <button
+                              className={`theme-setting-card${selected ? " is-active" : ""}`}
+                              type="button"
+                              role="radio"
+                              aria-checked={selected}
+                              key={theme.id}
+                              onClick={() => selectTheme(theme.id)}
+                            >
+                              <span
+                                className="theme-setting-card__preview"
+                                aria-hidden="true"
+                                style={{
+                                  background: theme.tokens.background,
+                                  borderColor: theme.tokens.borderStrong,
+                                  color: theme.tokens.text,
+                                }}
+                              >
+                                <i style={{ background: theme.tokens.surfaceActivityBar }} />
+                                <b style={{ background: theme.tokens.surfaceSidebar }} />
+                                <em style={{ background: theme.tokens.surfaceEditor }} />
+                                <strong style={{ background: theme.tokens.accent }} />
+                              </span>
+                              <span className="theme-setting-card__copy">
+                                <strong>{theme.label}</strong>
+                                <small>{theme.description}</small>
+                              </span>
+                              <span className="theme-setting-card__check" aria-hidden="true">
+                                {selected ? <Check size={14} /> : null}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </>
+                  ) : settingsSectionId === "fonts" ? (
+                    <>
+                      <div className="settings-section-heading">
+                        <span className="settings-section-heading__icon"><Type size={18} /></span>
+                        <div>
+                          <span className="eyebrow">NATIVO</span>
+                          <h3>Fontes</h3>
+                          <p>Tipografia do editor de código e da interface. A preferência vale para todos os projetos.</p>
+                        </div>
+                      </div>
+                      <div className="plugin-setting-list">
+                        <div className="plugin-setting-note">
+                          <strong>Editor</strong>
+                          <small>Fonte monoespaçada usada no código, na régua e nas camadas do editor.</small>
+                        </div>
+                        <div className="font-setting-grid" role="radiogroup" aria-label="Fonte do editor">
+                          {availableEditorFonts.map((font) => {
+                            const selected = activeEditorFont?.id === font.id;
+                            return (
+                              <button
+                                className={`font-setting-card${selected ? " is-active" : ""}`}
+                                type="button"
+                                role="radio"
+                                aria-checked={selected}
+                                key={font.id}
+                                onClick={() => updateFontPreferences({ editorFontId: font.id })}
+                              >
+                                <span
+                                  className="font-setting-card__preview"
+                                  aria-hidden="true"
+                                  style={{ fontFamily: font.family }}
+                                >
+                                  {"if (ready) launch(42);"}
+                                </span>
+                                <span className="font-setting-card__copy">
+                                  <strong>{font.label}</strong>
+                                  {font.description ? <small>{font.description}</small> : null}
+                                </span>
+                                <span className="font-setting-card__check" aria-hidden="true">
+                                  {selected ? <Check size={14} /> : null}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <label className="plugin-setting">
+                          <span className="plugin-setting__copy">
+                            <strong>Tamanho da fonte do editor</strong>
+                            <small>
+                              Entre {workbenchFontDefaults.minEditorFontSize} e {workbenchFontDefaults.maxEditorFontSize} pixels.
+                            </small>
+                          </span>
+                          <input
+                            className="plugin-setting__control plugin-setting__control--number"
+                            type="number"
+                            min={workbenchFontDefaults.minEditorFontSize}
+                            max={workbenchFontDefaults.maxEditorFontSize}
+                            value={fontPreferences.editorFontSize}
+                            onChange={(event) => updateFontPreferences({ editorFontSize: Number(event.target.value) })}
+                          />
+                        </label>
+                        <div className="plugin-setting-note">
+                          <strong>Interface</strong>
+                          <small>Fonte usada em menus, painéis e demais superfícies da IDE.</small>
+                        </div>
+                        <div className="font-setting-grid" role="radiogroup" aria-label="Fonte da interface">
+                          {availableInterfaceFonts.map((font) => {
+                            const selected = activeInterfaceFont?.id === font.id;
+                            return (
+                              <button
+                                className={`font-setting-card${selected ? " is-active" : ""}`}
+                                type="button"
+                                role="radio"
+                                aria-checked={selected}
+                                key={font.id}
+                                onClick={() => updateFontPreferences({ interfaceFontId: font.id })}
+                              >
+                                <span
+                                  className="font-setting-card__preview"
+                                  aria-hidden="true"
+                                  style={{ fontFamily: font.family }}
+                                >
+                                  Explorar, Executar e Depurar
+                                </span>
+                                <span className="font-setting-card__copy">
+                                  <strong>{font.label}</strong>
+                                  {font.description ? <small>{font.description}</small> : null}
+                                </span>
+                                <span className="font-setting-card__check" aria-hidden="true">
+                                  {selected ? <Check size={14} /> : null}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
                     </>
                   ) : settingsSectionId === "watcher" ? (
@@ -8520,7 +8792,11 @@ export function App() {
                 </section>
               </div>
               <div className="settings-dialog__footer">
-                {!workspaceRoot ? (
+                {settingsSectionId === "appearance" ? (
+                  <p className="settings-scope-note"><Check size={14} /> Tema aplicado globalmente e salvo na aplicação.</p>
+                ) : settingsSectionId === "fonts" ? (
+                  <p className="settings-scope-note"><Check size={14} /> Fontes aplicadas globalmente e salvas na aplicação.</p>
+                ) : !workspaceRoot ? (
                   <p className="settings-scope-note"><CircleAlert size={14} /> Abra um workspace para alterar configurações locais.</p>
                 ) : settingsSectionId === "watcher" ? (
                   <p className="settings-scope-note"><Check size={14} /> Alterações só são aplicadas ao clicar em "Concluir".</p>

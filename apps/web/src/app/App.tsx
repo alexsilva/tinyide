@@ -2074,6 +2074,18 @@ export function App() {
     return grouped;
   }, [editorLineDecorations, activeFoldProjection]);
   /**
+   * Breakpoints só fazem sentido quando algum debug adapter registrado suporta a
+   * extensão do arquivo ativo; adapters sem `extensions` declaradas valem como curinga.
+   */
+  const activeDocumentDebuggable = useMemo(() => {
+    if (!activeDocument?.path || activeDocument.kind !== "text") return false;
+    const fileName = activeDocument.name.toLocaleLowerCase();
+    return debugAdapterProviders().some((adapter) => (
+      !adapter.extensions?.length
+      || adapter.extensions.some((extension) => fileName.endsWith(extension.toLocaleLowerCase()))
+    ));
+  }, [activeDocument?.path, activeDocument?.kind, activeDocument?.name, platformSnapshot.plugins]);
+  /**
    * Linhas visíveis (pós-fold) com breakpoint no documento ativo, para o realce de linha inteira.
    * Breakpoints dentro de blocos dobrados ficam sem faixa até o bloco ser revelado.
    */
@@ -7586,7 +7598,7 @@ export function App() {
                     onMouseLeave={() => { setHoveredFoldLine(undefined); scheduleFoldPreviewClose(); }}
                   >
                     {showEditorGutter ? (
-                      <div className={`editor-line-ruler${editorSettings.lineNumbers ? "" : " decorations-only"}`}>
+                      <div className={`editor-line-ruler${editorSettings.lineNumbers ? "" : " decorations-only"}${activeDocumentDebuggable ? " is-debuggable" : ""}`}>
                         <pre
                           ref={editorLineRulerRef}
                           style={{ height: `${editorLayoutMetrics.contentPadding * 2 + editorMetrics.lineCount * editorLayoutMetrics.lineHeight}px` }}
@@ -7618,9 +7630,13 @@ export function App() {
                               <i className={`editor-line-ruler__execution-marker${currentDebugLine ? " is-current" : ""}`} />
                               {editorSettings.lineNumbers ? <b>{fileLine}</b> : null}
                             </>;
-                            const ariaLabel = changeDecoration
-                              ? `${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${fileLine} (alteração: ${tooltip || "Exibir alteração"})`
-                              : `${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${fileLine}`;
+                            const ariaLabel = activeDocumentDebuggable
+                              ? changeDecoration
+                                ? `${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${fileLine} (alteração: ${tooltip || "Exibir alteração"})`
+                                : `${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${fileLine}`
+                              : changeDecoration
+                                ? `Linha ${fileLine} (alteração: ${tooltip || "Exibir alteração"})`
+                                : `Linha ${fileLine}`;
                             return (
                               <button
                                 className={`editor-line-ruler__line${lineDecorationClassName(decorations)}${changeKey && changeKey === hoveredEditorChangeKey ? " is-change-hover" : ""}${currentDebugLine ? " is-debug-current" : ""}${breakpoint ? " has-breakpoint" : ""}`}
@@ -7629,7 +7645,7 @@ export function App() {
                                 type="button"
                                 title={changeDecoration ? tooltip || undefined : undefined}
                                 aria-label={ariaLabel}
-                                onClick={() => { if (activeDocument?.path) toggleBreakpoint(activeDocument.path, fileLine); }}
+                                onClick={() => { if (activeDocumentDebuggable && activeDocument?.path) toggleBreakpoint(activeDocument.path, fileLine); }}
                                 onMouseEnter={() => { if (selectedEditorLineDecoration) scheduleEditorDiffPeekClose(); }}
                               >
                                 {content}

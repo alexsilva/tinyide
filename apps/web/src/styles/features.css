@@ -443,13 +443,15 @@
 .editor-line-ruler__line:hover,
 .editor-line-ruler__line:focus-visible { outline: none; background: var(--surface-3); color: var(--text); }
 .editor-line-ruler__line b { grid-row: 1; grid-column: 1; overflow: hidden; font: inherit; font-weight: 400; text-overflow: clip; }
-/* O ponto de breakpoint (real ou fantasma no hover) substitui o número, como no JetBrains. */
-.editor-line-ruler__line:hover b,
+/* O ponto de breakpoint (real ou fantasma no hover) substitui o número, como no JetBrains.
+   O fantasma só aparece em arquivos debugáveis (algum debug adapter suporta a extensão). */
+.editor-line-ruler.is-debuggable .editor-line-ruler__line:hover b,
 .editor-line-ruler__line.has-breakpoint b { visibility: hidden; }
+.editor-line-ruler:not(.is-debuggable) .editor-line-ruler__line { cursor: default; }
 .editor-line-ruler__marker { position: relative; display: block; grid-row: 1; grid-column: 2; justify-self: stretch; width: 100%; height: 100%; }
 .editor-line-ruler__marker::before { content: ""; position: absolute; top: 0; right: 0; width: 3px; height: 100%; border-radius: 1px; background: transparent; transition: width .12s ease; }
 .editor-line-ruler__breakpoint { display: block; grid-row: 1; grid-column: 1; justify-self: start; width: 11px; height: 11px; border-radius: 50%; background: transparent; box-shadow: none; transition: background-color .12s ease, box-shadow .12s ease; }
-.editor-line-ruler__line:hover .editor-line-ruler__breakpoint { background: rgb(224 82 82 / 26%); box-shadow: inset 0 0 0 1px rgb(224 82 82 / 45%); }
+.editor-line-ruler.is-debuggable .editor-line-ruler__line:hover .editor-line-ruler__breakpoint { background: rgb(224 82 82 / 26%); box-shadow: inset 0 0 0 1px rgb(224 82 82 / 45%); }
 .editor-line-ruler__breakpoint.is-active,
 .editor-line-ruler__line:hover .editor-line-ruler__breakpoint.is-active { background: #e05252; box-shadow: 0 0 0 1px #7f2020, 0 0 4px rgb(224 82 82 / 45%); }
 .editor-line-ruler__execution-marker { display: block; z-index: 1; grid-row: 1; grid-column: 1; justify-self: start; width: 0; height: 0; margin-left: 2px; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 7px solid transparent; }

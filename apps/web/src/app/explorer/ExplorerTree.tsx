@@ -1,4 +1,6 @@
-import { Check, ChevronDown, ChevronRight, File, Folder, FolderOpen, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, X } from "lucide-react";
+import { WorkbenchIcon } from "../workbench/activity-components";
+import { fileIconIdFor, hasWorkbenchIcon } from "../workbench/icon-manager";
 import { useEffect, useRef } from "react";
 import type { ResourceDecoration } from "@tinyide/plugin-api";
 import type { WorkspaceEntry } from "../../browser-filesystem";
@@ -52,8 +54,8 @@ export function ExplorerCreationRow({
         }}
       >
         {kind === "directory"
-          ? <Folder className="tree-entry__icon tree-entry__icon--directory" size={15} />
-          : <File className="tree-entry__icon tree-entry__icon--file" size={15} />}
+          ? <WorkbenchIcon icon="folder" size={14} className="tree-entry__icon tree-entry__icon--directory" />
+          : <WorkbenchIcon icon="file" size={14} className="tree-entry__icon tree-entry__icon--file" />}
         <input
           ref={inputRef}
           autoFocus
@@ -209,7 +211,7 @@ export function EntryTree({
           <div className="tree-entry-row">
             {renamePath === entry.path ? (
               <form className={`tree-entry tree-entry--${entry.kind} tree-entry--rename${renameError ? " has-error" : ""}`} onSubmit={(event) => { event.preventDefault(); onRenameSubmit(); }}>
-                {entry.kind === "directory" ? <Folder className="tree-entry__icon tree-entry__icon--directory" size={15} /> : <File className="tree-entry__icon tree-entry__icon--file" size={15} />}
+                {entry.kind === "directory" ? <WorkbenchIcon icon="folder" size={14} className="tree-entry__icon tree-entry__icon--directory" /> : <WorkbenchIcon icon="file" size={14} className="tree-entry__icon tree-entry__icon--file" />}
                 <input
                   autoFocus
                   value={renameName}
@@ -292,20 +294,27 @@ export function EntryTree({
               )}
               {entry.kind === "directory" ? (
                 expanded.has(entry.path)
-                  ? <FolderOpen className="tree-entry__icon tree-entry__icon--directory" size={15} />
-                  : <Folder className="tree-entry__icon tree-entry__icon--directory" size={15} />
-              ) : contributedIcon ? (
-                <span
-                  className="resource-icon"
-                  title={contributedIcon.title}
-                  style={{
-                    color: contributedIcon.foreground ?? "currentColor",
-                    background: contributedIcon.background ?? "transparent",
-                  }}
-                >{contributedIcon.label}</span>
-              ) : (
-                <File className="tree-entry__icon tree-entry__icon--file" size={15} />
-              )}
+                  ? <WorkbenchIcon icon="folder-open" size={14} className="tree-entry__icon tree-entry__icon--directory" />
+                  : <WorkbenchIcon icon="folder" size={14} className="tree-entry__icon tree-entry__icon--directory" />
+              ) : (() => {
+                const typedId = fileIconIdFor(entry.name);
+                if (typedId !== "file" && hasWorkbenchIcon(typedId)) {
+                  return <WorkbenchIcon icon={typedId} size={14} className="tree-entry__icon tree-entry__icon--file" />;
+                }
+                if (contributedIcon) {
+                  return (
+                    <span
+                      className="resource-icon"
+                      title={contributedIcon.title}
+                      style={{
+                        color: contributedIcon.foreground ?? "currentColor",
+                        background: contributedIcon.background ?? "transparent",
+                      }}
+                    >{contributedIcon.label}</span>
+                  );
+                }
+                return <WorkbenchIcon icon="file" size={14} className="tree-entry__icon tree-entry__icon--file" />;
+              })()}
               <span
                 className="tree-entry__name"
                 title={decoration?.tooltip}

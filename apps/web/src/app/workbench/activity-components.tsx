@@ -1,11 +1,11 @@
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { Box, Database, Files, History } from "lucide-react";
 import { useEffect, useState, type KeyboardEventHandler, type ReactElement, type ReactNode } from "react";
 import type {
   WorkbenchActivityBadgeProvider,
   WorkbenchActivityBadgeSnapshot,
   WorkbenchActivityIcon,
 } from "@tinyide/plugin-api";
+import { resolveWorkbenchIcon, subscribeWorkbenchIcons } from "./icon-manager";
 import type { ActivityBarSide, ActivityButtonDescriptor } from "../activity-layout";
 
 export function IconButton({
@@ -270,86 +270,32 @@ export function ButtonTooltip({
   );
 }
 
-function GitBrandIcon() {
+export function WorkbenchActivityIconView({
+  icon,
+  size,
+  className,
+}: {
+  readonly icon: WorkbenchActivityIcon | undefined;
+  readonly size?: number;
+  readonly className?: string;
+}) {
+  const [, setTick] = useState(0);
+  useEffect(() => subscribeWorkbenchIcons(() => setTick((value) => value + 1)), []);
+  const definition = resolveWorkbenchIcon(icon);
+  const style = size ? { width: size, height: size } : undefined;
+  if (!definition) {
+    return <span className={`workbench-icon is-missing${className ? ` ${className}` : ""}`} style={style} aria-hidden="true" />;
+  }
   return (
-    <svg className="workbench-brand-icon" data-workbench-icon="git" viewBox="0 0 24 24" aria-hidden="true">
-      <path fill="#f05032" d="M12 1.55 22.45 12 12 22.45 1.55 12 12 1.55Z" />
-      <path fill="none" stroke="#fff" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="m7.8 7.8 8.4 8.4M11.05 11.05l3.15-3.15" />
-      <circle cx="7.8" cy="7.8" r="1.7" fill="#fff" />
-      <circle cx="16.2" cy="7.8" r="1.7" fill="#fff" />
-      <circle cx="16.2" cy="16.2" r="1.7" fill="#fff" />
-    </svg>
+    <span
+      className={`workbench-icon${className ? ` ${className}` : ""}`}
+      data-workbench-icon={definition.id}
+      style={style}
+      aria-hidden="true"
+      dangerouslySetInnerHTML={{ __html: definition.svg }}
+    />
   );
 }
 
-function DockerBrandIcon() {
-  return (
-    <svg className="workbench-brand-icon" data-workbench-icon="docker" viewBox="0 0 24 24" aria-hidden="true">
-      <g fill="#2496ed">
-        <rect x="3" y="8" width="3.2" height="2.8" rx=".35" />
-        <rect x="6.7" y="8" width="3.2" height="2.8" rx=".35" />
-        <rect x="10.4" y="8" width="3.2" height="2.8" rx=".35" />
-        <rect x="6.7" y="4.7" width="3.2" height="2.8" rx=".35" />
-        <rect x="10.4" y="4.7" width="3.2" height="2.8" rx=".35" />
-        <rect x="10.4" y="1.4" width="3.2" height="2.8" rx=".35" />
-        <rect x="14.1" y="8" width="3.2" height="2.8" rx=".35" />
-        <path d="M22.55 9.8c-.85-.55-1.95-.7-2.93-.42-.12-1.02-.7-1.9-1.58-2.45l-.58-.36-.36.58c-.45.72-.58 1.57-.39 2.38H2.05c-.42 0-.76.34-.76.76 0 4.72 3.62 8.57 8.27 8.57 4.27 0 7.64-2.02 9.54-5.7 1.3.08 2.5-.43 3.28-1.44l.45-.58-.28-1.34Z" />
-      </g>
-      <circle cx="5.25" cy="13.05" r=".62" fill="#fff" />
-    </svg>
-  );
-}
-
-function NodeBrandIcon() {
-  return (
-    <svg className="workbench-brand-icon" data-workbench-icon="nodejs" viewBox="0 0 24 24" aria-hidden="true">
-      <path fill="#5fa04e" d="M12 1.35 21.25 6.7v10.6L12 22.65 2.75 17.3V6.7L12 1.35Z" />
-      <path fill="none" stroke="#fff" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.05" d="M7.2 16.5v-9l9.6 9v-9" />
-      <circle cx="7.2" cy="7.5" r="1.15" fill="#fff" />
-      <circle cx="16.8" cy="16.5" r="1.15" fill="#fff" />
-    </svg>
-  );
-}
-
-function PythonBrandIcon() {
-  return (
-    <svg className="workbench-brand-icon" data-workbench-icon="python" viewBox="0 0 24 24" aria-hidden="true">
-      <path fill="#3776ab" d="M11.75 2C6.8 2 7.1 4.15 7.1 4.15v2.23h4.74v.67H5.22S2 6.68 2 11.74s2.82 4.88 2.82 4.88h1.69v-2.37s-.09-2.82 2.77-2.82h4.7s2.64.04 2.64-2.55V4.6S17.02 2 11.75 2Z" />
-      <circle cx="9.12" cy="4.72" r=".78" fill="#fff" />
-      <path fill="#ffd43b" d="M12.25 22c4.95 0 4.65-2.15 4.65-2.15v-2.23h-4.74v-.67h6.62S22 17.32 22 12.26s-2.82-4.88-2.82-4.88h-1.69v2.37s.09 2.82-2.77 2.82h-4.7s-2.64-.04-2.64 2.55v4.28S6.98 22 12.25 22Z" />
-      <circle cx="14.88" cy="19.28" r=".78" fill="#fff" />
-    </svg>
-  );
-}
-
-function TerminalBrandIcon() {
-  return (
-    <svg className="workbench-brand-icon" data-workbench-icon="terminal" viewBox="0 0 32 32" aria-hidden="true">
-      <rect width="32" height="32" rx="6" fill="#171b22" />
-      <rect x="3.5" y="5" width="25" height="22" rx="3" fill="#222934" stroke="#596579" />
-      <circle cx="7" cy="8.5" r="1" fill="#ef6a6a" />
-      <circle cx="10.5" cy="8.5" r="1" fill="#e5b95c" />
-      <circle cx="14" cy="8.5" r="1" fill="#67c587" />
-      <path
-        fill="none"
-        stroke="#72e39a"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="m8 15 4 3-4 3m7 0h7"
-      />
-    </svg>
-  );
-}
-
-export function WorkbenchActivityIconView({ icon }: { readonly icon: WorkbenchActivityIcon | undefined }) {
-  if (icon === "docker") return <DockerBrandIcon />;
-  if (icon === "git" || icon === "source-control") return <GitBrandIcon />;
-  if (icon === "nodejs") return <NodeBrandIcon />;
-  if (icon === "python") return <PythonBrandIcon />;
-  if (icon === "database") return <Database size={16} />;
-  if (icon === "files") return <Files size={16} />;
-  if (icon === "history") return <History size={16} />;
-  if (icon === "terminal") return <TerminalBrandIcon />;
-  return <Box size={16} />;
-}
+/** Alias semântico para uso geral na UI (não só activity bar). */
+export const WorkbenchIcon = WorkbenchActivityIconView;

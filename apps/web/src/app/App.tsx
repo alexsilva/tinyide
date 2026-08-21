@@ -7,7 +7,6 @@ import {
   ArrowRight,
   ArrowUpCircle,
   Bug,
-  Box,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -232,7 +231,7 @@ import {
   assertWorkspaceResourcePath,
   reconcileOpenDocumentsAfterWorkspaceChange,
 } from "./workspace-resource-reconciliation";
-import { platform, resolvePluginIconUrl } from "./platform";
+import { platform } from "./platform";
 import {
   moveActivityButton,
   orderedActivityButtons,
@@ -408,8 +407,9 @@ import {
   TEXT_CONTEXT_MENU_EVENT,
   type TextContextMenuDetail,
 } from "./text-context-menu";
-import { ButtonTooltip, PluginCardIcon, WorkbenchActivityIconView } from "./workbench/activity-components";
+import { ButtonTooltip, WorkbenchActivityIconView, WorkbenchIcon } from "./workbench/activity-components";
 import { WorkbenchActivityBar } from "./workbench/WorkbenchActivityBar";
+import { PluginManagerSidebar } from "./workbench/PluginManagerSidebar";
 import { ProblemsPanel } from "./workbench/ProblemsPanel";
 import { useWorkbenchContributions } from "./workbench/useWorkbenchContributions";
 import {
@@ -432,6 +432,14 @@ import {
   workbenchFontsForTarget,
   type WorkbenchFontPreferences,
 } from "./workbench/font-manager";
+import {
+  applyWorkbenchIconPack,
+  persistIconPackPreference,
+  readIconPackPreference,
+  readPersistedIconPackPreference,
+  resolveIconPack,
+  workbenchIconPacks,
+} from "./workbench/icon-manager";
 import { nextDebugSession } from "./debug-session-updates";
 import {
   applyVirtualDocumentChanges,
@@ -1274,6 +1282,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSectionId, setSettingsSectionId] = useState("editor");
   const [preferredThemeId, setPreferredThemeId] = useState(() => readThemePreference());
+  const [preferredIconPackId, setPreferredIconPackId] = useState(() => readIconPackPreference());
   const [fontPreferences, setFontPreferences] = useState<WorkbenchFontPreferences>(() => readFontPreferences());
   const [pluginSettingsDraft, setPluginSettingsDraft] = useState<PluginSettingValues>({});
   const [pluginStringArrayDrafts, setPluginStringArrayDrafts] = useState<Record<string, string>>({});
@@ -1779,14 +1788,14 @@ export function App() {
   const executionViewToolbarIcon = (action: WorkbenchExecutionViewToolbarAction) => {
     switch (action.icon) {
       case "run":
-        return <Play size={14} />;
+        return <WorkbenchIcon icon="play" size={14} />;
       case "stop":
-        return <Square size={13} />;
+        return <WorkbenchIcon icon="stop" size={13} />;
       case "refresh":
-        return <RotateCw size={13} />;
+        return <WorkbenchIcon icon="refresh" size={13} />;
       case "rerun":
       default:
-        return <RefreshCw size={13} />;
+        return <WorkbenchIcon icon="rerun" size={13} />;
     }
   };
   const activeExecutionTab = profileExecutionPanelTab(panelTab);
@@ -1850,7 +1859,15 @@ export function App() {
     () => resolveTheme(availableThemes, preferredThemeId),
     [availableThemes, preferredThemeId],
   );
-  const settingsProviders = pluginSettingsProviders();
+
+  const availableIconPacks = useMemo(
+    () => workbenchIconPacks(platform),
+    [platformSnapshot],
+  );
+  const activeIconPack = useMemo(
+    () => resolveIconPack(availableIconPacks, preferredIconPackId),
+    [availableIconPacks, preferredIconPackId],
+  );  const settingsProviders = pluginSettingsProviders();
   const activePluginSettingsProvider = ["editor", "appearance", "fonts", "watcher"].includes(settingsSectionId)
     ? undefined
     : settingsProviders.find((provider) => provider.pluginId === settingsSectionId);
@@ -2752,11 +2769,15 @@ export function App() {
   useEffect(() => {
     void readPersistedThemePreference().then(setPreferredThemeId);
     void readPersistedFontPreferences().then(setFontPreferences);
+    void readPersistedIconPackPreference().then(setPreferredIconPackId);
   }, []);
 
   useLayoutEffect(() => {
     if (activeTheme) applyWorkbenchTheme(activeTheme);
   }, [activeTheme]);
+  useEffect(() => {
+    applyWorkbenchIconPack(activeIconPack);
+  }, [activeIconPack]);
   useEffect(() => {
     applyWorkbenchFonts({
       editorFont: activeEditorFont,
@@ -3270,6 +3291,9 @@ export function App() {
     setPanelVisible(false);
     setToolWindowVisible(false);
     setActiveToolWindowId(undefined);
+    // Tool windows retidos carregam estado vivo do workspace anterior (xterm,
+    // sessões remotas); a troca de projeto exige remontagem do zero.
+    setMountedToolWindowIds(new Set());
     profileRunCancellationRef.current.clear();
     profileRunPromiseRef.current.clear();
     debugCommandPromiseRef.current = undefined;
@@ -6326,7 +6350,6 @@ export function App() {
     setSidebarVisible(false);
   }, []);
 
-  const installedIds = useMemo(() => new Set(platformSnapshot.plugins.map((plugin) => plugin.manifest.id)), [platformSnapshot.plugins]);
   const pluginPendingRemoval = platformSnapshot.plugins.find((plugin) => plugin.manifest.id === pluginRemovalId);
   const editingEnvironment = editingEnvironmentId
     ? environments.find((environment) => environment.id === editingEnvironmentId)
@@ -6375,6 +6398,10 @@ export function App() {
   const selectTheme = (themeId: string) => {
     setPreferredThemeId(themeId);
     void persistThemePreference(themeId);
+  };
+  const selectIconPack = (packId: string) => {
+    setPreferredIconPackId(packId);
+    void persistIconPackPreference(packId);
   };
   const updateFontPreferences = (patch: Partial<WorkbenchFontPreferences>) => {
     setFontPreferences((current) => {
@@ -6488,7 +6515,7 @@ export function App() {
                         aria-pressed={explorerFilterOpen}
                         disabled={!explorerFilterProvider || !workspaceHandle}
                         onClick={() => setExplorerFilterOpen(true)}
-                      ><Search size={15} /></button>
+                      ><WorkbenchIcon icon="search" size={15} /></button>
                       <button
                         className="icon-button small"
                         type="button"
@@ -6505,7 +6532,7 @@ export function App() {
                             {workspaceFileCreationOptions.length ? (
                               <DropdownMenu.Sub>
                                 <DropdownMenu.SubTrigger className="menu-item" disabled={!workspaceHandle}>
-                                  <FilePlus2 size={15} /> Novo arquivo <ChevronRight className="menu-item__submenu-arrow" size={14} />
+                                  <WorkbenchIcon icon="plus" size={15} /> Novo arquivo <ChevronRight className="menu-item__submenu-arrow" size={14} />
                                 </DropdownMenu.SubTrigger>
                                 <DropdownMenu.Portal>
                                   <DropdownMenu.SubContent className="menu-content" sideOffset={6} alignOffset={-5}>
@@ -6524,7 +6551,7 @@ export function App() {
                                               background: option.icon.background ?? "transparent",
                                             }}
                                           >{option.icon.label}</span>
-                                        ) : <File size={15} />}
+                                        ) : <WorkbenchIcon icon="file" size={15} />}
                                         <span>{option.label}</span>
                                         <span className="menu-item__hint">{option.extension}</span>
                                       </DropdownMenu.Item>
@@ -6534,31 +6561,31 @@ export function App() {
                               </DropdownMenu.Sub>
                             ) : (
                               <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(() => startExplorerCreation("file"))}>
-                                <FilePlus2 size={15} /> Novo arquivo
+                                <WorkbenchIcon icon="plus" size={15} /> Novo arquivo
                               </DropdownMenu.Item>
                             )}
                             <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(() => startExplorerCreation("directory"))}>
-                              <FolderOpen size={15} /> Nova pasta
+                              <WorkbenchIcon icon="folder-open" size={15} /> Nova pasta
                             </DropdownMenu.Item>
                             <DropdownMenu.Separator className="menu-separator" />
                             <DropdownMenu.Item className="menu-item" disabled={!explorerHistory.undo.length} onSelect={() => invoke(undoExplorerOperation)}>
-                              <Undo2 size={15} /> {explorerUndoLabel(explorerHistory) ?? "Desfazer"}
+                              <WorkbenchIcon icon="undo" size={15} /> {explorerUndoLabel(explorerHistory) ?? "Desfazer"}
                             </DropdownMenu.Item>
                             <DropdownMenu.Item className="menu-item" disabled={!explorerHistory.redo.length} onSelect={() => invoke(redoExplorerOperation)}>
                               <Redo2 size={15} /> {explorerRedoLabel(explorerHistory) ?? "Refazer"}
                             </DropdownMenu.Item>
                             <DropdownMenu.Separator className="menu-separator" />
                             <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(refreshExplorer)}>
-                              <RefreshCw size={15} /> Atualizar
+                              <WorkbenchIcon icon="refresh" size={15} /> Atualizar
                             </DropdownMenu.Item>
                             <DropdownMenu.Separator className="menu-separator" />
                             <DropdownMenu.Item className="menu-item" onSelect={toggleExplorerHiddenEntries}>
-                              {explorerHiddenEntriesVisible ? <EyeOff size={15} /> : <Eye size={15} />}
+                              {explorerHiddenEntriesVisible ? <WorkbenchIcon icon="preview" size={15} /> : <WorkbenchIcon icon="preview" size={15} />}
                               {explorerHiddenEntriesVisible ? "Ocultar arquivos ocultos" : "Mostrar arquivos ocultos"}
                             </DropdownMenu.Item>
                             {explorerIgnoreProviders.length ? (
                               <DropdownMenu.Item className="menu-item" onSelect={() => setExplorerShowIgnored((visible) => !visible)}>
-                                {explorerShowIgnored ? <EyeOff size={15} /> : <Eye size={15} />}
+                                {explorerShowIgnored ? <WorkbenchIcon icon="preview" size={15} /> : <WorkbenchIcon icon="preview" size={15} />}
                                 {explorerShowIgnored ? "Ocultar arquivos ignorados" : "Mostrar arquivos ignorados"}
                               </DropdownMenu.Item>
                             ) : null}
@@ -6635,7 +6662,7 @@ export function App() {
                 >
                   {explorerFilterProvider && workspaceHandle && explorerFilterOpen ? (
                     <div className="explorer-filter" data-explorer-filter={explorerFilterProvider.id}>
-                      <Search className="explorer-filter__icon" size={13} />
+                      <WorkbenchIcon icon="search" size={13} className="explorer-filter__icon" />
                       <input
                         ref={explorerFilterInputRef}
                         className="explorer-filter__input"
@@ -6697,7 +6724,7 @@ export function App() {
                         invoke(() => openRootMenu(event.clientX, event.clientY));
                       }}
                     >
-                      <span className="workspace-name__label"><FolderRoot size={14} /> {workspaceName}</span>
+                      <span className="workspace-name__label"><WorkbenchIcon icon="folder" size={14} /> {workspaceName}</span>
                       <span className="workspace-name__actions">
                         <button
                           className="icon-button small"
@@ -6790,59 +6817,16 @@ export function App() {
               ) : null}
 
               {view === "plugins" ? (
-                <div className="sidebar-content plugins-view">
-                  <div className="toolbar-row spread">
-                    <span>{platformSnapshot.plugins.length} instalado(s)</span>
-                    <button className="icon-button small" type="button" aria-label="Atualizar catálogo" onClick={() => invoke(() => platform.discoverPlugins())}><RefreshCw size={14} /></button>
-                  </div>
-                  {platformSnapshot.plugins.map((plugin) => {
-                    const enabled = plugin.state === "active" || plugin.state === "enabled";
-                    return (
-                      <article className="plugin-card" key={plugin.manifest.id}>
-                        <button className="card-delete" type="button" aria-label={`Remover ${plugin.manifest.name}`} title={`Remover ${plugin.manifest.name}`} onClick={() => setPluginRemovalId(plugin.manifest.id)}><X size={14} /></button>
-                        <div className="plugin-card-heading">
-                          <PluginCardIcon
-                            name={plugin.manifest.name}
-                            src={platform.pluginIconUrl(plugin.manifest.id)}
-                            fallback={<Package size={18} />}
-                          />
-                          <strong>{plugin.manifest.name}</strong>
-                        </div>
-                        <p>{plugin.manifest.description}</p>
-                        <small>{plugin.manifest.id} · {plugin.manifest.version}</small>
-                        <div className="plugin-actions">
-                          <button className="button secondary compact" type="button" onClick={() => invoke(() => platform.setEnabled(plugin.manifest.id, !enabled))}>{enabled ? "Desativar" : "Ativar"}</button>
-                          {settingsProviders.some((provider) => provider.pluginId === plugin.manifest.id) ? (
-                            <button
-                              className="button secondary compact"
-                              type="button"
-                              onClick={() => {
-                                const provider = settingsProviders.find((candidate) => candidate.pluginId === plugin.manifest.id);
-                                if (provider) openSettings(provider.pluginId);
-                              }}
-                            >
-                              <Settings2 size={13} /> Configurar
-                            </button>
-                          ) : null}
-                        </div>
-                      </article>
-                    );
-                  })}
-                  {platformSnapshot.catalog.filter((entry) => !installedIds.has(entry.manifest.id)).map((entry) => (
-                    <article className="plugin-card available" key={entry.manifest.id}>
-                      <div className="plugin-card-heading">
-                        <PluginCardIcon
-                          name={entry.manifest.name}
-                          src={resolvePluginIconUrl(entry.manifest, entry.manifestUrl)}
-                          fallback={<Box size={18} />}
-                        />
-                        <strong>{entry.manifest.name}</strong>
-                      </div>
-                      <p>{entry.manifest.description}</p>
-                      <button className="button primary compact full" type="button" onClick={() => invoke(() => platform.install(entry.manifestUrl))}>Instalar</button>
-                    </article>
-                  ))}
-                </div>
+                <PluginManagerSidebar
+                  snapshot={platformSnapshot}
+                  settingsProviders={settingsProviders}
+                  pluginIconUrl={(pluginId) => platform.pluginIconUrl(pluginId)}
+                  onRefreshCatalog={() => invoke(() => platform.discoverPlugins())}
+                  onRemovePlugin={setPluginRemovalId}
+                  onSetPluginEnabled={(pluginId, enabled) => invoke(() => platform.setEnabled(pluginId, enabled))}
+                  onOpenSettings={openSettings}
+                  onInstallPlugin={(manifestUrl) => invoke(() => platform.install(manifestUrl))}
+                />
               ) : null}
 
               {view === "environments" ? (
@@ -6862,7 +6846,7 @@ export function App() {
                       <p>Gerencie intérpretes, ambientes e pacotes do workspace atual.</p>
                     </div>
                     <ButtonTooltip label="Atualizar ambientes" side="left">
-                      <button className="icon-button small" type="button" aria-label="Atualizar ambientes" onClick={() => invoke(refreshEnvironments)}><RefreshCw size={14} /></button>
+                      <button className="icon-button small" type="button" aria-label="Atualizar ambientes" onClick={() => invoke(refreshEnvironments)}><WorkbenchIcon icon="refresh" size={14} /></button>
                     </ButtonTooltip>
                   </div>
                   {registeredEnvironmentProviders.length > 1 ? (
@@ -6890,24 +6874,24 @@ export function App() {
                     </div>
                   ) : null}
                   <div className="environment-manager__summary">
-                    <span><CheckCircle2 size={13} /> {providerEnvironments.length} ambientes</span>
-                    <span><Package size={13} /> {managedEnvironmentCount} gerenciados</span>
-                    <span><FolderOpen size={13} /> {importedEnvironmentCount} importados</span>
-                    <span><Terminal size={13} /> {executableEnvironmentCount} executáveis</span>
+                    <span><WorkbenchIcon icon="check" size={13} /> {providerEnvironments.length} ambientes</span>
+                    <span><WorkbenchIcon icon="package" size={13} /> {managedEnvironmentCount} gerenciados</span>
+                    <span><WorkbenchIcon icon="folder-open" size={13} /> {importedEnvironmentCount} importados</span>
+                    <span><WorkbenchIcon icon="terminal" size={13} /> {executableEnvironmentCount} executáveis</span>
                   </div>
                   <label className="search-field environment-manager__search">
-                    <Search size={14} />
+                    <WorkbenchIcon icon="search" size={14} />
                     <input value={environmentSearch} onChange={(event) => setEnvironmentSearch(event.target.value)} placeholder="Buscar ambiente por nome, versão ou caminho" />
                   </label>
                   <div className="environment-manager__toolbar">
                     <ButtonTooltip label="Criar ambiente">
-                      <button className="button primary compact" type="button" aria-label="Criar ambiente" onClick={() => { setEnvironmentManagerProviderId(activeEnvironmentManagerProvider?.id); setEnvironmentForm("createEnvironment"); setEnvironmentPath(""); }}><Plus size={14} /><span className="responsive-action__label">Criar</span></button>
+                      <button className="button primary compact" type="button" aria-label="Criar ambiente" onClick={() => { setEnvironmentManagerProviderId(activeEnvironmentManagerProvider?.id); setEnvironmentForm("createEnvironment"); setEnvironmentPath(""); }}><WorkbenchIcon icon="plus" size={14} /><span className="responsive-action__label">Criar</span></button>
                     </ButtonTooltip>
                     <ButtonTooltip label="Importar ambiente">
-                      <button className="button secondary compact" type="button" aria-label="Importar ambiente" onClick={() => { setEnvironmentManagerProviderId(activeEnvironmentManagerProvider?.id); setEnvironmentForm("importEnvironment"); setEnvironmentPath(""); }}><FolderOpen size={14} /><span className="responsive-action__label">Importar</span></button>
+                      <button className="button secondary compact" type="button" aria-label="Importar ambiente" onClick={() => { setEnvironmentManagerProviderId(activeEnvironmentManagerProvider?.id); setEnvironmentForm("importEnvironment"); setEnvironmentPath(""); }}><WorkbenchIcon icon="folder-open" size={14} /><span className="responsive-action__label">Importar</span></button>
                     </ButtonTooltip>
                     <ButtonTooltip label={`Adicionar executável em ${activeEnvironmentManagerProvider?.name ?? "ambientes"}`}>
-                      <button className="button secondary compact" type="button" aria-label="Adicionar executável" onClick={() => { setEnvironmentManagerProviderId(activeEnvironmentManagerProvider?.id); setEnvironmentForm("addExecutable"); setEnvironmentPath(""); }}><Terminal size={14} /><span className="responsive-action__label">Executável</span></button>
+                      <button className="button secondary compact" type="button" aria-label="Adicionar executável" onClick={() => { setEnvironmentManagerProviderId(activeEnvironmentManagerProvider?.id); setEnvironmentForm("addExecutable"); setEnvironmentPath(""); }}><WorkbenchIcon icon="terminal" size={14} /><span className="responsive-action__label">Executável</span></button>
                     </ButtonTooltip>
                   </div>
 
@@ -6917,13 +6901,13 @@ export function App() {
                       {environmentForm === "addExecutable" ? (
                         <>
                           <label>Nome<input name="name" placeholder="Runtime local" /></label>
-                          <label>Executável<div className="path-row"><input readOnly value={environmentPath} placeholder="Nenhum executável selecionado" /><button className="button secondary compact" type="button" onClick={() => invoke(async () => { const path = await pickHostPath("file", true); if (path) setEnvironmentPath(path); })}><Search size={13} /> Procurar</button></div></label>
+                          <label>Executável<div className="path-row"><input readOnly value={environmentPath} placeholder="Nenhum executável selecionado" /><button className="button secondary compact" type="button" onClick={() => invoke(async () => { const path = await pickHostPath("file", true); if (path) setEnvironmentPath(path); })}><WorkbenchIcon icon="search" size={13} /> Procurar</button></div></label>
                         </>
                       ) : null}
                       {environmentForm === "importEnvironment" ? (
                         <>
                           <label>Nome opcional<input name="name" /></label>
-                          <label>Pasta<div className="path-row"><input readOnly value={environmentPath} placeholder="Nenhum venv selecionado" /><button className="button secondary compact" type="button" onClick={() => invoke(async () => { const path = await pickHostPath("directory"); if (path) setEnvironmentPath(path); })}><FolderOpen size={13} /> Procurar</button></div></label>
+                          <label>Pasta<div className="path-row"><input readOnly value={environmentPath} placeholder="Nenhum venv selecionado" /><button className="button secondary compact" type="button" onClick={() => invoke(async () => { const path = await pickHostPath("directory"); if (path) setEnvironmentPath(path); })}><WorkbenchIcon icon="folder-open" size={13} /> Procurar</button></div></label>
                         </>
                       ) : null}
                       {environmentForm === "createEnvironment" ? (
@@ -6936,11 +6920,11 @@ export function App() {
                       {environmentForm === "edit" && editingEnvironment ? (
                         <>
                           <label>Nome<input name="name" defaultValue={editingEnvironment.name} /></label>
-                          <label>{editingEnvironment.type === "venv" ? "Pasta" : "Executável"}<div className="path-row"><input readOnly value={environmentPath} /><button className="button secondary compact" type="button" onClick={() => invoke(async () => { const path = await pickHostPath(editingEnvironment.type === "venv" ? "directory" : "file", editingEnvironment.type === "process"); if (path) setEnvironmentPath(path); })}><Search size={13} /> Procurar</button></div></label>
+                          <label>{editingEnvironment.type === "venv" ? "Pasta" : "Executável"}<div className="path-row"><input readOnly value={environmentPath} /><button className="button secondary compact" type="button" onClick={() => invoke(async () => { const path = await pickHostPath(editingEnvironment.type === "venv" ? "directory" : "file", editingEnvironment.type === "process"); if (path) setEnvironmentPath(path); })}><WorkbenchIcon icon="search" size={13} /> Procurar</button></div></label>
                         </>
                       ) : null}
                       {environmentForm === "dependencies" ? <label>Dependências<input name="dependencies" placeholder="pacote-a pacote-b" /></label> : null}
-                      <div className="dialog-actions"><button className="button secondary compact" type="button" onClick={() => setEnvironmentForm(undefined)}><X size={13} /> Cancelar</button><button className="button primary compact" disabled={environmentBusy} type="submit"><Check size={13} /> Confirmar</button></div>
+                      <div className="dialog-actions"><button className="button secondary compact" type="button" onClick={() => setEnvironmentForm(undefined)}><X size={13} /> Cancelar</button><button className="button primary compact" disabled={environmentBusy} type="submit"><WorkbenchIcon icon="check" size={13} /> Confirmar</button></div>
                     </form>
                   ) : null}
 
@@ -6956,9 +6940,9 @@ export function App() {
                         <div>
                           <strong>{environment.name}</strong>
                           <div className="environment-card__badges">
-                            <span className={`environment-chip is-${environment.status}`}>{environment.status === "ready" ? <CheckCircle2 size={12} /> : <CircleAlert size={12} />}{environment.status === "ready" ? "Pronto" : environment.status === "creating" ? "Criando" : "Erro"}</span>
-                            <span className="environment-chip">{environment.type === "venv" ? environment.managed === false ? <FolderOpen size={12} /> : <Package size={12} /> : <Terminal size={12} />}{environment.type === "venv" ? environment.managed === false ? "Importado" : "Gerenciado" : "Executável"}</span>
-                            {environment.version ? <span className="environment-chip"><Box size={12} /> {environment.version}</span> : null}
+                            <span className={`environment-chip is-${environment.status}`}>{environment.status === "ready" ? <WorkbenchIcon icon="check" size={12} /> : <WorkbenchIcon icon="problems" size={12} />}{environment.status === "ready" ? "Pronto" : environment.status === "creating" ? "Criando" : "Erro"}</span>
+                            <span className="environment-chip">{environment.type === "venv" ? environment.managed === false ? <WorkbenchIcon icon="folder-open" size={12} /> : <WorkbenchIcon icon="package" size={12} /> : <WorkbenchIcon icon="terminal" size={12} />}{environment.type === "venv" ? environment.managed === false ? "Importado" : "Gerenciado" : "Executável"}</span>
+                            {environment.version ? <span className="environment-chip"><WorkbenchIcon icon="box" size={12} /> {environment.version}</span> : null}
                           </div>
                           <small>{environment.executable ?? environment.path}</small>
                         </div>
@@ -6976,16 +6960,16 @@ export function App() {
                               <span>{environmentSelected ? "Padrão" : "Definir padrão"}</span>
                             </label>
                           ) : environmentSelected ? (
-                            <span className="environment-default-single"><Check size={13} /> Padrão</span>
+                            <span className="environment-default-single"><WorkbenchIcon icon="check" size={13} /> Padrão</span>
                           ) : null}
                           {environmentProviderById(environment.providerId)?.update ? (
                             <ButtonTooltip label={`Editar ${environment.name}`}>
-                              <button className="button secondary compact" type="button" aria-label={`Editar ${environment.name}`} onClick={() => { setEnvironmentManagerProviderId(environment.providerId); setEditingEnvironmentId(environment.id); setEnvironmentPath(environment.type === "venv" ? environment.path ?? "" : environment.executable ?? ""); setEnvironmentForm("edit"); }}><Settings2 size={13} /><span className="responsive-action__label">Editar</span></button>
+                              <button className="button secondary compact" type="button" aria-label={`Editar ${environment.name}`} onClick={() => { setEnvironmentManagerProviderId(environment.providerId); setEditingEnvironmentId(environment.id); setEnvironmentPath(environment.type === "venv" ? environment.path ?? "" : environment.executable ?? ""); setEnvironmentForm("edit"); }}><WorkbenchIcon icon="settings" size={13} /><span className="responsive-action__label">Editar</span></button>
                             </ButtonTooltip>
                           ) : null}
                           {environment.type === "venv" ? (
                             <ButtonTooltip label={`Gerenciar pacotes de ${environment.name}`}>
-                              <button className="button secondary compact" type="button" aria-label={`Gerenciar pacotes de ${environment.name}`} onClick={() => setPackageManagerEnvironmentId(environment.id)}><Package size={13} /><span className="responsive-action__label">Pacotes</span></button>
+                              <button className="button secondary compact" type="button" aria-label={`Gerenciar pacotes de ${environment.name}`} onClick={() => setPackageManagerEnvironmentId(environment.id)}><WorkbenchIcon icon="package" size={13} /><span className="responsive-action__label">Pacotes</span></button>
                             </ButtonTooltip>
                           ) : null}
                         </div>
@@ -7037,11 +7021,11 @@ export function App() {
             <DropdownMenu.Portal>
               <DropdownMenu.Content className="menu-content" align="start" sideOffset={6}>
                 <DropdownMenu.Item className="menu-item" onSelect={() => invoke(openProjectDialog)}>
-                  <FolderOpen size={15} /> Abrir projeto...
+                  <WorkbenchIcon icon="folder-open" size={15} /> Abrir projeto...
                 </DropdownMenu.Item>
                 <DropdownMenu.Separator className="menu-separator" />
                 <DropdownMenu.Item className="menu-item" disabled>
-                  <History size={15} /> Projetos recentes
+                  <WorkbenchIcon icon="history" size={15} /> Projetos recentes
                 </DropdownMenu.Item>
                 {recentProjects.slice(0, 10).map((project) => (
                   <DropdownMenu.Item
@@ -7073,7 +7057,7 @@ export function App() {
                 {workspaceFileCreationOptions.length ? (
                   <DropdownMenu.Sub>
                     <DropdownMenu.SubTrigger className="menu-item">
-                      <FilePlus2 size={15} /> Novo arquivo <ChevronRight className="menu-item__submenu-arrow" size={14} />
+                      <WorkbenchIcon icon="plus" size={15} /> Novo arquivo <ChevronRight className="menu-item__submenu-arrow" size={14} />
                     </DropdownMenu.SubTrigger>
                     <DropdownMenu.Portal>
                       <DropdownMenu.SubContent className="menu-content" sideOffset={6} alignOffset={-5}>
@@ -7092,7 +7076,7 @@ export function App() {
                                   background: option.icon.background ?? "transparent",
                                 }}
                               >{option.icon.label}</span>
-                            ) : <File size={15} />}
+                            ) : <WorkbenchIcon icon="file" size={15} />}
                             <span>{option.label}</span>
                             <span className="menu-item__hint">{option.extension}</span>
                           </DropdownMenu.Item>
@@ -7102,11 +7086,11 @@ export function App() {
                   </DropdownMenu.Sub>
                 ) : (
                   <DropdownMenu.Item className="menu-item" onSelect={() => newDocument()}>
-                    <FilePlus2 size={15} /> Novo arquivo
+                    <WorkbenchIcon icon="plus" size={15} /> Novo arquivo
                   </DropdownMenu.Item>
                 )}
                 <DropdownMenu.Item className="menu-item" onSelect={() => invoke(openSingleFile)}>
-                  <File size={15} /> Abrir arquivo
+                  <WorkbenchIcon icon="file" size={15} /> Abrir arquivo
                 </DropdownMenu.Item>
                 <DropdownMenu.Separator className="menu-separator" />
                 <DropdownMenu.Item className="menu-item" onSelect={() => invoke(saveDocument)}>
@@ -7207,7 +7191,7 @@ export function App() {
                 aria-label="Executar perfil"
                 disabled={!selectedProfile || selectedProfileRunning || busy}
                 onClick={() => invoke(runSelectedProfile)}
-              ><Play size={15} /></button>
+              ><WorkbenchIcon icon="play" size={15} /></button>
             </ButtonTooltip>
             <ButtonTooltip label={selectedProfile && !selectedProfileDebugAdapter
               ? "O runtime selecionado não oferece depuração para este perfil"
@@ -7361,7 +7345,7 @@ export function App() {
                     {editorSearchOpen ? (
                       <div className="editor-search" role="search" data-invalid={editorSearchError ? "true" : undefined}>
                         <div className="editor-search__find-row">
-                        <Search className="editor-search__icon" size={13} />
+                        <WorkbenchIcon icon="search" size={13} className="editor-search__icon" />
                         <input
                           ref={editorSearchInputRef}
                           className="editor-search__input"
@@ -7523,17 +7507,17 @@ export function App() {
                         title="Pesquisar no arquivo"
                         disabled={!activeDocument || activeDocument.kind !== "text" || Boolean(activeResourceEditorProvider)}
                         onClick={() => openEditorSearch()}
-                      ><Search size={14} /></button>
+                      ><WorkbenchIcon icon="search" size={14} /></button>
                     )}
                     {editorToolbarItems.map((item) => {
-                      const icon = item.icon === "undo" ? <Undo2 size={14} />
-                        : item.icon === "diff" ? <Code2 size={14} />
-                          : item.icon === "back" ? <ArrowLeft size={14} />
-                            : item.icon === "forward" ? <ArrowRight size={14} />
-                          : item.icon === "history" ? <History size={14} />
-                          : item.icon === "preview" ? <Eye size={14} />
-                          : item.icon === "plus" ? <Plus size={14} />
-                            : <File size={14} />;
+                      const icon = <WorkbenchIcon icon={item.icon === "undo" ? "undo"
+                        : item.icon === "diff" ? "diff"
+                          : item.icon === "back" ? "back"
+                            : item.icon === "forward" ? "forward"
+                          : item.icon === "history" ? "history"
+                          : item.icon === "preview" ? "preview"
+                          : item.icon === "plus" ? "plus"
+                            : "file"} size={14} />;
                       return (
                         <button
                           key={item.id}
@@ -7950,7 +7934,7 @@ export function App() {
                     <DropdownMenu.Root>
                       <DropdownMenu.Trigger asChild>
                         <button className="button primary" type="button">
-                          <FilePlus2 size={16} /> Novo arquivo <ChevronDown size={14} />
+                          <WorkbenchIcon icon="plus" size={16} /> Novo arquivo <ChevronDown size={14} />
                         </button>
                       </DropdownMenu.Trigger>
                       <DropdownMenu.Portal>
@@ -7970,7 +7954,7 @@ export function App() {
                                     background: option.icon.background ?? "transparent",
                                   }}
                                 >{option.icon.label}</span>
-                              ) : <File size={15} />}
+                              ) : <WorkbenchIcon icon="file" size={15} />}
                               <span>{option.label}</span>
                               <span className="menu-item__hint">{option.extension}</span>
                             </DropdownMenu.Item>
@@ -7979,10 +7963,10 @@ export function App() {
                       </DropdownMenu.Portal>
                     </DropdownMenu.Root>
                   ) : (
-                    <button className="button primary" type="button" onClick={() => newDocument()}><FilePlus2 size={16} /> Novo arquivo</button>
+                    <button className="button primary" type="button" onClick={() => newDocument()}><WorkbenchIcon icon="plus" size={16} /> Novo arquivo</button>
                   )}
-                  <button className="button secondary" type="button" onClick={() => invoke(openSingleFile)}><File size={16} /> Abrir arquivo</button>
-                  <button className="button secondary" type="button" onClick={() => invoke(openProjectDialog)}><FolderOpen size={16} /> Abrir projeto</button>
+                  <button className="button secondary" type="button" onClick={() => invoke(openSingleFile)}><WorkbenchIcon icon="file" size={16} /> Abrir arquivo</button>
+                  <button className="button secondary" type="button" onClick={() => invoke(openProjectDialog)}><WorkbenchIcon icon="folder-open" size={16} /> Abrir projeto</button>
                 </div>
                 <small>Atalhos: Ctrl+N, Ctrl+O, Ctrl+S e Ctrl+Shift+S</small>
               </div>
@@ -8118,7 +8102,7 @@ export function App() {
                                   aria-label={tabDebugSession.status === "paused" ? "Continuar depuração" : "Pausar depuração"}
                                   disabled={debugRestarting || debugEnded || (debugCommandBusy && tabDebugSession.status !== "running") || !["running", "paused"].includes(tabDebugSession.status)}
                                   onClick={() => invoke(() => debugCommand(tabDebugSession.status === "paused" ? "resume" : "pause"))}
-                                >{tabDebugSession.status === "paused" ? <Play size={14} /> : <Pause size={14} />}</button>
+                                >{tabDebugSession.status === "paused" ? <WorkbenchIcon icon="play" size={14} /> : <WorkbenchIcon icon="pause" size={14} />}</button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Step over" side="top">
                                 <button className="icon-button small" type="button" aria-label="Step over" disabled={debugRestarting || debugCommandBusy || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepOver"))}><StepForward size={14} /></button>
@@ -8145,7 +8129,7 @@ export function App() {
                                   aria-label="Executar perfil nesta aba"
                                   disabled={executionRunning || executionRestarting}
                                   onClick={() => invoke(() => runProfile(tab.profile!))}
-                                ><Play size={14} /></button>
+                                ><WorkbenchIcon icon="play" size={14} /></button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Reexecutar perfil" side="top">
                                 <button
@@ -8353,7 +8337,7 @@ export function App() {
         </div>
 
         <footer className="statusbar">
-          <button type="button" onClick={() => invoke(openSingleFile)}><File size={13} /> Abrir arquivo</button>
+          <button type="button" onClick={() => invoke(openSingleFile)}><WorkbenchIcon icon="file" size={13} /> Abrir arquivo</button>
           <span>{platformSnapshot.plugins.length} plugin(s)</span>
           {workspaceExternalSync ? <WorkspaceExternalSyncIndicator state={workspaceExternalSync} /> : null}
           {workbenchStatusbarContributions.map((provider) => (
@@ -8492,7 +8476,7 @@ export function App() {
                     type="button"
                     onClick={() => selectSettingsSection("watcher")}
                   >
-                    <Eye size={15} />
+                    <WorkbenchIcon icon="preview" size={15} />
                     <span>Vigia de arquivos</span>
                   </button>
                   {settingsProviders.length ? <span className="settings-navigation__label">Plugins</span> : null}
@@ -8503,7 +8487,7 @@ export function App() {
                       type="button"
                       onClick={() => selectSettingsSection(provider.pluginId)}
                     >
-                      <Plug size={15} />
+                      <WorkbenchIcon icon="plugins" size={15} />
                       <span>{provider.title}</span>
                     </button>
                   ))}
@@ -8584,7 +8568,47 @@ export function App() {
                           );
                         })}
                       </div>
-                    </>
+                    
+                      <div className="settings-section-heading settings-section-heading--nested">
+                        <div>
+                          <h4>Pacote de ícones</h4>
+                          <p>Ícones semânticos da barra de atividades e painéis. Plugins podem oferecer packs adicionais.</p>
+                        </div>
+                      </div>
+                      <div className="theme-setting-grid" role="radiogroup" aria-label="Pacote de ícones">
+                        {availableIconPacks.map((pack) => {
+                          const selected = activeIconPack?.id === pack.id;
+                          return (
+                            <button
+                              className={`theme-setting-card${selected ? " is-active" : ""}`}
+                              type="button"
+                              role="radio"
+                              aria-checked={selected}
+                              key={pack.id}
+                              onClick={() => selectIconPack(pack.id)}
+                            >
+                              <span className="icon-pack-preview" aria-hidden="true">
+                                {(pack.id === "tinyide.brand"
+                                  ? pack.icons.filter((icon) => ["git", "docker", "nodejs", "python", "terminal", "files"].includes(icon.id))
+                                  : pack.icons
+                                ).slice(0, 6).map((icon) => (
+                                  <span
+                                    key={icon.id}
+                                    className="workbench-icon"
+                                    data-workbench-icon={icon.id}
+                                    dangerouslySetInnerHTML={{ __html: icon.svg }}
+                                  />
+                                ))}
+                              </span>
+                              <span className="theme-setting-card__copy">
+                                <strong>{pack.label}</strong>
+                                <small>{pack.description ?? `${pack.icons.length} ícones`}</small>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+</>
                   ) : settingsSectionId === "fonts" ? (
                     <>
                       <div className="settings-section-heading">
@@ -8743,7 +8767,7 @@ export function App() {
                             disabled={!workspaceRoot || !watcherIgnoredDraft.trim()}
                             onClick={() => invoke(() => addWatcherIgnoredDirectory())}
                           >
-                            <Plus size={14} /> Adicionar
+                            <WorkbenchIcon icon="plus" size={14} /> Adicionar
                           </button>
                         </div>
                       </div>
@@ -8751,7 +8775,7 @@ export function App() {
                   ) : activePluginSettingsProvider ? (
                     <>
                       <div className="settings-section-heading">
-                        <span className="settings-section-heading__icon"><Plug size={18} /></span>
+                        <span className="settings-section-heading__icon"><WorkbenchIcon icon="plugins" size={18} /></span>
                         <div>
                           <span className="eyebrow">PLUGIN</span>
                           <h3>{activePluginSettingsProvider.title}</h3>
@@ -8804,7 +8828,7 @@ export function App() {
                                   disabled={!workspaceRoot || !(pluginStringArrayDrafts[setting.id] ?? "").trim()}
                                   onClick={() => invoke(() => addPluginStringArraySetting(setting.id))}
                                 >
-                                  <Plus size={14} /> {setting.addLabel ?? "Adicionar"}
+                                  <WorkbenchIcon icon="plus" size={14} /> {setting.addLabel ?? "Adicionar"}
                                 </button>
                               </div>
                             </div>
@@ -8875,7 +8899,7 @@ export function App() {
                 ) : settingsSectionId === "fonts" ? (
                   <p className="settings-scope-note"><Check size={14} /> Fontes aplicadas globalmente e salvas na aplicação.</p>
                 ) : !workspaceRoot ? (
-                  <p className="settings-scope-note"><CircleAlert size={14} /> Abra um workspace para alterar configurações locais.</p>
+                  <p className="settings-scope-note"><WorkbenchIcon icon="problems" size={14} /> Abra um workspace para alterar configurações locais.</p>
                 ) : settingsSectionId === "watcher" ? (
                   <p className="settings-scope-note"><Check size={14} /> Alterações só são aplicadas ao clicar em "Concluir".</p>
                 ) : (
@@ -8954,7 +8978,7 @@ export function App() {
                 <Dialog.Close asChild><button className="icon-button" type="button" aria-label="Fechar"><X size={16} /></button></Dialog.Close>
               </div>
               <div className="file-browser-controls">
-                <label className="search-field"><Search size={15} /><input value={environmentBrowserFilter} onChange={(event) => setEnvironmentBrowserFilter(event.target.value)} placeholder="Filtrar nesta pasta" /></label>
+                <label className="search-field"><WorkbenchIcon icon="search" size={15} /><input value={environmentBrowserFilter} onChange={(event) => setEnvironmentBrowserFilter(event.target.value)} placeholder="Filtrar nesta pasta" /></label>
                 <label className="check-row"><input type="checkbox" checked={environmentBrowserHidden} onChange={(event) => { const checked = event.target.checked; setEnvironmentBrowserHidden(checked); invoke(() => loadEnvironmentBrowser(environmentBrowserMode ?? "directory", environmentListing?.path, checked)); }} /> Mostrar ocultos</label>
               </div>
               <div className="file-browser-path"><button className="button secondary compact" type="button" disabled={!environmentListing?.parentPath} onClick={() => invoke(() => navigateEnvironmentBrowser(environmentListing?.parentPath))}><Upload size={14} /> Pasta pai</button><code>{environmentListing?.path ?? "Carregando..."}</code></div>
@@ -8975,7 +8999,7 @@ export function App() {
                         onDoubleClick={() => entry.kind === "directory" && !selectable ? invoke(() => navigateEnvironmentBrowser(entry.path)) : undefined}
                         onClick={() => selectable ? setEnvironmentBrowserSelection(entry.path) : entry.kind === "directory" ? invoke(() => navigateEnvironmentBrowser(entry.path)) : undefined}
                       >
-                        {entry.kind === "directory" ? <Folder size={17} /> : <File size={17} />}
+                        {entry.kind === "directory" ? <WorkbenchIcon icon="folder" size={17} /> : <WorkbenchIcon icon="file" size={17} />}
                         <span><strong>{entry.name}</strong><small>{selectable ? (environmentBrowserMode === "file" ? environmentBrowserExecutableOnly ? "Executável válido" : "Arquivo selecionável" : "Ambiente válido") : entry.kind === "directory" ? "Diretório" : "Arquivo"}</small></span>
                       </button>
                     );
@@ -9004,16 +9028,16 @@ export function App() {
             {contextMenu.items.map((item, index) => {
               const previous = contextMenu.items[index - 1];
               const separated = previous && previous.group !== item.group;
-              const icon = item.icon === "play" ? <Play size={14} />
-                : item.icon === "folder" ? <FolderOpen size={14} />
-                  : item.icon === "copy" ? <Code2 size={14} />
-                    : item.icon === "terminal" ? <Terminal size={14} />
-                      : item.icon === "save" ? <Save size={14} />
-                        : item.icon === "close" ? <X size={14} />
-                          : item.icon === "plus" ? <Plus size={14} />
-                            : item.icon === "undo" ? <Undo2 size={14} />
-                              : item.icon === "diff" ? <Code2 size={14} />
-                                : <File size={14} />;
+              const icon = <WorkbenchIcon icon={item.icon === "play" ? "play"
+                : item.icon === "folder" ? "folder-open"
+                  : item.icon === "copy" ? "copy"
+                    : item.icon === "terminal" ? "terminal"
+                      : item.icon === "save" ? "save"
+                        : item.icon === "close" ? "close"
+                          : item.icon === "plus" ? "plus"
+                            : item.icon === "undo" ? "undo"
+                              : item.icon === "diff" ? "diff"
+                                : "file"} size={14} />;
               return (
                 <div key={item.id}>
                   {separated ? <div className="menu-separator" /> : null}

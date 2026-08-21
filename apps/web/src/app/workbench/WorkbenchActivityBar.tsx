@@ -1,4 +1,3 @@
-import { CircleAlert, Files, Play, Plug } from "lucide-react";
 import type { ReactNode } from "react";
 import type { WorkbenchActivityIcon } from "@tinyide/plugin-api";
 import type { ActivityBarSide, ActivityButtonDescriptor } from "../activity-layout";
@@ -108,14 +107,14 @@ export function WorkbenchActivityBar({
         if (item.key === "builtin:explorer") {
           return renderFixed(item.key, (
             <IconButton label="Explorador" active={activeSidebarId === "explorer"} onClick={() => onBuiltinSidebarActivate("explorer")}>
-              <Files size={16} />
+              <WorkbenchActivityIconView icon="files" />
             </IconButton>
           ));
         }
         if (item.key === "builtin:plugins") {
           return renderFixed(item.key, (
             <IconButton label="Plugins" active={activeSidebarId === "plugins"} onClick={() => onBuiltinSidebarActivate("plugins")}>
-              <Plug size={16} />
+              <WorkbenchActivityIconView icon="plugins" />
             </IconButton>
           ));
         }
@@ -133,7 +132,7 @@ export function WorkbenchActivityBar({
               active={executionActive}
               onClick={onExecutionsActivate}
             >
-              <Play size={16} />
+              <WorkbenchActivityIconView icon="play" />
               <span
                 aria-hidden="true"
                 className={`execution-activity__badge${runningExecutionCount ? " is-running" : ""}`}
@@ -144,7 +143,7 @@ export function WorkbenchActivityBar({
         if (item.key === "builtin:problems") {
           return renderFixed(item.key, (
             <IconButton label={`Problemas: ${diagnosticsCount}`} active={problemsVisible} onClick={onProblemsActivate}>
-              <CircleAlert size={16} />
+              <WorkbenchActivityIconView icon="problems" />
               <span className="right-activity-bar__badge" aria-hidden="true">{diagnosticsCount}</span>
             </IconButton>
           ));

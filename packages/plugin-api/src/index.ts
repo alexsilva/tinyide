@@ -145,6 +145,7 @@ export interface PluginExtensionApi {
   registerWorkbenchToolWindowHook(hook: WorkbenchToolWindowHook): Disposable;
   registerWorkbenchThemeProvider(provider: WorkbenchThemeProvider): Disposable;
   registerWorkbenchFontProvider(provider: WorkbenchFontProvider): Disposable;
+  registerWorkbenchIconProvider(provider: WorkbenchIconProvider): Disposable;
   registerWorkbenchTitlebarContribution(contribution: WorkbenchTitlebarContribution): Disposable;
   registerWorkbenchStatusbarContribution(contribution: WorkbenchStatusbarContribution): Disposable;
   registerWorkbenchExplorerFilterProvider(provider: WorkbenchExplorerFilterProvider): Disposable;
@@ -749,17 +750,53 @@ export interface WorkbenchPanelMountContext {
   readonly state: WorkbenchStateApi;
 }
 
-export type WorkbenchActivityIcon =
-  | "box"
-  | "database"
-  | "docker"
-  | "files"
-  | "git"
-  | "history"
-  | "nodejs"
-  | "python"
-  | "source-control"
-  | "terminal";
+/**
+ * Identificador semântico de ícone do workbench.
+ *
+ * Valores conhecidos da distribuição base: box, database, docker, files, git,
+ * history, nodejs, python, source-control, terminal. Packs e plugins podem
+ * introduzir novos ids; a resolução concreta vem de `WorkbenchIconProvider`.
+ */
+export type WorkbenchActivityIcon = string;
+
+/** Ícones semânticos padrão publicados pelo módulo builtin de ícones. */
+export const WORKBENCH_BUILTIN_ICON_IDS = [
+  "back",
+  "box",
+  "check",
+  "close",
+  "copy",
+  "database",
+  "diff",
+  "docker",
+  "file",
+  "files",
+  "folder",
+  "folder-open",
+  "forward",
+  "git",
+  "history",
+  "nodejs",
+  "package",
+  "pause",
+  "play",
+  "plugins",
+  "plus",
+  "preview",
+  "problems",
+  "python",
+  "refresh",
+  "rerun",
+  "save",
+  "search",
+  "settings",
+  "source-control",
+  "stop",
+  "terminal",
+  "undo",
+] as const;
+
+export type WorkbenchBuiltinIconId = (typeof WORKBENCH_BUILTIN_ICON_IDS)[number];
 
 export type WorkbenchThemeAppearance = "light" | "neutral" | "dark";
 
@@ -911,6 +948,41 @@ export const WORKBENCH_FONT_CSS_VARIABLES = {
   editor: "--font-editor",
   editorFontSize: "--editor-font-size",
 } as const;
+
+/**
+ * Glifo de um ícone semântico do workbench.
+ *
+ * O `svg` deve ser markup SVG completo (elemento raiz `<svg>`) com viewBox.
+ * O host aplica tamanho e cor via CSS; evite hardcode de dimensões externas.
+ */
+export interface WorkbenchIconDefinition {
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly svg: string;
+  readonly order?: number;
+}
+
+/**
+ * Pacote de ícones selecionável na aparência, análogo a um tema.
+ * Plugins podem publicar packs adicionais ou substituir um pack pelo mesmo id.
+ */
+export interface WorkbenchIconPackDefinition {
+  readonly id: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly order?: number;
+  readonly icons: readonly WorkbenchIconDefinition[];
+}
+
+/** Um provider pode adicionar packs ou substituir um pack existente pelo mesmo id. */
+export interface WorkbenchIconProvider {
+  readonly id: string;
+  readonly priority?: number;
+  packs(): readonly WorkbenchIconPackDefinition[];
+}
+
+export const WORKBENCH_ICON_CAPABILITY = "workbench.icon";
 
 export interface WorkbenchSidebarMountContext extends WorkbenchPanelMountContext {
   close(): void;

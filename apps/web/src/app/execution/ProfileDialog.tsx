@@ -1,5 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { Plus, Save, Settings2, Terminal, X } from "lucide-react";
+import { X } from "lucide-react";
+import { WorkbenchIcon } from "../workbench/activity-components";
 import { useEffect, useState } from "react";
 import { formatCommandLineArguments, parseCommandLineArguments } from "@tinyide/core";
 import type {
@@ -207,7 +208,7 @@ export function ProfileDialog({
                       className="profile-card__select"
                       onClick={() => setEditingId(profile.id)}
                     >
-                      <Terminal size={16} />
+                      <WorkbenchIcon icon="terminal" size={16} />
                       <span>
                         <strong>{profile.name}</strong>
                         <small>{profile.steps.length} etapa(s)</small>
@@ -226,7 +227,7 @@ export function ProfileDialog({
                 ))}
               </div>
               <button className="button secondary full" type="button" onClick={addProfile}>
-                <Plus size={15} /> Novo perfil
+                <WorkbenchIcon icon="plus" size={15} /> Novo perfil
               </button>
               {presets.length ? (
                 <select className="profile-preset-select" aria-label="Adicionar perfil a partir de um preset" defaultValue="" onChange={(event) => {
@@ -281,7 +282,7 @@ export function ProfileDialog({
 
                   <section className="form-section">
                     <div className="form-section-heading">
-                      <Terminal size={17} />
+                      <WorkbenchIcon icon="terminal" size={17} />
                       <div>
                         <strong>Comando</strong>
                         <small>Primeira etapa do perfil.</small>
@@ -470,7 +471,7 @@ export function ProfileDialog({
               <button className="button secondary" type="button">Cancelar</button>
             </Dialog.Close>
             <button className="button primary" type="button" onClick={saveProfiles}>
-              <Save size={15} /> Salvar alterações
+              <WorkbenchIcon icon="save" size={15} /> Salvar alterações
             </button>
           </div>
           {removalProfile ? (

@@ -1,4 +1,5 @@
-import { Clock3, ExternalLink, FolderOpen, Trash2, X } from "lucide-react";
+import { ExternalLink, Trash2, X } from "lucide-react";
+import { WorkbenchIcon } from "./workbench/activity-components";
 import type { ProjectOpenTarget, RecentProject } from "./project-history";
 
 export function ProjectOpenDialog({
@@ -48,15 +49,15 @@ export function ProjectOpenDialog({
         </fieldset>
 
         <button className="button primary project-open-dialog__choose" type="button" disabled={busy} onClick={onChooseProject}>
-          <FolderOpen size={15} /> Escolher outro projeto
+          <WorkbenchIcon icon="folder-open" size={15} /> Escolher outro projeto
         </button>
 
-        <div className="project-open-recents__heading"><Clock3 size={14} /><strong>Recentes</strong></div>
+        <div className="project-open-recents__heading"><WorkbenchIcon icon="history" size={14} /><strong>Recentes</strong></div>
         <div className="project-open-recents" role="list">
           {recentProjects.map((project) => (
             <article className="project-open-recent" role="listitem" key={project.id}>
               <button className="project-open-recent__main" type="button" disabled={busy} onClick={() => onOpenRecent(project)}>
-                <span className="project-open-recent__icon"><FolderOpen size={16} /></span>
+                <span className="project-open-recent__icon"><WorkbenchIcon icon="folder-open" size={16} /></span>
                 <span className="project-open-recent__text">
                   <strong>{project.name}</strong>
                   <small>{project.path ?? "Projeto do navegador"}</small>

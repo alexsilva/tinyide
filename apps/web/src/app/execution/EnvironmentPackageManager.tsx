@@ -13,6 +13,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { WorkbenchIcon } from "../workbench/activity-components";
 import { useCallback, useEffect, useState } from "react";
 import type {
   ExecutionEnvironment,
@@ -94,15 +95,15 @@ export function EnvironmentPackageManager({
   return (
     <section className="package-manager" aria-label={`Pacotes de ${environment.name}`}>
       <header className="package-manager__header">
-        <button className="icon-button small" type="button" aria-label="Voltar para ambientes" title="Voltar para ambientes" onClick={onClose}><ArrowLeft size={15} /></button>
+        <button className="icon-button small" type="button" aria-label="Voltar para ambientes" title="Voltar para ambientes" onClick={onClose}><WorkbenchIcon icon="back" size={15} /></button>
         <div><strong>{environment.name}</strong><span>{environment.version ?? "Python"} · Pacotes</span></div>
-        <button className="icon-button small" type="button" aria-label="Atualizar pacotes" title="Atualizar pacotes" disabled={Boolean(busy)} onClick={() => void loadPackages()}><RefreshCw className={busy === "refresh" ? "is-spinning" : undefined} size={14} /></button>
+        <button className="icon-button small" type="button" aria-label="Atualizar pacotes" title="Atualizar pacotes" disabled={Boolean(busy)} onClick={() => void loadPackages()}><WorkbenchIcon icon="refresh" size={14} className={busy === "refresh" ? "is-spinning" : undefined} /></button>
       </header>
 
       <div className="package-manager__summary">
         <span><PackageCheck size={14} /><strong>{installedPackages.length}</strong> instalados</span>
         <span className={updates.length ? "has-updates" : ""}><ArrowUpCircle size={14} /><strong>{updates.length}</strong> atualizações</span>
-        <span className={inventory?.health === "issues" ? "has-issues" : ""}>{inventory?.health === "healthy" ? <CheckCircle2 size={14} /> : <CircleAlert size={14} />}{inventory?.health === "healthy" ? "Saudável" : inventory?.health === "issues" ? "Conflitos" : "Verificando"}</span>
+        <span className={inventory?.health === "issues" ? "has-issues" : ""}>{inventory?.health === "healthy" ? <WorkbenchIcon icon="check" size={14} /> : <WorkbenchIcon icon="problems" size={14} />}{inventory?.health === "healthy" ? "Saudável" : inventory?.health === "issues" ? "Conflitos" : "Verificando"}</span>
       </div>
 
       {packageManagementAvailable ? (
@@ -119,7 +120,7 @@ export function EnvironmentPackageManager({
           <label htmlFor="package-specs">Instalar pacotes</label>
           <div>
             <input id="package-specs" value={packageSpecs} onChange={(event) => setPackageSpecs(event.target.value)} placeholder="requests ou django==5.2" />
-            <button className="button primary compact" type="submit" disabled={Boolean(busy) || !packageSpecs.trim()}><Plus size={14} /> Instalar</button>
+            <button className="button primary compact" type="submit" disabled={Boolean(busy) || !packageSpecs.trim()}><WorkbenchIcon icon="plus" size={14} /> Instalar</button>
           </div>
           <small>Aceita vários nomes ou versões, separados por espaço.</small>
         </form>
@@ -127,24 +128,24 @@ export function EnvironmentPackageManager({
 
       <div className="package-manager__controls">
         <div className="segmented-control" aria-label="Filtrar pacotes">
-          <button type="button" className={filter === "all" ? "is-active" : ""} onClick={() => setFilter("all")}><Package size={13} /> Todos</button>
+          <button type="button" className={filter === "all" ? "is-active" : ""} onClick={() => setFilter("all")}><WorkbenchIcon icon="package" size={13} /> Todos</button>
           <button type="button" className={filter === "updates" ? "is-active" : ""} onClick={() => setFilter("updates")}><ArrowUpCircle size={13} /> Atualizações</button>
         </div>
-        <label className="package-search"><Search size={13} /><input aria-label="Buscar pacote instalado" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filtrar" /></label>
+        <label className="package-search"><WorkbenchIcon icon="search" size={13} /><input aria-label="Buscar pacote instalado" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filtrar" /></label>
       </div>
 
       {updates.length && provider.upgradePackages ? (
         <button className="package-update-all" type="button" disabled={Boolean(busy)} onClick={() => void execute("Atualização", () => provider.upgradePackages!(environment.id))}><ArrowUpCircle size={14} /> Atualizar todos ({updates.length})</button>
       ) : null}
 
-      {packageError ? <div className="package-feedback is-error" role="alert"><CircleAlert size={14} /><span>{packageError}</span><button type="button" onClick={() => void loadPackages()}><RefreshCw size={13} /> Tentar novamente</button></div> : null}
-      {feedback ? <div className="package-feedback" role="status">{busy ? <RefreshCw className="is-spinning" size={14} /> : <CheckCircle2 size={14} />}<span>{feedback}</span></div> : null}
-      {inventory?.issues?.length ? <details className="package-issues"><summary><CircleAlert size={13} /> Ver conflitos ({inventory.issues.length})</summary>{inventory.issues.map((issue) => <code key={issue}>{issue}</code>)}</details> : null}
-      {operationOutput ? <details className="package-output"><summary><Terminal size={13} /> Saída da última operação</summary><pre>{operationOutput}</pre></details> : null}
+      {packageError ? <div className="package-feedback is-error" role="alert"><WorkbenchIcon icon="problems" size={14} /><span>{packageError}</span><button type="button" onClick={() => void loadPackages()}><WorkbenchIcon icon="refresh" size={13} /> Tentar novamente</button></div> : null}
+      {feedback ? <div className="package-feedback" role="status">{busy ? <WorkbenchIcon icon="refresh" size={14} className="is-spinning" /> : <WorkbenchIcon icon="check" size={14} />}<span>{feedback}</span></div> : null}
+      {inventory?.issues?.length ? <details className="package-issues"><summary><WorkbenchIcon icon="problems" size={13} /> Ver conflitos ({inventory.issues.length})</summary>{inventory.issues.map((issue) => <code key={issue}>{issue}</code>)}</details> : null}
+      {operationOutput ? <details className="package-output"><summary><WorkbenchIcon icon="terminal" size={13} /> Saída da última operação</summary><pre>{operationOutput}</pre></details> : null}
 
       <div className="package-list" aria-busy={busy === "refresh"}>
-        {busy === "refresh" && !inventory ? <div className="package-empty"><RefreshCw className="is-spinning" size={20} /><span>Carregando pacotes...</span></div> : null}
-        {inventory && !visiblePackages.length ? <div className="package-empty"><Package size={20} /><span>{query ? "Nenhum pacote corresponde à busca." : filter === "updates" ? "Todos os pacotes estão atualizados." : "Nenhum pacote instalado."}</span></div> : null}
+        {busy === "refresh" && !inventory ? <div className="package-empty"><WorkbenchIcon icon="refresh" size={20} className="is-spinning" /><span>Carregando pacotes...</span></div> : null}
+        {inventory && !visiblePackages.length ? <div className="package-empty"><WorkbenchIcon icon="package" size={20} /><span>{query ? "Nenhum pacote corresponde à busca." : filter === "updates" ? "Todos os pacotes estão atualizados." : "Nenhum pacote instalado."}</span></div> : null}
         {visiblePackages.map((item) => (
           <article className="package-row" key={item.name}>
             <div><strong>{item.name}</strong><span>{item.version}{item.latestVersion ? ` → ${item.latestVersion}` : ""}</span></div>

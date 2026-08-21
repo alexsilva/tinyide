@@ -14,8 +14,8 @@ describe("editor toolbar contributions", () => {
   });
 
   it("renders navigation icons contributed by plugins", () => {
-    expect(appSource).toContain('item.icon === "back" ? <ArrowLeft');
-    expect(appSource).toContain('item.icon === "forward" ? <ArrowRight');
+    expect(appSource).toContain('item.icon === "back" ? "back"');
+    expect(appSource).toContain('item.icon === "forward" ? "forward"');
   });
 
   it("uses a compact dropdown trigger for the execution profile selector", () => {

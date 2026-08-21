@@ -1,6 +1,6 @@
 import type { DebugSessionSnapshot, DebugVariable } from "@tinyide/plugin-api";
 
-export type DebugOutputFilter = "all" | "stdout" | "stderr" | "system";
+export type DebugOutputKind = "output" | "system";
 
 export interface DebugPanelLayoutSettings {
   readonly inspectorWidth?: number;
@@ -15,7 +15,7 @@ export interface DebugOutputOffsets {
 }
 
 export interface DebugOutputSegment {
-  readonly kind: Exclude<DebugOutputFilter, "all">;
+  readonly kind: DebugOutputKind;
   readonly label: string;
   readonly text: string;
 }
@@ -58,14 +58,15 @@ export function debugOutputOffsetsFor(session: Pick<DebugSessionSnapshot, "stdou
 export function debugOutputSegments(
   session: Pick<DebugSessionSnapshot, "stdout" | "stderr" | "error">,
   offsets: DebugOutputOffsets,
-  filter: DebugOutputFilter,
 ): readonly DebugOutputSegment[] {
+  // A saída do programa é um fluxo único e consolidado: os adaptadores novos já
+  // interligam stdout/stderr na ordem de chegada dentro de `stdout`; o resíduo em
+  // `stderr` cobre sessões de adaptadores que ainda separam os fluxos.
   const candidates: readonly DebugOutputSegment[] = [
-    { kind: "stdout", label: "stdout", text: session.stdout.slice(offsets.stdout) },
-    { kind: "stderr", label: "stderr", text: session.stderr.slice(offsets.stderr) },
+    { kind: "output", label: "", text: session.stdout.slice(offsets.stdout) + session.stderr.slice(offsets.stderr) },
     { kind: "system", label: "debugger", text: (session.error ?? "").slice(offsets.error) },
   ];
-  return candidates.filter((segment) => segment.text && (filter === "all" || filter === segment.kind));
+  return candidates.filter((segment) => segment.text);
 }
 
 function variableMatches(variable: DebugVariable, normalizedQuery: string): boolean {

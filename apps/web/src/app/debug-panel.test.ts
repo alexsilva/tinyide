@@ -18,17 +18,15 @@ describe("debug panel", () => {
     expect(clampDebugInspectorWidth(900, 100)).toBe(260);
   });
 
-  it("filters output streams and keeps data appended after clear", () => {
+  it("consolidates the program output into a single stream and keeps data appended after clear", () => {
     const initial = { stdout: "first\n", stderr: "warn\n", error: "adapter\n" };
     const offsets = debugOutputOffsetsFor(initial);
-    const next = { stdout: "first\nsecond\n", stderr: "warn\n", error: "adapter\npaused\n" };
-    expect(debugOutputSegments(next, offsets, "all")).toEqual([
-      { kind: "stdout", label: "stdout", text: "second\n" },
+    const next = { stdout: "first\nsecond\n", stderr: "warn\nfailed\n", error: "adapter\npaused\n" };
+    expect(debugOutputSegments(next, offsets)).toEqual([
+      { kind: "output", label: "", text: "second\nfailed\n" },
       { kind: "system", label: "debugger", text: "paused\n" },
     ]);
-    expect(debugOutputSegments(next, offsets, "stdout")).toEqual([
-      { kind: "stdout", label: "stdout", text: "second\n" },
-    ]);
+    expect(debugOutputSegments({ stdout: "first\n", stderr: "", error: "" }, offsets)).toEqual([]);
   });
 
   it("preserves matching ancestors while filtering nested variables", () => {

@@ -4,9 +4,9 @@ import * as Tabs from "@radix-ui/react-tabs";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   ArrowLeft,
+  Bug,
   ArrowRight,
   ArrowUpCircle,
-  Bug,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -51,6 +51,8 @@ import {
   Type,
   Undo2,
   Upload,
+  WrapText,
+  Eraser,
   X,
 } from "lucide-react";
 import {
@@ -292,7 +294,6 @@ import {
   debugOutputSegments,
   filterDebugVariables,
   normalizeDebugPanelLayout,
-  type DebugOutputFilter,
   type DebugOutputOffsets,
 } from "./debug-panel";
 import {
@@ -1270,7 +1271,6 @@ export function App() {
   const [debugInspectorWidth, setDebugInspectorWidth] = useState<number>(DEFAULT_DEBUG_PANEL_LAYOUT.inspectorWidth);
   const [debugOutputWrap, setDebugOutputWrap] = useState<boolean>(DEFAULT_DEBUG_PANEL_LAYOUT.outputWrap);
   const [debugOutputFollowTail, setDebugOutputFollowTail] = useState<boolean>(DEFAULT_DEBUG_PANEL_LAYOUT.outputFollowTail);
-  const [debugOutputFilter, setDebugOutputFilter] = useState<DebugOutputFilter>("all");
   const [debugVariableQuery, setDebugVariableQuery] = useState("");
   const [debugOutputOffsets, setDebugOutputOffsets] = useState<Readonly<Record<string, DebugOutputOffsets>>>({});
   const [workspaceSettings, setWorkspaceSettings] = useState<WorkspaceSettings>(EMPTY_WORKSPACE_SETTINGS);
@@ -1751,7 +1751,7 @@ export function App() {
       const outputElement = debugOutputRef.current;
       if (outputElement) outputElement.scrollTop = outputElement.scrollHeight;
     });
-  }, [debugSession?.stdout, debugSession?.stderr, debugSession?.error, debugOutputFollowTail, debugOutputFilter]);
+  }, [debugSession?.stdout, debugSession?.stderr, debugSession?.error, debugOutputFollowTail]);
   const profileOutputTabs = openProfileTabIds.flatMap((tabId) => {
     const tab = profileExecutionPanelTab(tabId);
     if (!tab) return [];
@@ -8042,7 +8042,6 @@ export function App() {
                             type="button"
                             onClick={() => setPanelTab(tab.tabId)}
                           >
-                            {tab.mode === "debug" ? <Bug size={11} aria-hidden="true" /> : null}
                             <span className="panel-tab__label">{tabLabel}</span>
                             <span aria-hidden="true" className={`panel-tab__execution-dot${running ? " is-running" : ""}`} />
                           </button>
@@ -8087,7 +8086,7 @@ export function App() {
                     ? debugOutputOffsets[tabDebugSession.id] ?? EMPTY_DEBUG_OUTPUT_OFFSETS
                     : EMPTY_DEBUG_OUTPUT_OFFSETS;
                   const outputSegments = tabDebugSession
-                    ? debugOutputSegments(tabDebugSession, outputOffsets, debugOutputFilter)
+                    ? debugOutputSegments(tabDebugSession, outputOffsets)
                     : [];
                   return (
                     <div className="execution-panel-view" hidden={panelTab !== tab.tabId} key={tab.tabId}>
@@ -8095,14 +8094,42 @@ export function App() {
                         <div className="execution-panel-toolbar__actions">
                           {tabDebugSession ? (
                             <>
-                              <ButtonTooltip label={tabDebugSession.status === "paused" ? "Continuar" : "Pausar"} side="top">
+                              <ButtonTooltip label={
+                                debugEnded
+                                  ? "Iniciar depuração"
+                                  : tabDebugSession.status === "paused"
+                                    ? "Continuar"
+                                    : "Pausar"
+                              } side="top">
                                 <button
                                   className="icon-button small"
                                   type="button"
-                                  aria-label={tabDebugSession.status === "paused" ? "Continuar depuração" : "Pausar depuração"}
-                                  disabled={debugRestarting || debugEnded || (debugCommandBusy && tabDebugSession.status !== "running") || !["running", "paused"].includes(tabDebugSession.status)}
-                                  onClick={() => invoke(() => debugCommand(tabDebugSession.status === "paused" ? "resume" : "pause"))}
-                                >{tabDebugSession.status === "paused" ? <WorkbenchIcon icon="play" size={14} /> : <WorkbenchIcon icon="pause" size={14} />}</button>
+                                  aria-label={
+                                    debugEnded
+                                      ? "Iniciar depuração"
+                                      : tabDebugSession.status === "paused"
+                                        ? "Continuar depuração"
+                                        : "Pausar depuração"
+                                  }
+                                  disabled={
+                                    debugRestarting
+                                    || (debugCommandBusy && tabDebugSession.status !== "running" && !debugEnded)
+                                    || (!debugEnded && !["running", "paused", "starting"].includes(tabDebugSession.status))
+                                  }
+                                  onClick={() => invoke(async () => {
+                                    if (debugEnded) {
+                                      await restartDebugSession(tab.profileId);
+                                      return;
+                                    }
+                                    await debugCommand(tabDebugSession.status === "paused" ? "resume" : "pause");
+                                  })}
+                                >{
+                                  debugEnded
+                                    ? <Bug size={14} />
+                                    : tabDebugSession.status === "paused"
+                                      ? <WorkbenchIcon icon="play" size={14} />
+                                      : <WorkbenchIcon icon="pause" size={14} />
+                                }</button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Step over" side="top">
                                 <button className="icon-button small" type="button" aria-label="Step over" disabled={debugRestarting || debugCommandBusy || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepOver"))}><StepForward size={14} /></button>
@@ -8171,6 +8198,7 @@ export function App() {
                           <label className="workbench-output-follow execution-panel-toolbar__follow">
                             <input
                               type="checkbox"
+                              className="checkbox-md"
                               checked={outputFollowing}
                               onChange={(event) => setProfileOutputFollowing((current) => ({
                                 ...current,
@@ -8189,51 +8217,53 @@ export function App() {
                         >
                           <section className="execution-debug-output-pane" aria-label="Saída da depuração">
                             <div className="execution-debug-output-toolbar">
-                              <label>
-                                <span>Exibir</span>
-                                <select value={debugOutputFilter} onChange={(event) => setDebugOutputFilter(event.target.value as DebugOutputFilter)}>
-                                  <option value="all">Tudo</option>
-                                  <option value="stdout">stdout</option>
-                                  <option value="stderr">stderr</option>
-                                  <option value="system">Debugger</option>
-                                </select>
-                              </label>
-                              <button
-                                type="button"
-                                className={debugOutputWrap ? "is-active" : undefined}
-                                onClick={() => {
-                                  const next = !debugOutputWrap;
-                                  setDebugOutputWrap(next);
-                                  persistDebugPanelLayout({ outputWrap: next });
-                                }}
-                              >Quebrar linhas</button>
-                              <label className="workbench-output-follow">
-                                <input
-                                  type="checkbox"
-                                  checked={debugOutputFollowTail}
-                                  onChange={(event) => {
-                                    const next = event.target.checked;
-                                    setDebugOutputFollowTail(next);
-                                    persistDebugPanelLayout({ outputFollowTail: next });
+                              <ButtonTooltip label="Quebrar linhas" side="top">
+                                <button
+                                  type="button"
+                                  className={`icon-button small execution-debug-output-toolbar__icon-btn${debugOutputWrap ? " is-active" : ""}`}
+                                  aria-label="Quebrar linhas"
+                                  aria-pressed={debugOutputWrap}
+                                  onClick={() => {
+                                    const next = !debugOutputWrap;
+                                    setDebugOutputWrap(next);
+                                    persistDebugPanelLayout({ outputWrap: next });
                                   }}
-                                />
-                                <span>Seguir saída</span>
-                              </label>
-                              <button
-                                type="button"
-                                onClick={() => setDebugOutputOffsets((current) => ({
-                                  ...current,
-                                  [tabDebugSession.id]: debugOutputOffsetsFor(tabDebugSession),
-                                }))}
-                              >Limpar</button>
+                                ><WrapText size={14} /></button>
+                              </ButtonTooltip>
+                              <ButtonTooltip label="Seguir saída" side="top">
+                                <label className="workbench-output-follow">
+                                  <input
+                                    type="checkbox"
+                                    className="checkbox-md"
+                                    checked={debugOutputFollowTail}
+                                    aria-label="Seguir saída"
+                                    onChange={(event) => {
+                                      const next = event.target.checked;
+                                      setDebugOutputFollowTail(next);
+                                      persistDebugPanelLayout({ outputFollowTail: next });
+                                    }}
+                                  />
+                                </label>
+                              </ButtonTooltip>
+                              <ButtonTooltip label="Limpar" side="top">
+                                <button
+                                  type="button"
+                                  className="icon-button small execution-debug-output-toolbar__icon-btn"
+                                  aria-label="Limpar saída"
+                                  onClick={() => setDebugOutputOffsets((current) => ({
+                                    ...current,
+                                    [tabDebugSession.id]: debugOutputOffsetsFor(tabDebugSession),
+                                  }))}
+                                ><Eraser size={14} /></button>
+                              </ButtonTooltip>
                             </div>
                             <div ref={debugOutputRef} className={`execution-panel-output execution-panel-output--structured${debugOutputWrap ? " is-wrapped" : ""}`}>
                               {outputSegments.length ? outputSegments.map((segment, index) => (
                                 <div className={`debug-output-segment is-${segment.kind}`} key={`${segment.kind}-${index}`}>
-                                  <span className="debug-output-segment__label">{segment.label}</span>
+                                  {segment.label ? <span className="debug-output-segment__label">{segment.label}</span> : null}
                                   <pre>{segment.text}</pre>
                                 </div>
-                              )) : <p className="debug-output-empty">Nenhuma saída para o filtro selecionado.</p>}
+                              )) : <p className="debug-output-empty">Nenhuma saída registrada.</p>}
                             </div>
                           </section>
                           <div

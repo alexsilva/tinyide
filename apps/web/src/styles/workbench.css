@@ -232,7 +232,13 @@
 .panel-tab--end { margin-left: auto; border-left: 1px solid var(--border); padding-left: 16px; }
 .panel-tab.active { border-bottom-color: var(--accent); color: var(--text); }
 .panel-tab span { margin-left: 4px; }
-.panel-tab--profile { display: flex; min-width: 96px; max-width: 220px; align-items: center; }
+.panel-tab--profile { display: flex; min-width: 96px; max-width: 220px; align-items: center; gap: 5px; overflow: hidden; }
+.panel-tab--profile > svg,
+.panel-tab--profile .workbench-icon,
+.panel-tab--profile .panel-tab__debug-icon {
+  width: 12px; height: 12px; flex: 0 0 12px; overflow: hidden;
+}
+.panel-tab--profile .workbench-icon svg { width: 100%; height: 100%; }
 .panel-tab__label { min-width: 0; margin-left: 0!important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .panel-tab__execution-dot { display: inline-block; width: 8px; height: 8px; margin-left: 7px!important; border-radius: 50%; background: #68717f; box-shadow: 0 0 0 1px #11161d; vertical-align: middle; }
 .panel-tab__execution-dot.is-running { background: #58c77a; box-shadow: 0 0 0 1px #153521; }

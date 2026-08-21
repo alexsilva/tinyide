@@ -492,10 +492,29 @@
 .execution-panel-toolbar__follow { flex: none; }
 .workbench-output-follow { display: inline-flex; align-items: center; gap: 5px; color: #9ca8b8; font-size: 10px; white-space: nowrap; cursor: pointer; user-select: none; }
 .workbench-output-follow input { cursor: pointer; }
+.execution-debug-output-toolbar__icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 27px;
+  min-height: 23px;
+  padding: 0;
+}
+.execution-debug-output-toolbar .icon-button.small {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface-3);
+  color: var(--text);
+}
+.execution-debug-output-toolbar .icon-button.small:hover:not(:disabled),
+.execution-debug-output-toolbar .icon-button.small.is-active {
+  border-color: #44546a;
+  background: #253043;
+  color: #edf2f8;
+}
 .execution-panel-output { height: auto !important; min-height: 0; flex: 1 1 auto; }
 .execution-panel-plugin-view { display: flex; min-width: 0; min-height: 0; flex: 1 1 auto; flex-direction: column; overflow: hidden; }
 .execution-panel-plugin-view > * { min-height: 0; flex: 1 1 auto; }
-.execution-debug-layout { display: grid; min-height: 0; flex: 1 1 auto; overflow: hidden; }
+.execution-debug-layout { display: grid; min-height: 0; flex: 1 1 auto; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
 .execution-debug-output-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: var(--surface-panel); }
 .execution-debug-output-toolbar { display: flex; min-height: 31px; align-items: center; gap: 6px; padding: 3px 7px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
 .execution-debug-output-toolbar > label:not(.workbench-output-follow) { display: inline-flex; align-items: center; gap: 5px; color: #77859a; font-size: 9px; text-transform: uppercase; }
@@ -506,12 +525,13 @@
 .execution-panel-output--structured { overflow: auto; padding: 7px 0 16px; font: 11px/1.55 var(--font-editor, monospace); }
 .debug-output-segment { display: grid; grid-template-columns: 58px minmax(0, 1fr); border-left: 2px solid transparent; }
 .debug-output-segment + .debug-output-segment { margin-top: 4px; }
-.debug-output-segment.is-stderr { border-left-color: #cc646f; background: rgb(117 38 48 / 12%); }
+.debug-output-segment.is-output { grid-template-columns: minmax(0, 1fr); }
+.debug-output-segment.is-output pre { padding-left: 8px; }
 .debug-output-segment.is-system { border-left-color: #6d91df; background: rgb(53 78 130 / 12%); }
 .debug-output-segment__label { padding: 1px 8px; color: #657185; font-size: 8px; letter-spacing: .08em; text-transform: uppercase; user-select: none; }
-.debug-output-segment.is-stderr .debug-output-segment__label { color: #d77b84; }
 .debug-output-segment.is-system .debug-output-segment__label { color: #82a3ec; }
-.debug-output-segment pre { min-width: 0; margin: 0; padding: 0 10px 0 0; color: #cbd4df; font: inherit; white-space: pre; }
+/* Anula a regra genérica `.output-panel pre` (altura fixa + overflow: auto): a rolagem da saída de debug pertence só ao contêiner estruturado. */
+.debug-output-segment pre { min-width: 0; height: auto; margin: 0; overflow: visible; padding: 0 10px 0 0; color: #cbd4df; font: inherit; white-space: pre; }
 .execution-panel-output--structured.is-wrapped .debug-output-segment pre { overflow-wrap: anywhere; white-space: pre-wrap; }
 .debug-output-empty { margin: 12px; color: #687588; font-size: 11px; }
 .execution-debug-splitter { position: relative; z-index: 2; background: #252d39; touch-action: none; }

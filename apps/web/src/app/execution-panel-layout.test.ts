@@ -47,6 +47,15 @@ describe("execution panel layout", () => {
     expect(featureStyles).not.toContain(".execution-text-output__toolbar");
   });
 
+  it("keeps a single scrollbar in the debug output", () => {
+    // A regra genérica `.output-panel pre` (altura fixa + overflow: auto) não pode
+    // valer para os segmentos de debug: o scroll pertence só ao contêiner estruturado.
+    expect(workbenchStyles).toMatch(/\.output-panel pre \{[^}]*overflow: auto/);
+    expect(featureStyles).toMatch(/\.debug-output-segment pre \{[^}]*height: auto;[^}]*overflow: visible/);
+    // Sem a row explícita, a grid cresce com o conteúdo e a rolagem interna some.
+    expect(featureStyles).toMatch(/\.execution-debug-layout \{[^}]*grid-template-rows: minmax\(0, 1fr\)/);
+  });
+
   it("toggles plugin tool windows from their activity bar button", () => {
     const toggle = appSource.slice(
       appSource.indexOf("const toggleToolWindow = (toolWindowId: string) => {"),

@@ -125,7 +125,7 @@
 .workbench-plugin-dialog--large { width: min(1180px, calc(100vw - 32px)); height: min(820px, calc(100vh - 32px)); }
 .workbench-plugin-dialog--full { width: calc(100vw - 24px); height: calc(100vh - 24px); max-height: none; }
 .plugin-dialog-host { min-width: 0; min-height: 0; overflow: hidden; }
-.settings-dialog { position: fixed; z-index: 70; top: 50%; left: 50%; display: flex; width: min(900px, calc(100vw - 32px)); max-height: min(720px, calc(100vh - 32px)); transform: translate(-50%, -50%); flex-direction: column; border: 1px solid var(--border-strong); border-radius: 12px; padding: 0; background: var(--surface-raised); box-shadow: 0 30px 90px rgb(0 0 0 / 64%); overflow: hidden; }
+.settings-dialog { position: fixed; z-index: 70; top: 50%; left: 50%; display: flex; width: min(900px, calc(100vw - 32px)); height: min(720px, calc(100vh - 32px)); transform: translate(-50%, -50%); flex-direction: column; border: 1px solid var(--border-strong); border-radius: 12px; padding: 0; background: var(--surface-raised); box-shadow: 0 30px 90px rgb(0 0 0 / 64%); overflow: hidden; }
 .settings-dialog__heading { min-height: 84px; padding: 16px 18px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
 .settings-dialog__identity { display: flex; align-items: center; min-width: 0; gap: 12px; }
 .settings-dialog__identity > div { display: grid; min-width: 0; gap: 2px; }
@@ -133,7 +133,7 @@
 .settings-dialog__heading-actions { display: flex; align-items: center; gap: 9px; }
 .settings-workspace-badge { display: flex; align-items: center; max-width: 230px; gap: 6px; border: 1px solid var(--border); border-radius: 999px; padding: 5px 9px; background: var(--surface-input); color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-workspace-badge svg { flex: 0 0 auto; color: var(--accent); }
-.settings-layout { display: grid; min-height: 390px; overflow: hidden; grid-template-columns: 224px minmax(0, 1fr); background: var(--surface-panel); }
+.settings-layout { display: grid; flex: 1; min-height: 0; overflow: hidden; grid-template-columns: 224px minmax(0, 1fr); background: var(--surface-panel); }
 .settings-navigation { display: flex; min-width: 0; padding: 13px 10px; overflow: auto; flex-direction: column; gap: 4px; border-right: 1px solid var(--border); background: var(--surface-sidebar); }
 .settings-navigation button { position: relative; display: flex; align-items: center; min-width: 0; gap: 10px; border: 1px solid transparent; border-radius: 7px; padding: 9px 10px; background: transparent; color: var(--muted); font: inherit; text-align: left; cursor: pointer; }
 .settings-navigation button:hover { border-color: var(--border); background: var(--surface-3); color: var(--text); }

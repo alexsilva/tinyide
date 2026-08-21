@@ -517,6 +517,7 @@
 .execution-debug-layout { display: grid; min-height: 0; flex: 1 1 auto; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
 .execution-debug-output-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: var(--surface-panel); }
 .execution-debug-output-toolbar { display: flex; min-height: 31px; align-items: center; gap: 6px; padding: 3px 7px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.execution-debug-output-toolbar__follow { margin-left: auto; }
 .execution-debug-output-toolbar > label:not(.workbench-output-follow) { display: inline-flex; align-items: center; gap: 5px; color: #77859a; font-size: 9px; text-transform: uppercase; }
 .execution-debug-output-toolbar select,
 .execution-debug-output-toolbar button { min-height: 23px; border: 1px solid var(--border); border-radius: 3px; padding: 2px 7px; background: var(--surface-3); color: var(--text); font-size: 10px; }

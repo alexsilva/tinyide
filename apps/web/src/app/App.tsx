@@ -8230,21 +8230,6 @@ export function App() {
                                   }}
                                 ><WrapText size={14} /></button>
                               </ButtonTooltip>
-                              <ButtonTooltip label="Seguir saída" side="top">
-                                <label className="workbench-output-follow">
-                                  <input
-                                    type="checkbox"
-                                    className="checkbox-md"
-                                    checked={debugOutputFollowTail}
-                                    aria-label="Seguir saída"
-                                    onChange={(event) => {
-                                      const next = event.target.checked;
-                                      setDebugOutputFollowTail(next);
-                                      persistDebugPanelLayout({ outputFollowTail: next });
-                                    }}
-                                  />
-                                </label>
-                              </ButtonTooltip>
                               <ButtonTooltip label="Limpar" side="top">
                                 <button
                                   type="button"
@@ -8256,6 +8241,19 @@ export function App() {
                                   }))}
                                 ><Eraser size={14} /></button>
                               </ButtonTooltip>
+                              <label className="workbench-output-follow execution-debug-output-toolbar__follow">
+                                <input
+                                  type="checkbox"
+                                  className="checkbox-md"
+                                  checked={debugOutputFollowTail}
+                                  onChange={(event) => {
+                                    const next = event.target.checked;
+                                    setDebugOutputFollowTail(next);
+                                    persistDebugPanelLayout({ outputFollowTail: next });
+                                  }}
+                                />
+                                <span>Seguir saída</span>
+                              </label>
                             </div>
                             <div ref={debugOutputRef} className={`execution-panel-output execution-panel-output--structured${debugOutputWrap ? " is-wrapped" : ""}`}>
                               {outputSegments.length ? outputSegments.map((segment, index) => (

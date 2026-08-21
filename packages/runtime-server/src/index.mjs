@@ -141,13 +141,16 @@ export function createTinyIdeRuntime(options) {
   const pluginsRoot = resolve(options.pluginsRoot ?? join(hostRoot, "plugins"));
   const webRoot = options.webRoot ? resolve(options.webRoot) : undefined;
   const workspaceSearchRoot = resolve(options.workspaceSearchRoot ?? process.env.TINYIDE_WORKSPACES_ROOT ?? dirname(hostRoot));
-  async function disposeBackendHandler(handler) {
-    if (typeof handler?.dispose === "function") await handler.dispose();
+  // O motivo distingue recargas rotineiras (rebuild de plugin, limpeza de
+  // cache), em que backends devem preservar recursos reataráveis, da troca ou
+  // fechamento de workspace ("workspace-switch"), em que devem encerrá-los.
+  async function disposeBackendHandler(handler, reason) {
+    if (typeof handler?.dispose === "function") await handler.dispose(reason ? {reason} : undefined);
   }
-  async function disposeCachedBackends(context) {
+  async function disposeCachedBackends(context, reason) {
     const handlers = [...new Set([...context.backendHandlers.values()].map((entry) => entry.handler))];
     context.backendHandlers.clear();
-    await Promise.allSettled(handlers.map(disposeBackendHandler));
+    await Promise.allSettled(handlers.map((handler) => disposeBackendHandler(handler, reason)));
   }
   let manifestCache = { expiresAt: 0, descriptors: [] };
   function cachedPluginDescriptors() {
@@ -332,7 +335,7 @@ export function createTinyIdeRuntime(options) {
       void readJson(request).then(async (payload) => {
         const nextWorkspaceRoot = resolveWorkspaceSelection(payload);
         if (nextWorkspaceRoot !== context.workspaceRoot) {
-          await disposeCachedBackends(context);
+          await disposeCachedBackends(context, "workspace-switch");
           await resetExecutionBackend(context);
           context.workspaceRoot = nextWorkspaceRoot;
         }
@@ -346,7 +349,7 @@ export function createTinyIdeRuntime(options) {
     }
 
     if (request.method === "DELETE" && requestUrl.pathname === "/core-api/workspace") {
-      void disposeCachedBackends(context).then(() => {
+      void disposeCachedBackends(context, "workspace-switch").then(() => {
         return resetExecutionBackend(context);
       }).then(() => {
         context.workspaceRoot = undefined;
@@ -369,7 +372,14 @@ export function createTinyIdeRuntime(options) {
     }
 
     if (requestUrl.pathname.startsWith("/core-api/")) {
-      void context.executionBackend(request, response, requestUrl.pathname.slice("/core-api".length));
+      // Uma rejeição não tratada aqui derruba o processo Node inteiro — e com
+      // ele todos os PTYs de terminal hospedados neste runtime.
+      void Promise.resolve(context.executionBackend(request, response, requestUrl.pathname.slice("/core-api".length)))
+        .catch((error) => {
+          if (!response.headersSent && !response.writableEnded) {
+            writeJson(response, 500, {error: error instanceof Error ? error.message : String(error)});
+          }
+        });
       return;
     }
 
@@ -397,7 +407,13 @@ export function createTinyIdeRuntime(options) {
           return;
         }
         return handler(request, response, relativePath);
-      }).catch((error) => writeJson(response, 500, {error: error instanceof Error ? error.message : String(error)}));
+      }).catch((error) => {
+        // Se o handler já respondeu, escrever de novo lançaria dentro do catch
+        // e a rejeição não tratada derrubaria o processo (e os PTYs) inteiro.
+        if (!response.headersSent && !response.writableEnded) {
+          writeJson(response, 500, {error: error instanceof Error ? error.message : String(error)});
+        }
+      });
       return;
     }
 
@@ -455,7 +471,7 @@ export function createTinyIdeRuntime(options) {
       if (nextWorkspaceRoot !== context.workspaceRoot) {
         void resetExecutionBackend(context);
         context.workspaceRoot = nextWorkspaceRoot;
-        void disposeCachedBackends(context);
+        void disposeCachedBackends(context, "workspace-switch");
       }
       return context.workspaceRoot;
     },

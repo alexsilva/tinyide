@@ -316,6 +316,55 @@ describe("runtime server hardening", () => {
     expect(second).toMatchObject({ path: "/ping", requests: 2 });
   });
 
+  it("passes the workspace-switch reason to backend dispose only when the workspace changes", async () => {
+    const { runtime, root, pluginsRoot, workspaceRoot } = await fixture();
+    const secondWorkspace = join(root, "second-workspace");
+    await mkdir(secondWorkspace);
+    const reasonsPath = join(root, "dispose-reasons.json");
+    await writeFile(reasonsPath, "[]");
+    const pluginRoot = join(pluginsRoot, "observer");
+    await mkdir(pluginRoot);
+    await writeFile(join(pluginRoot, "plugin.json"), JSON.stringify({
+      id: "observer",
+      name: "Observer",
+      version: "1.0.0",
+      entrypoints: { backend: "backend.mjs" },
+    }));
+    await writeFile(join(pluginRoot, "backend.mjs"), `
+      import { readFileSync, writeFileSync } from "node:fs";
+      export function createBackend() {
+        const handler = (_request, response) => response.end("ok");
+        handler.dispose = async (options) => {
+          const reasons = JSON.parse(readFileSync(${JSON.stringify(reasonsPath)}, "utf8"));
+          reasons.push(options?.reason ?? null);
+          writeFileSync(${JSON.stringify(reasonsPath)}, JSON.stringify(reasons));
+        };
+        return handler;
+      }
+    `);
+    runtime.clearManifestCache();
+
+    const select = (name, path) => fetch(`${runtime.url}/core-api/workspace`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name, path }),
+    });
+    expect((await fetch(`${runtime.url}/plugin-api/observer/status`)).status).toBe(200);
+    await runtime.clearBackendCache();
+    expect((await fetch(`${runtime.url}/plugin-api/observer/status`)).status).toBe(200);
+    expect((await select(basename(secondWorkspace), secondWorkspace)).status).toBe(200);
+    expect((await fetch(`${runtime.url}/plugin-api/observer/status`)).status).toBe(200);
+    expect((await select(basename(workspaceRoot), workspaceRoot)).status).toBe(200);
+
+    // Recarga rotineira (cache limpo) preserva recursos: sem motivo. Troca de
+    // workspace encerra-os: motivo "workspace-switch".
+    await expect(readFile(reasonsPath, "utf8").then(JSON.parse)).resolves.toEqual([
+      null,
+      "workspace-switch",
+      "workspace-switch",
+    ]);
+  });
+
   it("preserves plugin processes when reload restores the same workspace", async () => {
     const { runtime, root, pluginsRoot, workspaceRoot } = await fixture();
     const pluginRoot = join(pluginsRoot, "persistent");

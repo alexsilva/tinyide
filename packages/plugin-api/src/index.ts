@@ -763,6 +763,7 @@ export type WorkbenchActivityIcon = string;
 export const WORKBENCH_BUILTIN_ICON_IDS = [
   "back",
   "box",
+  "bug",
   "check",
   "close",
   "copy",

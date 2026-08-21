@@ -278,6 +278,7 @@ button { color: inherit; }
 .button.secondary { background: var(--surface-2); }
 .button.ghost { border-color: transparent; background: transparent; }
 .button.danger, .icon-button.danger { border-color: #734047; background: #47272d; color: #ffb9be; }
+.icon-button.debug-run { color: var(--success); }
 .button.compact, .icon-button.small { min-height: 26px; font-size: 11px; }
 .icon-button.small { width: 27px; }
 .workbench-icon {

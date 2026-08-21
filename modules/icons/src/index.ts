@@ -29,6 +29,7 @@ export const builtinIcons: readonly WorkbenchIconDefinition[] = [
   defineIcon("database", "Banco de dados", 40, strokeSvg('<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>')),
   defineIcon("plugins", "Plugins", 45, strokeSvg('<path d="M12 22v-5"/><path d="M15 8V2"/><path d="M9 8V2"/><path d="M17 8a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1z"/>')),
   defineIcon("play", "Executar", 46, strokeSvg('<polygon points="6 3 20 12 6 21 6 3"/>')),
+  defineIcon("bug", "Debug", 47, strokeSvg('<path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 11.4 3 13.5 3 15"/><path d="M17.47 9c1.93 2.4 3.53 4.5 3.53 6"/><path d="M6 13H2"/><path d="M22 13h-4"/><path d="m8 19-2 3"/><path d="m16 19 2 3"/>')),
   defineIcon("problems", "Problemas", 47, strokeSvg('<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>')),
   defineIcon("terminal", "Terminal", 50, strokeSvg('<polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>'), "Sessões interativas de shell."),
   defineIcon("git", "Git", 60, strokeSvg('<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" x2="6" y1="9" y2="21"/>')),
@@ -126,7 +127,7 @@ export const funIcons: readonly WorkbenchIconDefinition[] = [
     "Executar",
     46,
     funSvg(
-      '<circle cx="12" cy="12" r="10" fill="#4ade80"/><path fill="#fff" d="M10 8.2 16.5 12 10 15.8Z"/>',
+      '<circle cx="12" cy="12" r="10" fill="#64748b"/><path fill="#fff" d="M10 8.2 16.5 12 10 15.8Z"/>',
     ),
   ),
   defineIcon(
@@ -184,12 +185,13 @@ export const funIcons: readonly WorkbenchIconDefinition[] = [
     funSvg(
       '<path fill="#60a5fa" d="M12 3c-3 0-3.2 1.3-3.2 1.3v2h3.6v.5H6.8S4 7.2 4 11.2s2 4 2 4h1.4v-2s0-2.3 2.3-2.3h3.8s2.2 0 2.2-2.1V5.4S15 3 12 3Z"/><circle cx="9.6" cy="5.4" r=".7" fill="#fff"/><path fill="#fde047" d="M12 21c3 0 3.2-1.3 3.2-1.3v-2h-3.6v-.5h5.6S20 16.8 20 12.8s-2-4-2-4h-1.4v2s0 2.3-2.3 2.3h-3.8s-2.2 0-2.2 2.1v3.8S9 21 12 21Z"/><circle cx="14.4" cy="18.6" r=".7" fill="#fff"/>',
     ),
-  ),,
+  ),
   defineIcon("search", "Buscar", 15, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="#3b82f6"/><path stroke="#1e40af" stroke-width="2" stroke-linecap="round" d="m20 20-3.2-3.2"/><circle cx="11" cy="11" r="3" fill="#93c5fd"/></svg>`),
   defineIcon("folder", "Pasta", 16, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="#f59e0b" d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9l-.81-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path fill="#fbbf24" d="M4 9h16v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9Z"/></svg>`),
   defineIcon("folder-open", "Pasta aberta", 17, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="#d97706" d="M4 5h4l2 2h10v2H4z"/><path fill="#f59e0b" d="m6 14 1.5-3h12.5l-1.5 6H5a1 1 0 0 1-1-1v-1z"/></svg>`),
   defineIcon("file", "Arquivo", 18, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="#64748b" d="M6 3h8l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"/><path fill="#94a3b8" d="M14 3v4h4"/></svg>`),
   defineIcon("settings", "Configurações", 19, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="#e2e8f0"/><path fill="#64748b" d="M19.4 13a7.7 7.7 0 0 0 .1-2l2-1.2-2-3.4-2.3.6a7.5 7.5 0 0 0-1.7-1L15 4h-4l-.5 2a7.5 7.5 0 0 0-1.7 1L6.5 6.4l-2 3.4 2 1.2a7.7 7.7 0 0 0 0 2l-2 1.2 2 3.4 2.3-.6a7.5 7.5 0 0 0 1.7 1l.5 2h4l.5-2a7.5 7.5 0 0 0 1.7-1l2.3.6 2-3.4-2-1.2Z"/></svg>`),
+  defineIcon("bug", "Debug", 47, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#22c55e"/><path fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M9 8.2c.4-1.2 1.5-2 3-2s2.6.8 3 2M12 10.5v5.5M8.5 12H6M17.5 12H20M9 17l-1.5 2M15 17l1.5 2"/></svg>`),
   defineIcon("pause", "Pausar", 48, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#eab308"/><rect x="7" y="7" width="3.5" height="10" rx="1" fill="#fff"/><rect x="13.5" y="7" width="3.5" height="10" rx="1" fill="#fff"/></svg>`),
   defineIcon("stop", "Parar", 49, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#ef4444"/><rect x="7.5" y="7.5" width="9" height="9" rx="1.5" fill="#fff"/></svg>`),
   defineIcon("refresh", "Atualizar", 52, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#0ea5e9"/><path fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" d="M8 10a5 5 0 1 1 1 6"/><path fill="#fff" d="m7 7 1.5 4H5z"/></svg>`),

@@ -7197,12 +7197,12 @@ export function App() {
               ? "O runtime selecionado não oferece depuração para este perfil"
               : "Depurar perfil"}>
               <button
-                className="icon-button small"
+                className="icon-button small debug-run"
                 type="button"
                 aria-label="Depurar perfil"
                 disabled={!selectedProfileDebugAdapter || busy || debugSessionActive}
                 onClick={() => invoke(startSelectedDebugProfile)}
-              ><Bug size={15} /></button>
+              ><WorkbenchIcon icon="bug" size={15} /></button>
             </ButtonTooltip>
           </div>
           <div className="titlebar-corner">

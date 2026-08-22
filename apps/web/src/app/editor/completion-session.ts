@@ -49,6 +49,11 @@ export type RequestCompletionsDeps = {
   maxItems?: number;
 };
 
+export function shouldAutoRequestCompletion(textarea: HTMLTextAreaElement, minPrefix = 3): boolean {
+  if (textarea.selectionStart !== textarea.selectionEnd) return false;
+  return extractCompletionPrefix(textarea.value, textarea.selectionStart).length >= minPrefix;
+}
+
 export async function buildCompletionSession(
   textarea: HTMLTextAreaElement,
   deps: RequestCompletionsDeps,
@@ -86,6 +91,39 @@ export async function buildCompletionSession(
     selectedIndex: 0,
     prefix,
     replaceStart: offset - prefix.length,
+    replaceEnd: offset,
+    top: coords.top + coords.lineHeight,
+    left: coords.left,
+  };
+}
+
+/**
+ * Reaproveita uma lista já obtida enquanto o usuário continua digitando o mesmo
+ * identificador. Evita uma nova chamada semântica a cada tecla.
+ */
+export function refineCompletionSession(
+  textarea: HTMLTextAreaElement,
+  session: CompletionSession,
+): CompletionSession | undefined {
+  if (textarea.selectionStart !== textarea.selectionEnd) return undefined;
+  const offset = textarea.selectionStart;
+  const prefix = extractCompletionPrefix(textarea.value, offset);
+  const replaceStart = offset - prefix.length;
+  if (replaceStart !== session.replaceStart) return undefined;
+  if (!prefix.toLocaleLowerCase().startsWith(session.prefix.toLocaleLowerCase())) return undefined;
+
+  const normalizedPrefix = prefix.toLocaleLowerCase();
+  const items = session.items.filter((item) => (
+    item.filterText ?? item.insertText ?? item.label
+  ).toLocaleLowerCase().startsWith(normalizedPrefix));
+  if (!items.length) return undefined;
+
+  const coords = estimateCaretScreenPosition(textarea, offset);
+  return {
+    ...session,
+    items,
+    selectedIndex: Math.min(session.selectedIndex, items.length - 1),
+    prefix,
     replaceEnd: offset,
     top: coords.top + coords.lineHeight,
     left: coords.left,

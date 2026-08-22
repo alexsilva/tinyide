@@ -121,6 +121,7 @@ import type {
   TextEditorDocumentSnapshot,
   TextEditorDocumentSavedEvent,
   TextEditorFoldingRange,
+  TextEditorCompletionProvider,
   TextEditorLineDecoration,
   TextEditorNavigationProvider,
   TextDiagnostic,
@@ -387,6 +388,13 @@ import {
   type EditorHistory,
 } from "./editor-history";
 import { applyEditorTab } from "./editor-indentation";
+import {
+  applyCompletionItem,
+  buildCompletionSession,
+  refineCompletionSession,
+  shouldAutoRequestCompletion,
+  type CompletionSession,
+} from "./editor/completion-session";
 import { EntryTree } from "./explorer/ExplorerTree";
 import { DebugVariableNode } from "./debug/DebugVariableNode";
 import { DiagnosticLayer, EditorLineDiffPeek, HighlightedSource } from "./editor/editor-components";
@@ -1604,10 +1612,13 @@ export function App() {
   const [editorSearchCaseSensitive, setEditorSearchCaseSensitive] = useState(false);
   const [editorSearchRegex, setEditorSearchRegex] = useState(false);
   const [editorNavigationLoading, setEditorNavigationLoading] = useState(false);
+  const [completionSession, setCompletionSession] = useState<CompletionSession | undefined>(undefined);
   const [editorLocationHistory, setEditorLocationHistory] = useState(createEditorLocationHistory);
   const [editorViewport, setEditorViewport] = useState({ scrollTop: 0, height: 800 });
   const [editorViewportStore] = useState(createEditorViewportStore);
   const editorViewportSyncRef = useRef<{ trailingTimer: number | undefined }>({ trailingTimer: undefined });
+  const completionAbortRef = useRef<AbortController | undefined>(undefined);
+  const completionTimerRef = useRef<number | undefined>(undefined);
   const editorStateCaptureRef = useRef<{
     documentId: string;
     selectionStart: number;
@@ -1691,6 +1702,8 @@ export function App() {
   const editorDebugCurrentLineRef = useRef<HTMLDivElement | null>(null);
   const editorBreakpointLinesRef = useRef<HTMLDivElement | null>(null);
   const editorHistoriesRef = useRef<Map<string, EditorHistory>>(new Map());
+  const activeDocumentIdRef = useRef<string | undefined>(activeDocumentId);
+  activeDocumentIdRef.current = activeDocumentId;
   const documentsRef = useRef<readonly OpenDocument[]>(documents);
   documentsRef.current = documents;
   const profilesStateRef = useRef<StoredProfiles>(profilesState);
@@ -1699,6 +1712,15 @@ export function App() {
   environmentsRef.current = environments;
   const selectedEnvironmentIdRef = useRef<string | undefined>(selectedEnvironmentId);
   selectedEnvironmentIdRef.current = selectedEnvironmentId;
+  useEffect(() => {
+    completionAbortRef.current?.abort();
+    completionAbortRef.current = undefined;
+    if (completionTimerRef.current !== undefined) {
+      window.clearTimeout(completionTimerRef.current);
+      completionTimerRef.current = undefined;
+    }
+    setCompletionSession(undefined);
+  }, [activeDocumentId]);
   const selectedEnvironmentIds = useMemo(() => {
     const legacySelectedId = selectedEnvironmentId ?? workspaceSettings.environment?.selectedId;
     return resolveEnvironmentSelections(
@@ -4540,6 +4562,116 @@ export function App() {
     setDiagnostics([]);
   };
 
+  const dismissCompletions = () => {
+    completionAbortRef.current?.abort();
+    completionAbortRef.current = undefined;
+    if (completionTimerRef.current !== undefined) {
+      window.clearTimeout(completionTimerRef.current);
+      completionTimerRef.current = undefined;
+    }
+    setCompletionSession(undefined);
+  };
+
+  const requestCompletions = (
+    document: OpenDocument | undefined,
+    textarea: HTMLTextAreaElement,
+    options: { readonly immediate?: boolean; readonly triggerCharacter?: string } = {},
+  ) => {
+    if (completionTimerRef.current !== undefined) {
+      window.clearTimeout(completionTimerRef.current);
+      completionTimerRef.current = undefined;
+    }
+    if (!document || document.kind !== "text" || document.readOnly) {
+      dismissCompletions();
+      return;
+    }
+    completionAbortRef.current?.abort();
+    const controller = new AbortController();
+    completionAbortRef.current = controller;
+    const providers = platform.capabilities.getAll<TextEditorCompletionProvider>("textEditor.completion");
+    const environmentExecutable = environments.find((environment) => environment.id === selectedEnvironmentId)?.executable;
+    void buildCompletionSession(textarea, {
+      providers,
+      documentSnapshot: {
+        ...editorToolbarDocumentSnapshot(document),
+        content: textarea.value,
+      },
+      ...(environmentExecutable ? { environmentExecutable } : {}),
+      signal: controller.signal,
+      maxItems: 40,
+    }, {
+      minPrefix: options.immediate ? 0 : 3,
+      ...(options.triggerCharacter ? { triggerCharacter: options.triggerCharacter } : {}),
+    }).then((session) => {
+      if (controller.signal.aborted) return;
+      if (completionAbortRef.current === controller) completionAbortRef.current = undefined;
+      const currentTextarea = editorRef.current;
+      if (!session || !currentTextarea || document.id !== activeDocumentIdRef.current) {
+        setCompletionSession(undefined);
+        return;
+      }
+      const refined = refineCompletionSession(currentTextarea, session);
+      setCompletionSession(refined);
+      if (!refined && shouldAutoRequestCompletion(currentTextarea, 3)) {
+        const currentDocument = documentsRef.current.find((candidate) => candidate.id === activeDocumentIdRef.current);
+        if (currentDocument) scheduleCompletionRequest(currentDocument, currentTextarea);
+      }
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted) return;
+      if (completionAbortRef.current === controller) completionAbortRef.current = undefined;
+      console.warn("Falha ao obter autocomplete do editor.", error);
+      setCompletionSession(undefined);
+    });
+  };
+
+  const scheduleCompletionRequest = (
+    document: OpenDocument | undefined,
+    textarea: HTMLTextAreaElement,
+    options: { readonly immediate?: boolean; readonly triggerCharacter?: string } = {},
+  ) => {
+    if (completionTimerRef.current !== undefined) window.clearTimeout(completionTimerRef.current);
+    if (!options.immediate && !options.triggerCharacter && !shouldAutoRequestCompletion(textarea, 3)) {
+      completionTimerRef.current = undefined;
+      return;
+    }
+    if (!options.immediate && completionAbortRef.current) return;
+    const delay = options.immediate ? 0 : 450;
+    completionTimerRef.current = window.setTimeout(() => {
+      completionTimerRef.current = undefined;
+      requestCompletions(document, textarea, options);
+    }, delay);
+  };
+
+  const handleEditorChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const textarea = event.currentTarget;
+    updateDocument(textarea);
+    if (completionSession) {
+      const refined = refineCompletionSession(textarea, completionSession);
+      if (refined) {
+        setCompletionSession(refined);
+        return;
+      }
+      setCompletionSession(undefined);
+    }
+    scheduleCompletionRequest(activeDocument, textarea);
+  };
+
+  const commitCompletion = (textarea: HTMLTextAreaElement, index = completionSession?.selectedIndex ?? 0) => {
+    if (!completionSession) return false;
+    const item = completionSession.items[index];
+    if (!item) return false;
+    const result = applyCompletionItem(textarea, completionSession, item);
+    textarea.value = result.content;
+    textarea.setSelectionRange(result.caret, result.caret);
+    updateDocument(textarea);
+    dismissCompletions();
+    window.requestAnimationFrame(() => {
+      textarea.focus();
+      textarea.setSelectionRange(result.caret, result.caret);
+    });
+    return true;
+  };
+
   const applyEditorSearchReplacement = (content: string, selectionStart: number, selectionEnd: number) => {
     const textarea = editorRef.current;
     if (!textarea) return;
@@ -4614,6 +4746,41 @@ export function App() {
 
   const handleEditorKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     event.currentTarget.classList.toggle("is-navigation-modifier", event.ctrlKey || event.metaKey);
+    if (completionSession && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        dismissCompletions();
+        return;
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        setCompletionSession((current) => current
+          ? {
+              ...current,
+              selectedIndex: (current.selectedIndex + direction + current.items.length) % current.items.length,
+            }
+          : current);
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        commitCompletion(event.currentTarget);
+        return;
+      }
+    }
+    if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === " ") {
+      event.preventDefault();
+      requestCompletions(activeDocument, event.currentTarget, { immediate: true });
+      return;
+    }
+    if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === ".") {
+      const textarea = event.currentTarget;
+      window.requestAnimationFrame(() => requestCompletions(activeDocument, textarea, {
+        immediate: true,
+        triggerCharacter: ".",
+      }));
+    }
     if (event.altKey && !event.ctrlKey && !event.metaKey
       && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
       event.preventDefault();
@@ -8150,7 +8317,7 @@ export function App() {
                             wrap="off"
                             value={activeEditorContent}
                             readOnly={activeDocument.readOnly}
-                            onChange={(event) => updateDocument(event.currentTarget)}
+                            onChange={handleEditorChange}
                             onKeyDown={handleEditorKeyDown}
                             onMouseDown={handleEditorAuxiliaryNavigation}
                             onMouseUp={correctFoldedEditorPointerSelection}
@@ -8213,7 +8380,7 @@ export function App() {
                         spellCheck={false}
                         value={activeEditorContent}
                         readOnly={activeDocument?.readOnly}
-                        onChange={(event) => updateDocument(event.currentTarget)}
+                        onChange={handleEditorChange}
                         onKeyDown={handleEditorKeyDown}
                         onMouseDown={handleEditorAuxiliaryNavigation}
                         onMouseUp={correctFoldedEditorPointerSelection}
@@ -9509,6 +9676,34 @@ export function App() {
                 </div>
               );
             })}
+          </div>
+        ) : null}
+
+        {completionSession ? (
+          <div
+            className="editor-completion-popup"
+            style={{ top: completionSession.top, left: completionSession.left }}
+            role="listbox"
+            aria-label="Sugestões de autocomplete"
+          >
+            {completionSession.items.map((item, index) => (
+              <button
+                key={`${item.label}:${index}`}
+                className={`editor-completion-item${index === completionSession.selectedIndex ? " is-selected" : ""}`}
+                type="button"
+                role="option"
+                aria-selected={index === completionSession.selectedIndex}
+                onMouseEnter={() => setCompletionSession((current) => current ? { ...current, selectedIndex: index } : current)}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  if (editorRef.current) commitCompletion(editorRef.current, index);
+                }}
+              >
+                <span className={`editor-completion-kind is-${item.kind ?? "text"}`}>{item.kind ?? "text"}</span>
+                <span className="editor-completion-label">{item.label}</span>
+                {item.detail ? <span className="editor-completion-detail">{item.detail}</span> : null}
+              </button>
+            ))}
           </div>
         ) : null}
 

@@ -97,7 +97,7 @@ export function EnvironmentPackageManager({
       <header className="package-manager__header">
         <button className="icon-button small" type="button" aria-label="Voltar para ambientes" title="Voltar para ambientes" onClick={onClose}><WorkbenchIcon icon="back" size={15} /></button>
         <div><strong>{environment.name}</strong><span>{environment.version ?? "Python"} · Pacotes</span></div>
-        <button className="icon-button small" type="button" aria-label="Atualizar pacotes" title="Atualizar pacotes" disabled={Boolean(busy)} onClick={() => void loadPackages()}><WorkbenchIcon icon="refresh" size={14} className={busy === "refresh" ? "is-spinning" : undefined} /></button>
+        <button className="icon-button small" type="button" aria-label="Atualizar pacotes" title="Atualizar pacotes" disabled={Boolean(busy)} onClick={() => void loadPackages()}><WorkbenchIcon icon="refresh" size={14} {...(busy === "refresh" ? { className: "is-spinning" } : {})} /></button>
       </header>
 
       <div className="package-manager__summary">

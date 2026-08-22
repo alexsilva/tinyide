@@ -24,6 +24,7 @@ import {
   FolderOpen,
   FolderRoot,
   HardDrive,
+  Hash,
   History,
   Info,
   Image as ImageIcon,
@@ -62,6 +63,9 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
+  type ReactElement,
+  type RefObject,
 } from "react";
 import { formatCommandLineArguments, parseCommandLineArguments } from "@tinyide/core";
 import { WorkbenchDialogHost } from "./workbench-dialog-host";
@@ -386,6 +390,11 @@ import { applyEditorTab } from "./editor-indentation";
 import { EntryTree } from "./explorer/ExplorerTree";
 import { DebugVariableNode } from "./debug/DebugVariableNode";
 import { DiagnosticLayer, EditorLineDiffPeek, HighlightedSource } from "./editor/editor-components";
+import {
+  createEditorViewportStore,
+  useEditorViewportLineRange,
+  type EditorViewportStore,
+} from "./editor/editor-viewport";
 import { NativeImageEditor, UnsupportedBinaryEditor } from "./editor/resource-editors";
 import { resolveTextEditorNavigation } from "./editor/navigation";
 import {
@@ -654,6 +663,33 @@ interface ContextMenuState {
 
 const EXPLORER_FILTER_DEBOUNCE_MS = 40;
 const MAX_SYNTAX_HIGHLIGHT_SOURCE_LENGTH = 500_000;
+/**
+ * Acima deste tamanho, o layer de sintaxe só materializa spans para o trecho visível
+ * (com folga de linhas); o resto do texto vira nós de texto puro, mantendo o layout do `pre`.
+ */
+const SYNTAX_WINDOW_MIN_SOURCE_LENGTH = 100_000;
+const SYNTAX_WINDOW_OVERSCAN_LINES = 80;
+/** A janela anda em blocos para mutar (e refluir) o `pre` poucas vezes por rolagem. */
+const SYNTAX_WINDOW_STEP_LINES = 40;
+/**
+ * Folga generosa na régua: rajadas de roda/arraste podem avançar dezenas de linhas entre commits
+ * do React — a folga precisa cobrir o intervalo para os números nunca sumirem durante o gesto.
+ */
+const EDITOR_RULER_OVERSCAN_LINES = 60;
+/** A régua re-renderiza a cada bloco de linhas cruzado, não a cada linha; a folga cobre o passo. */
+const EDITOR_RULER_STEP_LINES = 10;
+/**
+ * Régua e janela de sintaxe assinam o viewport diretamente (editor-viewport.ts) e acompanham a
+ * rolagem no próprio evento. O estado React do App (fold preview, virtualização dos toggles de
+ * fold) só assenta depois que a rolagem para, para não enfileirar renders do App durante arrastes.
+ */
+const EDITOR_VIEWPORT_TRAILING_DELAY_MS = 120;
+/**
+ * Gravar rolagem/seleção no estado dos documentos é para restauração; debounced para não
+ * re-renderizar durante o gesto. Maior que o trailing do viewport de propósito: na rolagem, quem
+ * descarrega a captura é o próprio trailing (um render só); este timer cobre só seleção/teclado.
+ */
+const EDITOR_STATE_CAPTURE_DELAY_MS = 200;
 const EDITOR_NAVIGATION_LOADING_DELAY_MS = 150;
 const EDITOR_NAVIGATION_LOADING_MINIMUM_MS = 350;
 const EDITOR_POINTER_FALLBACK_FONT_SIZE = 13;
@@ -795,13 +831,35 @@ function editorProjectedTextOffsetAtClientPoint(
   return offset + column;
 }
 
+/**
+ * Base de leitura do mirror de sintaxe: em arquivos grandes o `pre` só materializa a janela
+ * visível (o resto vira espaçadores), então os walkers de offset precisam operar sobre o bloco
+ * da janela e somar o offset absoluto do início dela.
+ */
+function syntaxMirrorBase(mirror: HTMLElement): {
+  readonly element: HTMLElement;
+  readonly windowed: boolean;
+  readonly startOffset: number;
+  readonly startLine: number;
+} {
+  const windowElement = mirror.querySelector<HTMLElement>("[data-syntax-window-start]");
+  if (!windowElement) return { element: mirror, windowed: false, startOffset: 0, startLine: 1 };
+  return {
+    element: windowElement,
+    windowed: true,
+    startOffset: Number(windowElement.getAttribute("data-syntax-window-start")) || 0,
+    startLine: Number(windowElement.getAttribute("data-syntax-window-line")) || 1,
+  };
+}
+
 function editorMirrorTextOffsetAtClientPoint(
   textarea: HTMLTextAreaElement,
   mirror: HTMLElement,
   clientX: number,
   clientY: number,
 ): number | undefined {
-  const mirrorText = mirror.textContent ?? "";
+  const base = syntaxMirrorBase(mirror);
+  const mirrorText = base.element.textContent ?? "";
   const ownerDocument = mirror.ownerDocument as Document & {
     caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
     caretRangeFromPoint?: (x: number, y: number) => Range | null;
@@ -825,10 +883,16 @@ function editorMirrorTextOffsetAtClientPoint(
     if (!node || !(node === mirror || mirror.contains(node.nodeType === Node.ELEMENT_NODE ? node : node.parentNode))) {
       return undefined;
     }
+    const target = node.nodeType === Node.ELEMENT_NODE ? node : node.parentNode;
+    if (base.windowed && target && !(node === base.element || base.element.contains(target))) {
+      // O ponto caiu num espaçador (fora da janela materializada): recorta para a borda mais próxima.
+      const position = base.element.compareDocumentPosition(node);
+      return position & Node.DOCUMENT_POSITION_PRECEDING ? base.startOffset : base.startOffset + mirrorText.length;
+    }
     const range = ownerDocument.createRange();
-    range.selectNodeContents(mirror);
+    range.selectNodeContents(base.element);
     range.setEnd(node, nodeOffset);
-    return Math.max(0, Math.min(mirrorText.length, range.toString().length));
+    return base.startOffset + Math.max(0, Math.min(mirrorText.length, range.toString().length));
   } catch {
     return undefined;
   } finally {
@@ -881,8 +945,12 @@ function editorMirrorCaretRectAtTextOffset(
   mirror: HTMLElement,
   rawOffset: number,
 ): { left: number; top: number; height: number } | undefined {
-  const text = mirror.textContent ?? "";
-  const offset = Math.max(0, Math.min(text.length, Math.trunc(rawOffset)));
+  const base = syntaxMirrorBase(mirror);
+  const text = base.element.textContent ?? "";
+  const localRawOffset = Math.trunc(rawOffset) - base.startOffset;
+  // Fora da janela materializada o caret está fora do viewport: não há rect a posicionar.
+  if (base.windowed && (localRawOffset < 0 || localRawOffset > text.length)) return undefined;
+  const offset = Math.max(0, Math.min(text.length, localRawOffset));
   const ownerDocument = mirror.ownerDocument;
   const position = textPositionAtOffset(text, offset);
   const lineStart = textOffsetAtPosition(text, { line: position.line, column: 1 });
@@ -899,13 +967,13 @@ function editorMirrorCaretRectAtTextOffset(
         left: bounds.left + cssPixelValue(style.paddingLeft, 0),
         top: bounds.top
           + cssPixelValue(style.paddingTop, 0)
-          + (position.line - 1) * lineHeight
+          + (base.startLine - 1 + position.line - 1) * lineHeight
           + Math.max(0, (lineHeight - height) / 2),
         height,
       };
     }
   }
-  const walker = ownerDocument.createTreeWalker(mirror, NodeFilter.SHOW_TEXT);
+  const walker = ownerDocument.createTreeWalker(base.element, NodeFilter.SHOW_TEXT);
   let consumed = 0;
   let node: Node | null;
   let lastTextNode: Text | undefined;
@@ -957,13 +1025,14 @@ function editorMirrorRectsAtTextRange(
   rawStart: number,
   rawEnd: number,
 ): readonly DOMRect[] {
-  const text = mirror.textContent ?? "";
-  const start = Math.max(0, Math.min(text.length, Math.trunc(rawStart)));
-  const end = Math.max(start, Math.min(text.length, Math.trunc(rawEnd)));
+  const base = syntaxMirrorBase(mirror);
+  const text = base.element.textContent ?? "";
+  const start = Math.max(0, Math.min(text.length, Math.trunc(rawStart) - base.startOffset));
+  const end = Math.max(start, Math.min(text.length, Math.trunc(rawEnd) - base.startOffset));
   if (start === end) return [];
   const ownerDocument = mirror.ownerDocument;
   const locate = (offset: number): { node: Text; offset: number } | undefined => {
-    const walker = ownerDocument.createTreeWalker(mirror, NodeFilter.SHOW_TEXT);
+    const walker = ownerDocument.createTreeWalker(base.element, NodeFilter.SHOW_TEXT);
     let consumed = 0;
     let node: Node | null;
     let last: Text | undefined;
@@ -1105,6 +1174,160 @@ function editorChangeBlockKey(decoration: TextEditorLineDecoration | undefined):
   const first = after?.[0];
   if (!after?.length || !first) return undefined;
   return `${first.line}:${after.length}:${decoration?.change?.before.length ?? 0}`;
+}
+
+/**
+ * Régua numérica virtualizada, assinante direta do viewport: re-renderiza sozinha a cada linha
+ * rolada, no mesmo tique do evento, sem esperar (nem disparar) um render do App inteiro.
+ */
+function EditorLineRuler({
+  viewportStore,
+  lineCount,
+  lineHeight,
+  contentPadding,
+  rulerRef,
+  showLineNumbers,
+  debuggable,
+  documentPath,
+  fileLineByVisibleLine,
+  breakpoints,
+  activeDebugVisibleLine,
+  decorationsByLine,
+  hoveredChangeKey,
+  onToggleBreakpoint,
+  onChangeMarkerEnter,
+  onChangeMarkerLeave,
+  onLineEnter,
+}: {
+  readonly viewportStore: EditorViewportStore;
+  readonly lineCount: number;
+  readonly lineHeight: number;
+  readonly contentPadding: number;
+  readonly rulerRef: RefObject<HTMLPreElement | null>;
+  readonly showLineNumbers: boolean;
+  readonly debuggable: boolean;
+  readonly documentPath: string | undefined;
+  readonly fileLineByVisibleLine: readonly number[] | undefined;
+  readonly breakpoints: readonly DebugBreakpoint[];
+  readonly activeDebugVisibleLine: number | undefined;
+  readonly decorationsByLine: ReadonlyMap<number, TextEditorLineDecoration[]>;
+  readonly hoveredChangeKey: string | undefined;
+  readonly onToggleBreakpoint: (fileLine: number) => void;
+  readonly onChangeMarkerEnter: (decoration: TextEditorLineDecoration, changeKey: string | undefined) => void;
+  readonly onChangeMarkerLeave: () => void;
+  readonly onLineEnter: () => void;
+}) {
+  const range = useEditorViewportLineRange(
+    viewportStore,
+    lineCount,
+    EDITOR_RULER_OVERSCAN_LINES,
+    lineHeight,
+    contentPadding,
+    EDITOR_RULER_STEP_LINES,
+  );
+  const editorLineTop = (line: number) => contentPadding + (line - 1) * lineHeight;
+  const lines: ReactElement[] = [];
+  for (let line = range.start; line <= range.end; line += 1) {
+    const fileLine = fileLineByVisibleLine?.[line - 1] ?? line;
+    const breakpoint = documentPath
+      ? breakpoints.find((candidate) => candidate.path === documentPath && candidate.line === fileLine)
+      : undefined;
+    const currentDebugLine = activeDebugVisibleLine === line;
+    const decorations = decorationsByLine.get(line) ?? [];
+    const changeDecoration = decorations.find((decoration) => decoration.change);
+    const changeKey = editorChangeBlockKey(changeDecoration);
+    const tooltip = decorations
+      .map((decoration) => decoration.tooltip ?? decoration.label)
+      .filter((value): value is string => Boolean(value))
+      .join("\n");
+    const content = <>
+      <i
+        className="editor-line-ruler__marker"
+        onMouseEnter={changeDecoration
+          ? () => onChangeMarkerEnter(changeDecoration, changeKey)
+          : undefined}
+        onMouseLeave={changeDecoration ? onChangeMarkerLeave : undefined}
+      />
+      <i className={`editor-line-ruler__breakpoint${breakpoint ? " is-active" : ""}`} />
+      <i className={`editor-line-ruler__execution-marker${currentDebugLine ? " is-current" : ""}`} />
+      {showLineNumbers ? <b>{fileLine}</b> : null}
+    </>;
+    const ariaLabel = debuggable
+      ? changeDecoration
+        ? `${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${fileLine} (alteração: ${tooltip || "Exibir alteração"})`
+        : `${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${fileLine}`
+      : changeDecoration
+        ? `Linha ${fileLine} (alteração: ${tooltip || "Exibir alteração"})`
+        : `Linha ${fileLine}`;
+    lines.push(
+      <button
+        className={`editor-line-ruler__line${lineDecorationClassName(decorations)}${changeKey && changeKey === hoveredChangeKey ? " is-change-hover" : ""}${currentDebugLine ? " is-debug-current" : ""}${breakpoint ? " has-breakpoint" : ""}`}
+        key={line}
+        style={{ top: `${editorLineTop(line)}px` }}
+        type="button"
+        title={changeDecoration ? tooltip || undefined : undefined}
+        aria-label={ariaLabel}
+        onClick={() => onToggleBreakpoint(fileLine)}
+        onMouseEnter={onLineEnter}
+      >
+        {content}
+      </button>,
+    );
+  }
+  return (
+    <div className={`editor-line-ruler${showLineNumbers ? "" : " decorations-only"}${debuggable ? " is-debuggable" : ""}`}>
+      <pre
+        ref={rulerRef}
+        style={{ height: `${contentPadding * 2 + lineCount * lineHeight}px` }}
+      >
+        {lines}
+      </pre>
+    </div>
+  );
+}
+
+/**
+ * Janela de sintaxe assinante direta do viewport: os tokens continuam memoizados no arquivo
+ * inteiro dentro de `HighlightedSource`; só o recorte em spans acompanha a rolagem, por conta
+ * própria, sem render do App.
+ */
+function WindowedHighlightedSource({
+  viewportStore,
+  lineStarts,
+  lineCount,
+  lineHeight,
+  contentPadding,
+  widthGuard,
+  ...highlightProps
+}: {
+  readonly viewportStore: EditorViewportStore;
+  readonly lineStarts: readonly number[];
+  readonly lineCount: number;
+  readonly lineHeight: number;
+  readonly contentPadding: number;
+  readonly widthGuard: string | undefined;
+} & Omit<ComponentProps<typeof HighlightedSource>, "renderWindow" | "virtualWindow">) {
+  const range = useEditorViewportLineRange(
+    viewportStore,
+    lineCount,
+    SYNTAX_WINDOW_OVERSCAN_LINES,
+    lineHeight,
+    contentPadding,
+    SYNTAX_WINDOW_STEP_LINES,
+  );
+  const { source } = highlightProps;
+  const renderWindow = {
+    start: lineStarts[range.start - 1] ?? 0,
+    end: range.end < lineCount ? lineStarts[range.end] ?? source.length : source.length,
+  };
+  const virtualWindow = {
+    leadHeight: (range.start - 1) * lineHeight,
+    trailHeight: Math.max(0, lineCount - range.end) * lineHeight,
+    startLine: range.start,
+    lineCount: range.end - range.start + 1,
+    ...(widthGuard !== undefined ? { widthGuard } : {}),
+  };
+  return <HighlightedSource {...highlightProps} renderWindow={renderWindow} virtualWindow={virtualWindow} />;
 }
 
 function lintSettingsStorageKey(workspaceName: string, providerId: string): string {
@@ -1373,6 +1596,8 @@ export function App() {
   const [explorerFilterRevision, setExplorerFilterRevision] = useState(0);
   const [editorSearchOpen, setEditorSearchOpen] = useState(false);
   const [editorSearchQuery, setEditorSearchQuery] = useState("");
+  const [goToLineOpen, setGoToLineOpen] = useState(false);
+  const [goToLineValue, setGoToLineValue] = useState("");
   const [editorSearchReplaceOpen, setEditorSearchReplaceOpen] = useState(false);
   const [editorSearchReplacement, setEditorSearchReplacement] = useState("");
   const [editorSearchMatchIndex, setEditorSearchMatchIndex] = useState(0);
@@ -1381,6 +1606,16 @@ export function App() {
   const [editorNavigationLoading, setEditorNavigationLoading] = useState(false);
   const [editorLocationHistory, setEditorLocationHistory] = useState(createEditorLocationHistory);
   const [editorViewport, setEditorViewport] = useState({ scrollTop: 0, height: 800 });
+  const [editorViewportStore] = useState(createEditorViewportStore);
+  const editorViewportSyncRef = useRef<{ trailingTimer: number | undefined }>({ trailingTimer: undefined });
+  const editorStateCaptureRef = useRef<{
+    documentId: string;
+    selectionStart: number;
+    selectionEnd: number;
+    scrollTop: number;
+    scrollLeft: number;
+    timer: number;
+  } | undefined>(undefined);
   const [editorLayoutMetrics, setEditorLayoutMetrics] = useState<EditorLayoutMetrics>({
     lineHeight: EDITOR_DEFAULT_LINE_HEIGHT,
     contentPadding: EDITOR_CONTENT_PADDING,
@@ -1410,6 +1645,7 @@ export function App() {
   const editorFoldOverlayRef = useRef<HTMLDivElement>(null);
   const explorerFilterInputRef = useRef<HTMLInputElement>(null);
   const editorSearchInputRef = useRef<HTMLInputElement>(null);
+  const goToLineInputRef = useRef<HTMLInputElement>(null);
   const editorSearchReplaceInputRef = useRef<HTMLInputElement>(null);
   const syntaxLayerRef = useRef<HTMLPreElement>(null);
   const foldedEditorCaretRef = useRef<HTMLSpanElement>(null);
@@ -1601,6 +1837,12 @@ export function App() {
     setEditorSearchReplaceOpen(true);
     return true;
   }, [openEditorSearch]);
+  const openGoToLine = useCallback(() => {
+    if (activeDocument?.kind !== "text" || activeResourceEditorProvider) return false;
+    setGoToLineOpen(true);
+    window.requestAnimationFrame(() => goToLineInputRef.current?.focus({ preventScroll: true }));
+    return true;
+  }, [activeDocument?.id, activeDocument?.kind, activeResourceEditorProvider]);
   const editorSearchResult = useMemo(() => {
     if (!editorSearchOpen || activeDocument?.kind !== "text" || activeResourceEditorProvider) return { matches: [] };
     try {
@@ -1699,7 +1941,19 @@ export function App() {
       setEditorToolbarItems(items.flat().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)));
     });
     return () => { cancelled = true; };
-  }, [activeDocument, platformSnapshot, resourceEditorRevision]);
+    // Somente os campos do snapshot: rolagem/seleção não devem re-consultar os providers de toolbar.
+  }, [
+    activeDocument?.id,
+    activeDocument?.kind,
+    activeDocument?.name,
+    activeDocument?.path,
+    activeDocument?.workspaceRoot,
+    activeDocument?.mediaType,
+    activeDocument?.content,
+    activeDocument?.savedContent,
+    platformSnapshot,
+    resourceEditorRevision,
+  ]);
   const selectedProfile = profilesState.profiles.find((profile) => profile.id === profilesState.selectedId);
   const selectedProfileDebugAdapter = selectedProfile
     ? debugAdapterForProfile({
@@ -2032,8 +2286,19 @@ export function App() {
       const paddingTop = Number.parseFloat(computed.paddingTop);
       const paddingBottom = Number.parseFloat(computed.paddingBottom);
       const contentPadding = Number.isFinite(paddingTop) ? paddingTop : EDITOR_CONTENT_PADDING;
+      // Com a janela virtualizada, o scrollHeight do layer inclui espaçadores derivados do próprio
+      // lineHeight (circular); mede o bloco da janela, cujo texto tem layout real.
+      const windowElement = layer.querySelector<HTMLElement>("[data-syntax-window-lines]");
+      const windowLines = windowElement ? Number(windowElement.getAttribute("data-syntax-window-lines")) : 0;
+      const windowLineHeight = windowElement && windowLines > 0
+        ? windowElement.getBoundingClientRect().height / windowLines
+        : Number.NaN;
       const measuredHeight = layer.scrollHeight - (Number.isFinite(paddingTop) ? paddingTop : 0) - (Number.isFinite(paddingBottom) ? paddingBottom : 0);
-      const measuredLineHeight = editorMetrics.lineCount > 1 ? measuredHeight / editorMetrics.lineCount : declaredLineHeight;
+      const measuredLineHeight = Number.isFinite(windowLineHeight) && windowLineHeight > 8
+        ? windowLineHeight
+        : windowElement
+          ? declaredLineHeight
+          : editorMetrics.lineCount > 1 ? measuredHeight / editorMetrics.lineCount : declaredLineHeight;
       const lineHeight = Number.isFinite(measuredLineHeight) && measuredLineHeight > 8
         ? measuredLineHeight
         : Number.isFinite(declaredLineHeight) && declaredLineHeight > 8
@@ -2052,18 +2317,49 @@ export function App() {
       window.cancelAnimationFrame(frame);
     };
   }, [activeDocument?.id, activeDocument?.kind, activeEditorDisplayContent, editorMetrics.lineCount, activeEditorFont, fontPreferences.editorFontSize]);
+  // Usado só pela virtualização dos toggles de fold; a régua deriva a própria faixa do store.
   const editorRulerRange = editorVisibleLineRange(
     editorMetrics.lineCount,
     editorViewport.scrollTop,
     editorViewport.height,
-    12,
+    EDITOR_RULER_OVERSCAN_LINES,
     editorLayoutMetrics.lineHeight,
     editorLayoutMetrics.contentPadding,
   );
-  const visibleEditorRulerLines = useMemo(() => Array.from(
-    { length: Math.max(0, editorRulerRange.end - editorRulerRange.start + 1) },
-    (_, index) => editorRulerRange.start + index,
-  ), [editorRulerRange.start, editorRulerRange.end]);
+  // Offsets do início de cada linha; só materializados para fontes grandes, quando a janela de sintaxe é aplicada.
+  const editorSyntaxLineStarts = useMemo(() => {
+    if (activeEditorDisplayContent.length <= SYNTAX_WINDOW_MIN_SOURCE_LENGTH) return undefined;
+    const offsets = [0];
+    for (let index = 0; index < activeEditorDisplayContent.length; index += 1) {
+      if (activeEditorDisplayContent.charCodeAt(index) === 10) offsets.push(index + 1);
+    }
+    return offsets;
+  }, [activeEditorDisplayContent]);
+  // Linha visualmente mais larga (tabs expandidos, caracteres largos ≈ 2 colunas): mantém a
+  // largura rolável do `pre` quando o texto fora da janela vira espaçadores de altura fixa.
+  const editorSyntaxWidthGuard = useMemo(() => {
+    if (!editorSyntaxLineStarts) return undefined;
+    const source = activeEditorDisplayContent;
+    let bestStart = 0;
+    let bestEnd = 0;
+    let bestColumns = -1;
+    for (let line = 0; line < editorSyntaxLineStarts.length; line += 1) {
+      const start = editorSyntaxLineStarts[line] ?? 0;
+      const boundary = editorSyntaxLineStarts[line + 1];
+      const end = boundary === undefined ? source.length : boundary - 1;
+      let columns = 0;
+      for (let index = start; index < end; index += 1) {
+        const code = source.charCodeAt(index);
+        columns += code === 9 ? 4 - (columns % 4) : code >= 0x1100 ? 2 : 1;
+      }
+      if (columns > bestColumns) {
+        bestColumns = columns;
+        bestStart = start;
+        bestEnd = end;
+      }
+    }
+    return source.slice(bestStart, bestEnd);
+  }, [activeEditorDisplayContent, editorSyntaxLineStarts]);
   /**
    * Linha real do arquivo para cada linha visível (índice 0 = linha 1). Com blocos dobrados a régua
    * continua mostrando a numeração do arquivo, e breakpoints/depuração seguem usando o arquivo real.
@@ -3533,6 +3829,13 @@ export function App() {
       if (selectionStart !== undefined) {
         editorRef.current?.focus({ preventScroll: true });
         editorRef.current?.setSelectionRange(selectionStart, selectionEnd ?? selectionStart);
+        // setSelectionRange pode disparar o autoscroll nativo do textarea (invisível, mas é ele
+        // quem posiciona o caret) dentro do seu próprio viewport interno, deixando o caret fora
+        // da linha visível no overlay de sintaxe; realinhar com o container corrige isso.
+        if (editorRef.current) {
+          editorRef.current.scrollTop = scrollContainer.scrollTop;
+          editorRef.current.scrollLeft = scrollContainer.scrollLeft;
+        }
       }
     }));
   };
@@ -3557,6 +3860,26 @@ export function App() {
       editorRef.current?.setSelectionRange(match.start, match.end);
       editorSearchInputRef.current?.focus({ preventScroll: true });
     });
+  };
+
+  const goToEditorLine = (requestedLine: number) => {
+    if (!activeDocument || activeDocument.kind !== "text") return;
+    const line = Math.min(Math.max(1, Math.trunc(requestedLine)), editorMetrics.lineCount);
+    const offset = textOffsetAtPosition(activeEditorContent, { line, column: 1 });
+    setDocuments((current) => current.map((document) => document.id === activeDocument.id
+      ? { ...document, selectionStart: offset, selectionEnd: offset }
+      : document));
+    const projection = revealFoldsForFileLine(activeDocument.id, line);
+    scrollEditorToLine(foldSearchVisibleLine(projection, line));
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      const scrollContainer = highlightedEditorScrollRef.current ?? editorRef.current;
+      editorRef.current?.focus({ preventScroll: true });
+      editorRef.current?.setSelectionRange(offset, offset);
+      if (editorRef.current && scrollContainer) {
+        editorRef.current.scrollTop = scrollContainer.scrollTop;
+        editorRef.current.scrollLeft = scrollContainer.scrollLeft;
+      }
+    }));
   };
 
   const openWorkspaceResource = async (request: WorkbenchWorkspaceResourceOpenRequest) => {
@@ -4335,6 +4658,10 @@ export function App() {
       if (openEditorReplace()) event.preventDefault();
       return;
     }
+    if (key === "g" && !event.shiftKey && !event.altKey) {
+      if (openGoToLine()) event.preventDefault();
+      return;
+    }
     const undo = key === "z" && !event.shiftKey;
     const redo = (key === "z" && event.shiftKey) || key === "y";
     if (!undo && !redo) return;
@@ -4342,20 +4669,104 @@ export function App() {
     navigateEditorHistory(undo ? "undo" : "redo", event.currentTarget);
   };
 
+  const flushEditorStateCapture = (capture: {
+    documentId: string;
+    selectionStart: number;
+    selectionEnd: number;
+    scrollTop: number;
+    scrollLeft: number;
+  }) => {
+    setDocuments((current) => current.map((document) => document.id === capture.documentId
+      ? {
+          ...document,
+          selectionStart: capture.selectionStart,
+          selectionEnd: capture.selectionEnd,
+          scrollTop: capture.scrollTop,
+          scrollLeft: capture.scrollLeft,
+        }
+      : document));
+  };
+
   const captureEditorState = (
     textarea: HTMLTextAreaElement,
     scrollContainer: HTMLElement = textarea,
   ) => {
     if (!activeDocumentId) return;
-    setDocuments((current) => current.map((document) => document.id === activeDocumentId
-      ? {
-          ...document,
-          selectionStart: textarea.selectionStart,
-          selectionEnd: textarea.selectionEnd,
-          scrollTop: scrollContainer.scrollTop,
-          scrollLeft: scrollContainer.scrollLeft,
-        }
-      : document));
+    const pending = editorStateCaptureRef.current;
+    if (pending) {
+      window.clearTimeout(pending.timer);
+      editorStateCaptureRef.current = undefined;
+    }
+    flushEditorStateCapture({
+      documentId: activeDocumentId,
+      selectionStart: textarea.selectionStart,
+      selectionEnd: textarea.selectionEnd,
+      scrollTop: scrollContainer.scrollTop,
+      scrollLeft: scrollContainer.scrollLeft,
+    });
+  };
+
+  /**
+   * Rolagem e arrasto de seleção emitem eventos a cada frame; gravá-los imediatamente em
+   * `documents` re-renderiza o App e re-dispara efeitos por documento (ex.: toolbar de plugins)
+   * a cada tique. A captura fica coalescida e sempre grava no documento dono do evento, mesmo
+   * que a aba ativa mude antes do flush.
+   */
+  const scheduleEditorStateCapture = (
+    textarea: HTMLTextAreaElement,
+    scrollContainer: HTMLElement = textarea,
+  ) => {
+    if (!activeDocumentId) return;
+    const pending = editorStateCaptureRef.current;
+    const samePendingDocument = pending?.documentId === activeDocumentId ? pending : undefined;
+    if (pending && !samePendingDocument) {
+      window.clearTimeout(pending.timer);
+      flushEditorStateCapture(pending);
+    }
+    // Debounce de verdade: enquanto a rolagem/seleção continua, nenhum flush acontece — um flush
+    // grava em `documents` e re-renderiza o App inteiro, o que competiria com a própria rolagem.
+    if (samePendingDocument) window.clearTimeout(samePendingDocument.timer);
+    editorStateCaptureRef.current = {
+      documentId: activeDocumentId,
+      selectionStart: textarea.selectionStart,
+      selectionEnd: textarea.selectionEnd,
+      scrollTop: scrollContainer.scrollTop,
+      scrollLeft: scrollContainer.scrollLeft,
+      timer: window.setTimeout(() => {
+        const capture = editorStateCaptureRef.current;
+        editorStateCaptureRef.current = undefined;
+        if (capture) flushEditorStateCapture(capture);
+      }, EDITOR_STATE_CAPTURE_DELAY_MS),
+    };
+  };
+
+  const applyEditorViewport = (scrollTop: number, height: number) => {
+    editorViewportStore.set(scrollTop, height);
+    setEditorViewport((current) => (
+      current.scrollTop === scrollTop && current.height === height
+        ? current
+        : { scrollTop, height }
+    ));
+  };
+
+  const syncEditorViewportOnScroll = (element: HTMLElement) => {
+    // Régua e janela de sintaxe acompanham via store, no próprio evento, sem render do App.
+    editorViewportStore.set(element.scrollTop, element.clientHeight);
+    const sync = editorViewportSyncRef.current;
+    if (sync.trailingTimer !== undefined) window.clearTimeout(sync.trailingTimer);
+    // Estado React do App só assenta quando a rolagem para (fold preview, toggles de fold).
+    // A captura pendente é descarregada no mesmo tique: os dois setState caem no mesmo task e
+    // viram um único render do App — em arquivos grandes cada render custa dezenas de ms.
+    sync.trailingTimer = window.setTimeout(() => {
+      sync.trailingTimer = undefined;
+      const capture = editorStateCaptureRef.current;
+      if (capture) {
+        window.clearTimeout(capture.timer);
+        editorStateCaptureRef.current = undefined;
+        flushEditorStateCapture(capture);
+      }
+      applyEditorViewport(element.scrollTop, element.clientHeight);
+    }, EDITOR_VIEWPORT_TRAILING_DELAY_MS);
   };
 
   const prepareEditorContextMenu = (
@@ -4439,7 +4850,7 @@ export function App() {
       const scrollContainer = highlightedEditorScrollRef.current ?? textarea;
       scrollContainer.scrollTop = activeDocument.scrollTop;
       scrollContainer.scrollLeft = activeDocument.scrollLeft;
-      setEditorViewport({ scrollTop: activeDocument.scrollTop, height: scrollContainer.clientHeight });
+      applyEditorViewport(activeDocument.scrollTop, scrollContainer.clientHeight);
       syncEditorLineRuler(activeDocument.scrollTop);
     });
   }, [activeDocumentId, editorSettings.lineNumbers, editorSearchOpen, activeResourceEditorProvider?.id]);
@@ -7509,6 +7920,51 @@ export function App() {
                         onClick={() => openEditorSearch()}
                       ><WorkbenchIcon icon="search" size={14} /></button>
                     )}
+                    {goToLineOpen ? (
+                      <div className="editor-go-to-line" role="search">
+                        <Hash size={13} className="editor-go-to-line__icon" />
+                        <input
+                          ref={goToLineInputRef}
+                          className="editor-go-to-line__input"
+                          type="number"
+                          min={1}
+                          max={editorMetrics.lineCount}
+                          value={goToLineValue}
+                          aria-label="Ir para a linha"
+                          placeholder={`Linha (1-${editorMetrics.lineCount})`}
+                          onChange={(event) => setGoToLineValue(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              setGoToLineOpen(false);
+                              setGoToLineValue("");
+                              editorRef.current?.focus({ preventScroll: true });
+                              return;
+                            }
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              const line = Number.parseInt(goToLineValue, 10);
+                              if (Number.isFinite(line)) goToEditorLine(line);
+                              setGoToLineOpen(false);
+                              setGoToLineValue("");
+                            }
+                          }}
+                          onBlur={() => {
+                            setGoToLineOpen(false);
+                            setGoToLineValue("");
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <button
+                        className="icon-button small"
+                        type="button"
+                        aria-label="Ir para linha"
+                        title="Ir para linha (Ctrl+G)"
+                        disabled={!activeDocument || activeDocument.kind !== "text" || Boolean(activeResourceEditorProvider)}
+                        onClick={() => openGoToLine()}
+                      ><Hash size={14} /></button>
+                    )}
                     {editorToolbarItems.map((item) => {
                       const icon = <WorkbenchIcon icon={item.icon === "undo" ? "undo"
                         : item.icon === "diff" ? "diff"
@@ -7582,62 +8038,25 @@ export function App() {
                     onMouseLeave={() => { setHoveredFoldLine(undefined); scheduleFoldPreviewClose(); }}
                   >
                     {showEditorGutter ? (
-                      <div className={`editor-line-ruler${editorSettings.lineNumbers ? "" : " decorations-only"}${activeDocumentDebuggable ? " is-debuggable" : ""}`}>
-                        <pre
-                          ref={editorLineRulerRef}
-                          style={{ height: `${editorLayoutMetrics.contentPadding * 2 + editorMetrics.lineCount * editorLayoutMetrics.lineHeight}px` }}
-                        >
-                          {visibleEditorRulerLines.map((line) => {
-                            const fileLine = fileLineOf(line);
-                            const breakpoint = activeDocument?.path
-                              ? debugBreakpoints.find((candidate) => candidate.path === activeDocument.path && candidate.line === fileLine)
-                              : undefined;
-                            const currentDebugLine = activeDebugVisibleLine === line;
-                            const decorations = editorDecorationsByLine.get(line) ?? [];
-                            const changeDecoration = decorations.find((decoration) => decoration.change);
-                            const changeKey = editorChangeBlockKey(changeDecoration);
-                            const tooltip = decorations
-                              .map((decoration) => decoration.tooltip ?? decoration.label)
-                              .filter((value): value is string => Boolean(value))
-                              .join("\n");
-                            const content = <>
-                              <i
-                                className="editor-line-ruler__marker"
-                                onMouseEnter={changeDecoration
-                                  ? () => { setHoveredEditorChangeKey(changeKey); openEditorDiffPeekOnHover(changeDecoration); }
-                                  : undefined}
-                                onMouseLeave={changeDecoration
-                                  ? () => { setHoveredEditorChangeKey(undefined); scheduleEditorDiffPeekClose(); }
-                                  : undefined}
-                              />
-                              <i className={`editor-line-ruler__breakpoint${breakpoint ? " is-active" : ""}`} />
-                              <i className={`editor-line-ruler__execution-marker${currentDebugLine ? " is-current" : ""}`} />
-                              {editorSettings.lineNumbers ? <b>{fileLine}</b> : null}
-                            </>;
-                            const ariaLabel = activeDocumentDebuggable
-                              ? changeDecoration
-                                ? `${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${fileLine} (alteração: ${tooltip || "Exibir alteração"})`
-                                : `${breakpoint ? "Remover" : "Adicionar"} breakpoint na linha ${fileLine}`
-                              : changeDecoration
-                                ? `Linha ${fileLine} (alteração: ${tooltip || "Exibir alteração"})`
-                                : `Linha ${fileLine}`;
-                            return (
-                              <button
-                                className={`editor-line-ruler__line${lineDecorationClassName(decorations)}${changeKey && changeKey === hoveredEditorChangeKey ? " is-change-hover" : ""}${currentDebugLine ? " is-debug-current" : ""}${breakpoint ? " has-breakpoint" : ""}`}
-                                key={line}
-                                style={{ top: `${editorLineTop(line)}px` }}
-                                type="button"
-                                title={changeDecoration ? tooltip || undefined : undefined}
-                                aria-label={ariaLabel}
-                                onClick={() => { if (activeDocumentDebuggable && activeDocument?.path) toggleBreakpoint(activeDocument.path, fileLine); }}
-                                onMouseEnter={() => { if (selectedEditorLineDecoration) scheduleEditorDiffPeekClose(); }}
-                              >
-                                {content}
-                              </button>
-                            );
-                          })}
-                        </pre>
-                      </div>
+                      <EditorLineRuler
+                        viewportStore={editorViewportStore}
+                        lineCount={editorMetrics.lineCount}
+                        lineHeight={editorLayoutMetrics.lineHeight}
+                        contentPadding={editorLayoutMetrics.contentPadding}
+                        rulerRef={editorLineRulerRef}
+                        showLineNumbers={editorSettings.lineNumbers}
+                        debuggable={activeDocumentDebuggable}
+                        documentPath={activeDocument?.path}
+                        fileLineByVisibleLine={fileLineByVisibleLine}
+                        breakpoints={debugBreakpoints}
+                        activeDebugVisibleLine={activeDebugVisibleLine}
+                        decorationsByLine={editorDecorationsByLine}
+                        hoveredChangeKey={hoveredEditorChangeKey}
+                        onToggleBreakpoint={(fileLine) => { if (activeDocumentDebuggable && activeDocument?.path) toggleBreakpoint(activeDocument.path, fileLine); }}
+                        onChangeMarkerEnter={(decoration, changeKey) => { setHoveredEditorChangeKey(changeKey); openEditorDiffPeekOnHover(decoration); }}
+                        onChangeMarkerLeave={() => { setHoveredEditorChangeKey(undefined); scheduleEditorDiffPeekClose(); }}
+                        onLineEnter={() => { if (selectedEditorLineDecoration) scheduleEditorDiffPeekClose(); }}
+                      />
                     ) : null}
                     {activeDocument && breakpointVisibleLines.length > 0 ? (
                       <div
@@ -7686,11 +8105,8 @@ export function App() {
                         onMouseLeave={() => setHoveredDiagnosticLine(undefined)}
                         onScroll={(event) => {
                           syncEditorLineRuler(event.currentTarget.scrollTop);
-                          setEditorViewport({
-                            scrollTop: event.currentTarget.scrollTop,
-                            height: event.currentTarget.clientHeight,
-                          });
-                          if (editorRef.current) captureEditorState(editorRef.current, event.currentTarget);
+                          syncEditorViewportOnScroll(event.currentTarget);
+                          if (editorRef.current) scheduleEditorStateCapture(editorRef.current, event.currentTarget);
                         }}
                       >
                         <div className="highlight-editor__content">
@@ -7700,12 +8116,27 @@ export function App() {
                             data-syntax-provider={activeSyntaxHighlighter?.id}
                             data-syntax-origin={activeSyntaxHighlighter?.origin}
                           >
-                            <HighlightedSource
-                              source={activeEditorDisplayContent}
-                              {...(activeSyntaxHighlighter ? { provider: activeSyntaxHighlighter } : {})}
-                              {...(activeEditorSearchHighlight ? { highlight: activeEditorSearchHighlight } : {})}
-                              {...(editorContextTargetHighlight ? { contextTarget: editorContextTargetHighlight } : {})}
-                            />
+                            {editorSyntaxLineStarts ? (
+                              <WindowedHighlightedSource
+                                viewportStore={editorViewportStore}
+                                lineStarts={editorSyntaxLineStarts}
+                                lineCount={editorMetrics.lineCount}
+                                lineHeight={editorLayoutMetrics.lineHeight}
+                                contentPadding={editorLayoutMetrics.contentPadding}
+                                widthGuard={editorSyntaxWidthGuard}
+                                source={activeEditorDisplayContent}
+                                {...(activeSyntaxHighlighter ? { provider: activeSyntaxHighlighter } : {})}
+                                {...(activeEditorSearchHighlight ? { highlight: activeEditorSearchHighlight } : {})}
+                                {...(editorContextTargetHighlight ? { contextTarget: editorContextTargetHighlight } : {})}
+                              />
+                            ) : (
+                              <HighlightedSource
+                                source={activeEditorDisplayContent}
+                                {...(activeSyntaxHighlighter ? { provider: activeSyntaxHighlighter } : {})}
+                                {...(activeEditorSearchHighlight ? { highlight: activeEditorSearchHighlight } : {})}
+                                {...(editorContextTargetHighlight ? { contextTarget: editorContextTargetHighlight } : {})}
+                              />
+                            )}
                           </pre>
                           <DiagnosticLayer
                             diagnostics={diagnostics}
@@ -7733,7 +8164,7 @@ export function App() {
                               event.ctrlKey || event.metaKey,
                             )}
                             onMouseLeave={(event) => event.currentTarget.classList.remove("is-navigation-modifier")}
-                            onSelect={(event) => captureEditorState(event.currentTarget, highlightedEditorScrollRef.current ?? event.currentTarget)}
+                            onSelect={(event) => scheduleEditorStateCapture(event.currentTarget, highlightedEditorScrollRef.current ?? event.currentTarget)}
                             onClick={(event) => {
                               if ((!event.ctrlKey && !event.metaKey) || !activeDocument) return;
                               event.preventDefault();
@@ -7795,7 +8226,7 @@ export function App() {
                           event.ctrlKey || event.metaKey,
                         )}
                         onMouseLeave={(event) => event.currentTarget.classList.remove("is-navigation-modifier")}
-                        onSelect={(event) => captureEditorState(event.currentTarget)}
+                        onSelect={(event) => scheduleEditorStateCapture(event.currentTarget)}
                         onClick={(event) => {
                           if ((!event.ctrlKey && !event.metaKey) || !activeDocument) return;
                           event.preventDefault();
@@ -7820,11 +8251,8 @@ export function App() {
                         }}
                         onScroll={(event) => {
                           syncEditorLineRuler(event.currentTarget.scrollTop);
-                          setEditorViewport({
-                            scrollTop: event.currentTarget.scrollTop,
-                            height: event.currentTarget.clientHeight,
-                          });
-                          captureEditorState(event.currentTarget);
+                          syncEditorViewportOnScroll(event.currentTarget);
+                          scheduleEditorStateCapture(event.currentTarget);
                         }}
                       />
                     )}

@@ -42,7 +42,7 @@ describe("folded editor pointer mapping", () => {
 
   it("positions the projected caret on empty visual lines instead of the previous line", () => {
     expect(appSource).toContain("if (lineStart === lineEnd) {");
-    expect(appSource).toContain("(position.line - 1) * lineHeight");
+    expect(appSource).toContain("(base.startLine - 1 + position.line - 1) * lineHeight");
     expect(appSource).toContain("Math.max(0, (lineHeight - height) / 2)");
   });
 

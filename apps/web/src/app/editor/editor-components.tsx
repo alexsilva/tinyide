@@ -9,15 +9,38 @@ export const HighlightedSource = memo(function HighlightedSource({
   provider,
   highlight,
   contextTarget,
+  renderWindow,
+  virtualWindow,
 }: {
   readonly source: string;
   readonly provider?: Pick<SyntaxHighlighter, "highlight">;
   readonly highlight?: { readonly start: number; readonly end: number };
   readonly contextTarget?: { readonly start: number; readonly end: number };
+  /**
+   * Janela (em offsets) que recebe spans de realce; o texto fora dela vira nós de texto puro,
+   * preservando o layout do `pre` sem materializar milhares de spans em arquivos grandes.
+   */
+  readonly renderWindow?: { readonly start: number; readonly end: number };
+  /**
+   * Substitui o texto fora da janela por espaçadores de altura fixa: mutações do `pre` durante a
+   * rolagem só re-layoutam as linhas da janela, não o arquivo inteiro. A linha-guarda (invisível,
+   * altura zero) preserva a largura rolável; os atributos `data-syntax-window-*` permitem que os
+   * walkers de mirror (caret/seleção de fold, menu de contexto) recuperem offsets absolutos.
+   */
+  readonly virtualWindow?: {
+    readonly leadHeight: number;
+    readonly trailHeight: number;
+    readonly startLine: number;
+    readonly lineCount: number;
+    readonly widthGuard?: string;
+  };
 }) {
   const tokens = useMemo(() => [...(provider?.highlight(source) ?? [])]
     .filter((token) => token.start >= 0 && token.start < token.end && token.end <= source.length)
     .sort((left, right) => left.start - right.start), [provider, source]);
+  const windowStart = Math.max(0, Math.min(source.length, renderWindow?.start ?? 0));
+  const windowEnd = Math.max(windowStart, Math.min(source.length, renderWindow?.end ?? source.length));
+  const clampToWindow = (offset: number) => Math.max(windowStart, Math.min(windowEnd, offset));
   const ranges = ([
     [highlight, "editor-search-match"],
     [contextTarget, "editor-context-target"],
@@ -27,17 +50,19 @@ export const HighlightedSource = memo(function HighlightedSource({
       const end = Math.max(start, Math.min(source.length, range?.end ?? 0));
       return range && end > start ? [{ start, end, className }] : [];
     });
-  const boundaries = new Set([0, source.length]);
+  const boundaries = new Set([windowStart, windowEnd]);
   tokens.forEach((token) => {
-    boundaries.add(token.start);
-    boundaries.add(token.end);
+    if (token.end <= windowStart || token.start >= windowEnd) return;
+    boundaries.add(clampToWindow(token.start));
+    boundaries.add(clampToWindow(token.end));
   });
   ranges.forEach((range) => {
-    boundaries.add(range.start);
-    boundaries.add(range.end);
+    if (range.end <= windowStart || range.start >= windowEnd) return;
+    boundaries.add(clampToWindow(range.start));
+    boundaries.add(clampToWindow(range.end));
   });
   const offsets = [...boundaries].sort((left, right) => left - right);
-  const fragments: ReactNode[] = [];
+  const windowFragments: ReactNode[] = [];
   let tokenIndex = 0;
   for (let index = 0; index < offsets.length - 1; index += 1) {
     const start = offsets[index] ?? 0;
@@ -50,12 +75,46 @@ export const HighlightedSource = memo(function HighlightedSource({
       ...ranges.map((range) => (start >= range.start && end <= range.end ? range.className : undefined)),
     ].filter(Boolean).join(" ");
     const content = source.slice(start, end);
-    fragments.push(classes
+    windowFragments.push(classes
       ? <span className={classes} key={`${start}:${end}`}>{content}</span>
       : content);
   }
-  fragments.push("\n");
-  return <>{fragments}</>;
+  if (windowEnd >= source.length) windowFragments.push("\n");
+  if (!virtualWindow) {
+    const fragments: ReactNode[] = [];
+    if (windowStart > 0) fragments.push(source.slice(0, windowStart));
+    fragments.push(...windowFragments);
+    if (windowEnd < source.length) fragments.push(source.slice(windowEnd), "\n");
+    return <>{fragments}</>;
+  }
+  return (
+    <>
+      {virtualWindow.widthGuard ? (
+        <span
+          data-syntax-guard=""
+          style={{ display: "block", height: 0, overflow: "hidden" }}
+        >
+          {virtualWindow.widthGuard}
+        </span>
+      ) : null}
+      <span
+        data-syntax-spacer=""
+        style={{ display: "block", height: `${virtualWindow.leadHeight}px` }}
+      />
+      <span
+        data-syntax-window-start={windowStart}
+        data-syntax-window-line={virtualWindow.startLine}
+        data-syntax-window-lines={virtualWindow.lineCount}
+        style={{ display: "block" }}
+      >
+        {windowFragments}
+      </span>
+      <span
+        data-syntax-spacer=""
+        style={{ display: "block", height: `${virtualWindow.trailHeight}px` }}
+      />
+    </>
+  );
 });
 
 export function HighlightedLine({ source, provider }: { readonly source: string; readonly provider: Pick<SyntaxHighlighter, "highlight"> | undefined }) {
@@ -153,7 +212,7 @@ export function EditorLineDiffPeek({
   );
 }
 
-export function DiagnosticLayer({
+export const DiagnosticLayer = memo(function DiagnosticLayer({
   diagnostics,
   source,
   hoveredLine,
@@ -216,4 +275,4 @@ export function DiagnosticLayer({
       })}
     </div>
   );
-}
+});

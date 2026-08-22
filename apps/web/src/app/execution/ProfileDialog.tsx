@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { X } from "lucide-react";
+import { Settings2, X } from "lucide-react";
 import { WorkbenchIcon } from "../workbench/activity-components";
 import { useEffect, useState } from "react";
 import { formatCommandLineArguments, parseCommandLineArguments } from "@tinyide/core";

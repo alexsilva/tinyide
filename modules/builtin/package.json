@@ -8,6 +8,7 @@
     "@tinyide/module-fonts": "0.1.0",
     "@tinyide/module-html": "0.1.0",
     "@tinyide/module-icons": "0.1.0",
+    "@tinyide/module-text-completion": "0.1.0",
     "@tinyide/module-themes": "0.1.0",
     "@tinyide/plugin-api": "0.1.0"
   }

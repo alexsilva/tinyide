@@ -138,6 +138,7 @@ export interface PluginExtensionApi {
   registerTextEditorNavigationProvider(provider: TextEditorNavigationProvider): Disposable;
   registerInteractiveSessionHook(provider: InteractiveSessionHookProvider): Disposable;
   registerInteractiveSessionProvider(provider: InteractiveSessionProvider): Disposable;
+  registerTextEditorCompletionProvider(provider: TextEditorCompletionProvider): Disposable;
   getInteractiveSessionHooks(): readonly InteractiveSessionHookProvider[];
   registerPluginSettingsProvider(provider: PluginSettingsProvider): Disposable;
   registerWorkbenchSidebarHook(hook: WorkbenchSidebarHook): Disposable;
@@ -648,6 +649,79 @@ export interface TextEditorNavigationProvider {
 }
 
 export const TEXT_EDITOR_NAVIGATION_CAPABILITY = "textEditor.navigation";
+
+export type TextEditorCompletionKind =
+  | "text"
+  | "keyword"
+  | "variable"
+  | "function"
+  | "method"
+  | "class"
+  | "module"
+  | "property"
+  | "snippet"
+  | "file"
+  | "folder";
+
+export interface TextEditorCompletionItem {
+  /** Texto exibido na lista de sugestões. */
+  readonly label: string;
+  /** Texto inserido no editor. Quando omitido, usa `label`. */
+  readonly insertText?: string;
+  readonly kind?: TextEditorCompletionKind;
+  /** Detalhe curto (tipo, assinatura, origem). */
+  readonly detail?: string;
+  /** Documentação opcional exibida no painel de detalhe. */
+  readonly documentation?: string;
+  /** Chave de ordenação. Menor vem primeiro. */
+  readonly sortText?: string;
+  /** Texto usado no filtro. Quando omitido, usa `label`. */
+  readonly filterText?: string;
+  /** Caracteres que confirmam a sugestão ao serem digitados. */
+  readonly commitCharacters?: readonly string[];
+}
+
+export interface TextEditorCompletionContext {
+  readonly document: TextEditorDocumentSnapshot;
+  readonly position: TextEditorPosition;
+  readonly offset: number;
+  /** Prefixo da palavra sob o cursor (token à esquerda). */
+  readonly prefix: string;
+  /** Caractere que disparou o autocomplete, quando houver. */
+  readonly triggerCharacter?: string;
+  /** Runtime selecionado no workspace, quando o provider depende dele. */
+  readonly environmentExecutable?: string;
+  /** Permite cancelar trabalho lento quando o pedido for substituído. */
+  readonly signal?: AbortSignal;
+}
+
+export interface TextEditorCompletionList {
+  readonly items: readonly TextEditorCompletionItem[];
+  /** Quando true, a lista pode crescer com mais resultados. */
+  readonly isIncomplete?: boolean;
+}
+
+/**
+ * Provider de autocomplete consumido pelo editor.
+ * Providers genéricos devem usar `priority` negativa para permitir que plugins
+ * de linguagem (Python, Node, etc.) dominem as sugestões dos arquivos que suportam.
+ */
+export interface TextEditorCompletionProvider {
+  readonly id: string;
+  /** Identificador do plugin ou módulo que registra o provider. */
+  readonly pluginId?: string;
+  /** Maior prioridade é consultada primeiro. Módulos: valores negativos. */
+  readonly priority?: number;
+  canComplete(document: TextEditorDocumentSnapshot): boolean;
+  provideCompletions(
+    context: TextEditorCompletionContext,
+  ):
+    | Promise<TextEditorCompletionList | readonly TextEditorCompletionItem[]>
+    | TextEditorCompletionList
+    | readonly TextEditorCompletionItem[];
+}
+
+export const TEXT_EDITOR_COMPLETION_CAPABILITY = "textEditor.completion";
 
 export type PluginSettingValue = boolean | string | number | readonly string[];
 

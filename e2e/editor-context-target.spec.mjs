@@ -41,7 +41,22 @@ test.describe("alvo do menu de contexto do editor", () => {
     await expect(target.first()).toHaveText("magalu_config_default");
 
     // O menu fecha com um clique fora dele, e o realce sai junto.
-    await editor.click({ position: { x: 200, y: box.height > 20 ? 10 : 5 } });
+    // Use a geometria real do menu: ele tem largura mínima de 220px e nasce no
+    // ponto do clique direito, portanto x=200 relativo ao editor ainda cai
+    // dentro do próprio menu quando ele é aberto em x=40.
+    const menuBox = await window.locator(".resource-context-menu").boundingBox();
+    const outsidePoint = [
+      { x: box.x + box.width - 8, y: box.y + box.height - 8 },
+      { x: box.x + 8, y: box.y + box.height - 8 },
+      { x: box.x + box.width - 8, y: box.y + 8 },
+    ].find((point) => !menuBox || (
+      point.x < menuBox.x
+      || point.x > menuBox.x + menuBox.width
+      || point.y < menuBox.y
+      || point.y > menuBox.y + menuBox.height
+    ));
+    expect(outsidePoint).toBeTruthy();
+    await window.mouse.click(outsidePoint.x, outsidePoint.y);
     await expect(window.locator(".editor-context-target")).toHaveCount(0);
   });
 });

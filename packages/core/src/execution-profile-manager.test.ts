@@ -48,6 +48,26 @@ describe("ExecutionProfileManager", () => {
       steps: [stepWithoutEnvironmentVariables],
     }]);
     expect(withoutEnvironmentVariables.list()[0]?.steps[0]?.environmentVariables).toBeUndefined();
+
+    const profileWithMaterializedStep: ExecutionProfile = {
+      ...profile,
+      id: "materialized",
+      steps: [{
+        ...profile.steps[0]!,
+        arguments: ["-m", "celery"],
+        target: {
+          providerId: "python-environments",
+          kindId: "module",
+          value: "celery",
+        },
+      }],
+    };
+    const materializedManager = new ExecutionProfileManager([profileWithMaterializedStep]);
+    const materializedCopy = materializedManager.get(profileWithMaterializedStep.id)!;
+    (materializedCopy.steps[0]?.arguments as string[]).push("mutated");
+    (materializedCopy.steps[0]!.target as { value: string }).value = "mutated";
+    expect(materializedManager.get(profileWithMaterializedStep.id)?.steps[0]?.arguments).toEqual(["-m", "celery"]);
+    expect(materializedManager.get(profileWithMaterializedStep.id)?.steps[0]?.target?.value).toBe("celery");
   });
 
   it("handles selection and removal edge cases", () => {

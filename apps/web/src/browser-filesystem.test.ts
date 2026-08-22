@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  browserFileSystemAccessError,
   listDirectory,
   inspectBrowserFile,
+  isBrowserFileSystemAccessDenied,
   copyWorkspaceEntry,
   copyWorkspaceEntries,
   moveWorkspaceEntry,
@@ -46,6 +48,24 @@ function directoryHandle(name: string, children: readonly (BrowserFileHandle | B
 }
 
 describe("browser filesystem", () => {
+  it("classifies browser workspace permission failures", () => {
+    expect(isBrowserFileSystemAccessDenied("permission denied")).toBe(false);
+
+    const named = (name: string, message = "") => {
+      const error = new Error(message);
+      error.name = name;
+      return error;
+    };
+
+    expect(isBrowserFileSystemAccessDenied(named("NotAllowedError"))).toBe(true);
+    expect(isBrowserFileSystemAccessDenied(named("SecurityError"))).toBe(true);
+    expect(isBrowserFileSystemAccessDenied(new Error("Request is not allowed by the user agent"))).toBe(true);
+    expect(isBrowserFileSystemAccessDenied(new Error("Not allowed by the user agent or the platform"))).toBe(true);
+    expect(isBrowserFileSystemAccessDenied(new Error("Permission denied while opening the workspace"))).toBe(true);
+    expect(isBrowserFileSystemAccessDenied(new Error("ordinary filesystem failure"))).toBe(false);
+    expect(browserFileSystemAccessError().message).toContain("Reconecte ou reabra a pasta");
+  });
+
   it("lists directories before files and sorts names", async () => {
     const alpha = directoryHandle("alpha", []);
     const zeta = directoryHandle("zeta", []);
@@ -482,12 +502,40 @@ describe("browser filesystem", () => {
       "target/main.py",
       "target/assets",
     ]);
-    await expect(copyWorkspaceEntry(root, "main.py", "target")).resolves.toBe("target/main copia.py");
+    await expect(copyWorkspaceEntry(root, "target/main.py", "target")).resolves.toBe("target/main copia.py");
+    await expect(copyWorkspaceEntry(root, "main.py", "target")).resolves.toBe("target/main copia 2.py");
+    await expect(copyWorkspaceEntry(root, "assets", "target")).resolves.toBe("target/assets copia");
     expect(copiedFiles.has("main.py")).toBe(true);
     expect(copiedFiles.has("main copia.py")).toBe(true);
+    expect(copiedFiles.has("main copia 2.py")).toBe(true);
     expect(copiedDirectories.has("assets")).toBe(true);
+    expect(copiedDirectories.has("assets copia")).toBe(true);
+    await expect(copyWorkspaceEntry(root, "", "target"))
+      .rejects.toThrow("O caminho do recurso está vazio.");
+    await expect(copyWorkspaceEntry(root, "assets", "assets"))
+      .rejects.toThrow("dentro dela mesma");
+    await expect(copyWorkspaceEntry(root, "assets", "assets/nested"))
+      .rejects.toThrow("dentro dela mesma");
     await expect(copyWorkspaceEntries(root, ["main.py", "assets"], "assets/nested"))
       .rejects.toThrow("dentro dela mesma");
+
+    const rootCopies = new Map<string, BrowserFileHandle>([["main.py", sourceFile]]);
+    const sameDirectoryRoot: BrowserDirectoryHandle = {
+      kind: "directory",
+      name: "root",
+      async *values() { yield* rootCopies.values(); },
+      async getFileHandle(name, options) {
+        const existing = rootCopies.get(name);
+        if (existing) return existing;
+        if (!options?.create) throw new Error("missing file");
+        const created = fileHandle(name);
+        rootCopies.set(name, created);
+        return created;
+      },
+      async getDirectoryHandle() { throw new Error("missing directory"); },
+    };
+    await expect(copyWorkspaceEntry(sameDirectoryRoot, "main.py", ""))
+      .resolves.toBe("main copia.py");
   });
 
   it("closes the stream even when writing fails", async () => {

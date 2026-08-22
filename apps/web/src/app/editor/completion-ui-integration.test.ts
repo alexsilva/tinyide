@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const appSource = readFileSync(resolve(__dirname, "../App.tsx"), "utf8");
+const popupSource = readFileSync(resolve(__dirname, "CompletionPopup.tsx"), "utf8");
 
 describe("editor completion UI wiring", () => {
   it("requests completions from editor typing instead of only defining providers", () => {
@@ -17,6 +18,7 @@ describe("editor completion UI wiring", () => {
     expect(appSource).toContain("event.key === \"Enter\" || event.key === \"Tab\"");
     expect(appSource).toContain("event.key === \".\"");
     expect(appSource).toContain("requestCompletions(activeDocument, event.currentTarget, { immediate: true })");
-    expect(appSource).toContain("className=\"editor-completion-popup\"");
+    expect(appSource).toContain("<CompletionPopup");
+    expect(popupSource).toContain("className=\"editor-completion-popup\"");
   });
 });

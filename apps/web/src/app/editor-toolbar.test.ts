@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const appSource = fs.readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+const titlebarSource = fs.readFileSync(new URL("./workbench/WorkbenchTitlebar.tsx", import.meta.url), "utf8");
 
 describe("editor toolbar contributions", () => {
   it("keeps disabled plugin actions visible and disables their buttons", () => {
@@ -19,9 +20,10 @@ describe("editor toolbar contributions", () => {
   });
 
   it("uses a compact dropdown trigger for the execution profile selector", () => {
-    expect(appSource).toContain('className="execution-profile-select"');
-    expect(appSource).toContain('className="execution-profile-select__label"');
-    expect(appSource).toContain("<DropdownMenu.Trigger asChild>");
-    expect(appSource).not.toContain('<select\n              className="execution-profile-select"');
+    expect(appSource).toContain("<WorkbenchTitlebar");
+    expect(titlebarSource).toContain('className="execution-profile-select"');
+    expect(titlebarSource).toContain('className="execution-profile-select__label"');
+    expect(titlebarSource).toContain("<DropdownMenu.Trigger asChild>");
+    expect(titlebarSource).not.toContain('<select\n              className="execution-profile-select"');
   });
 });

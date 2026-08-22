@@ -105,8 +105,17 @@ describe("App wiring", () => {
   });
 
   it("keeps ruler and syntax window subscribed to the store", () => {
+    const rulerSource = readFileSync(
+      ["src/app/editor/EditorLineRuler.tsx", "apps/web/src/app/editor/EditorLineRuler.tsx"].find((path) => existsSync(path)) ?? "src/app/editor/EditorLineRuler.tsx",
+      "utf8",
+    );
+    const syntaxWindowSource = readFileSync(
+      ["src/app/editor/WindowedHighlightedSource.tsx", "apps/web/src/app/editor/WindowedHighlightedSource.tsx"].find((path) => existsSync(path)) ?? "src/app/editor/WindowedHighlightedSource.tsx",
+      "utf8",
+    );
     expect(appSource).toContain("<EditorLineRuler");
     expect(appSource).toContain("<WindowedHighlightedSource");
-    expect(appSource).toContain("useEditorViewportLineRange(");
+    expect(rulerSource).toContain("useEditorViewportLineRange(");
+    expect(syntaxWindowSource).toContain("useEditorViewportLineRange(");
   });
 });

@@ -299,8 +299,8 @@
 .profile-preset-select { width: 100%; min-height: 30px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-input); color: var(--text); padding: 0 8px; font-size: 12px; }
 .section-title-row { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; }
 .section-title-row span { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 999px; background: var(--surface-3); }
-.profile-list { display: grid; align-content: start; gap: 6px; overflow: auto; }
-.profile-card { position: relative; width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); color: var(--text); overflow: hidden; }
+.profile-list { display: flex; min-height: 0; flex-direction: column; gap: 6px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.profile-card { position: relative; flex: 0 0 auto; width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); color: var(--text); overflow: hidden; }
 .profile-card.is-active { border-color: var(--accent); background: var(--accent-soft); }
 .profile-card__select { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; width: 100%; min-width: 0; padding: 9px 36px 9px 9px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .profile-card__select:hover { background: rgb(255 255 255 / 3%); }

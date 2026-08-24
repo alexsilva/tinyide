@@ -9,11 +9,11 @@ import {
 
 describe("editor settings", () => {
   it("enables line numbers by default", () => {
-    expect(resolveEditorSettings({ version: 1 })).toEqual({ lineNumbers: true });
+    expect(resolveEditorSettings()).toEqual({ lineNumbers: true });
   });
 
-  it("respects an explicit workspace override", () => {
-    expect(resolveEditorSettings({ version: 1, editor: { lineNumbers: false } }))
+  it("respects an explicit user preference", () => {
+    expect(resolveEditorSettings({ lineNumbers: false }))
       .toEqual({ lineNumbers: false });
   });
 

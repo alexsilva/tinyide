@@ -5,8 +5,6 @@ import type {
 import { WORKBENCH_THEME_CSS_VARIABLES } from "@tinyide/plugin-api";
 import type { TinyIdePlatform } from "../platform";
 
-const THEME_STORAGE_KEY = "tinyide.appearance.theme.v1";
-const DESKTOP_THEME_STATE_KEY = "appearance-theme";
 const DEFAULT_THEME_ID = "tinyide.neutral";
 
 export const THEME_TOKEN_CSS_PROPERTIES = WORKBENCH_THEME_CSS_VARIABLES;
@@ -27,46 +25,6 @@ export function workbenchThemes(platform: TinyIdePlatform): readonly WorkbenchTh
   return [...selected.values()]
     .map(({ theme }) => theme)
     .sort((left, right) => (left.order ?? 0) - (right.order ?? 0) || left.label.localeCompare(right.label));
-}
-
-export function readThemePreference(storage: Pick<Storage, "getItem"> = localStorage): string {
-  try {
-    const value = storage.getItem(THEME_STORAGE_KEY)?.trim();
-    return value || DEFAULT_THEME_ID;
-  } catch {
-    return DEFAULT_THEME_ID;
-  }
-}
-
-export function writeThemePreference(
-  themeId: string,
-  storage: Pick<Storage, "setItem"> = localStorage,
-): void {
-  storage.setItem(THEME_STORAGE_KEY, themeId);
-}
-
-export async function readPersistedThemePreference(): Promise<string> {
-  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
-  if (desktop?.readState) {
-    try {
-      const value = await desktop.readState(DESKTOP_THEME_STATE_KEY);
-      if (typeof value === "string" && value.trim()) return value;
-    } catch (error) {
-      console.warn("Não foi possível restaurar o tema da aplicação.", error);
-    }
-  }
-  return readThemePreference();
-}
-
-export async function persistThemePreference(themeId: string): Promise<void> {
-  writeThemePreference(themeId);
-  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
-  if (!desktop?.writeState) return;
-  try {
-    await desktop.writeState(DESKTOP_THEME_STATE_KEY, themeId);
-  } catch (error) {
-    console.warn("Não foi possível persistir o tema da aplicação no desktop.", error);
-  }
 }
 
 export function resolveTheme(
@@ -94,6 +52,5 @@ export function applyWorkbenchTheme(
 }
 
 export const workbenchThemeDefaults = {
-  storageKey: THEME_STORAGE_KEY,
   themeId: DEFAULT_THEME_ID,
 } as const;

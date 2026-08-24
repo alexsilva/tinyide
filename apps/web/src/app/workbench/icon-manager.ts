@@ -5,8 +5,6 @@ import type {
 } from "@tinyide/plugin-api";
 import type { TinyIdePlatform } from "../platform";
 
-const ICON_PACK_STORAGE_KEY = "tinyide.appearance.icon-pack.v1";
-const DESKTOP_ICON_PACK_STATE_KEY = "appearance-icon-pack";
 const DEFAULT_ICON_PACK_ID = "tinyide.default";
 const FALLBACK_ICON_ID = "box";
 
@@ -29,46 +27,6 @@ export function workbenchIconPacks(platform: TinyIdePlatform): readonly Workbenc
   return [...selected.values()]
     .map(({ pack }) => pack)
     .sort((left, right) => (left.order ?? 0) - (right.order ?? 0) || left.label.localeCompare(right.label));
-}
-
-export function readIconPackPreference(storage: Pick<Storage, "getItem"> = localStorage): string {
-  try {
-    const value = storage.getItem(ICON_PACK_STORAGE_KEY)?.trim();
-    return value || DEFAULT_ICON_PACK_ID;
-  } catch {
-    return DEFAULT_ICON_PACK_ID;
-  }
-}
-
-export function writeIconPackPreference(
-  packId: string,
-  storage: Pick<Storage, "setItem"> = localStorage,
-): void {
-  storage.setItem(ICON_PACK_STORAGE_KEY, packId);
-}
-
-export async function readPersistedIconPackPreference(): Promise<string> {
-  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
-  if (desktop?.readState) {
-    try {
-      const value = await desktop.readState(DESKTOP_ICON_PACK_STATE_KEY);
-      if (typeof value === "string" && value.trim()) return value;
-    } catch (error) {
-      console.warn("Não foi possível restaurar o pacote de ícones da aplicação.", error);
-    }
-  }
-  return readIconPackPreference();
-}
-
-export async function persistIconPackPreference(packId: string): Promise<void> {
-  writeIconPackPreference(packId);
-  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
-  if (!desktop?.writeState) return;
-  try {
-    await desktop.writeState(DESKTOP_ICON_PACK_STATE_KEY, packId);
-  } catch (error) {
-    console.warn("Não foi possível persistir o pacote de ícones no desktop.", error);
-  }
 }
 
 export function resolveIconPack(
@@ -171,7 +129,6 @@ export function subscribeWorkbenchIcons(listener: () => void): () => void {
 }
 
 export const workbenchIconDefaults = {
-  storageKey: ICON_PACK_STORAGE_KEY,
   packId: DEFAULT_ICON_PACK_ID,
   fallbackIconId: FALLBACK_ICON_ID,
 } as const;

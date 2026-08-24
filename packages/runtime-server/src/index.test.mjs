@@ -216,6 +216,43 @@ describe("runtime server hardening", () => {
     expect(pluginRequest.status).toBe(409);
   });
 
+  it("serves workspace resources through a reconstructible host-backed API", async () => {
+    const { runtime, workspaceRoot } = await fixture();
+    await mkdir(join(workspaceRoot, "src"));
+    await writeFile(join(workspaceRoot, "src", "main.txt"), "before");
+
+    const list = await fetch(`${runtime.url}/core-api/workspace/resources?path=src`);
+    expect(list.status).toBe(200);
+    await expect(list.json()).resolves.toEqual([
+      { name: "main.txt", kind: "file" },
+    ]);
+
+    const read = await fetch(`${runtime.url}/core-api/workspace/resource?path=src%2Fmain.txt`);
+    expect(read.status).toBe(200);
+    await expect(read.text()).resolves.toBe("before");
+
+    const write = await fetch(`${runtime.url}/core-api/workspace/resource?path=src%2Fmain.txt`, {
+      method: "PUT",
+      headers: { "content-type": "application/octet-stream" },
+      body: "after",
+    });
+    expect(write.status).toBe(200);
+    await expect(readFile(join(workspaceRoot, "src", "main.txt"), "utf8")).resolves.toBe("after");
+
+    const create = await fetch(`${runtime.url}/core-api/workspace/resources`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "src/new.txt", kind: "file", create: true }),
+    });
+    expect(create.status).toBe(200);
+
+    const remove = await fetch(`${runtime.url}/core-api/workspace/resource?path=src%2Fnew.txt`, {
+      method: "DELETE",
+    });
+    expect(remove.status).toBe(200);
+    await expect(readFile(join(workspaceRoot, "src", "new.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("isolates workspace selection between browser sessions", async () => {
     const { runtime, root, workspaceRoot } = await fixture();
     const secondWorkspace = join(root, "second-workspace");

@@ -255,6 +255,7 @@ async function startRuntime() {
     hostRoot: appRoot,
     webRoot: join(appRoot, "apps/web/dist"),
     pluginsRoot: join(appRoot, "plugins"),
+    userDataRoot: app.getPath("userData"),
     workspaceSearchRoot: process.env.TINYIDE_WORKSPACES_ROOT || app.getPath("home"),
     requireWorkspacePath: true,
     workspacePathAllowed(candidate) {

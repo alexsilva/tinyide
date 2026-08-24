@@ -3,7 +3,7 @@ import type { WorkbenchFontDefinition, WorkbenchFontProvider } from "@tinyide/pl
 import {
   applyWorkbenchFonts,
   clampEditorFontSize,
-  readFontPreferences,
+  defaultFontPreferences,
   resolveFont,
   workbenchFontDefaults,
   workbenchFonts,
@@ -39,20 +39,17 @@ describe("font manager", () => {
     expect(resolveFont([first], "editor", "missing")).toBeUndefined();
   });
 
-  it("uses the defaults when storage is empty, corrupt or unavailable", () => {
+  it("uses defaults when preferences are absent", () => {
     const defaults = {
       editorFontId: workbenchFontDefaults.editorFontId,
       interfaceFontId: workbenchFontDefaults.interfaceFontId,
       editorFontSize: workbenchFontDefaults.editorFontSize,
     };
-    expect(readFontPreferences({ getItem: () => null })).toEqual(defaults);
-    expect(readFontPreferences({ getItem: () => "not json" })).toEqual(defaults);
-    expect(readFontPreferences({ getItem: () => { throw new Error("blocked"); } })).toEqual(defaults);
+    expect(defaultFontPreferences()).toEqual(defaults);
   });
 
   it("restores partial preferences and clamps the font size", () => {
-    const stored = JSON.stringify({ editorFontId: "custom", editorFontSize: 90 });
-    const preferences = readFontPreferences({ getItem: () => stored });
+    const preferences = defaultFontPreferences({ editorFontId: "custom", editorFontSize: 90 });
     expect(preferences.editorFontId).toBe("custom");
     expect(preferences.interfaceFontId).toBe(workbenchFontDefaults.interfaceFontId);
     expect(preferences.editorFontSize).toBe(workbenchFontDefaults.maxEditorFontSize);

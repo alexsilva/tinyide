@@ -1,10 +1,11 @@
 import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { realpath, stat } from "node:fs/promises";
+import { mkdir, readFile, realpath, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createExecutionBackend } from "./execution-backend.mjs";
+import { createExecutionBackend, createWorkspacePluginConfiguration } from "./execution-backend.mjs";
+import { createUserDataBackend, defaultTinyIdeUserDataRoot } from "./user-data-backend.mjs";
 
 const CONTENT_TYPES = {
   ".css": "text/css; charset=utf-8",
@@ -19,6 +20,7 @@ const CONTENT_TYPES = {
   ".webp": "image/webp",
 };
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
+const MAX_WORKSPACE_RESOURCE_BYTES = 128 * 1024 * 1024;
 const MANIFEST_CACHE_TTL_MS = 1000;
 const CDN_ORIGIN = "https://cdn.jsdelivr.net";
 const DEFAULT_SESSION_ID = "default";
@@ -104,6 +106,21 @@ async function readJson(request) {
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
 }
 
+async function readBinary(request, maxBytes = MAX_WORKSPACE_RESOURCE_BYTES) {
+  const chunks = [];
+  let totalBytes = 0;
+  for await (const chunk of request) {
+    totalBytes += chunk.length;
+    if (totalBytes > maxBytes) {
+      const error = new Error("O arquivo excede o limite permitido pelo runtime.");
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  return chunks.length ? Buffer.concat(chunks) : Buffer.alloc(0);
+}
+
 function safeFile(root, path) {
   const normalizedPath = normalize(path).replace(/^([/\\])+/, "");
   const absolutePath = resolve(root, normalizedPath);
@@ -141,6 +158,8 @@ export function createTinyIdeRuntime(options) {
   const pluginsRoot = resolve(options.pluginsRoot ?? join(hostRoot, "plugins"));
   const webRoot = options.webRoot ? resolve(options.webRoot) : undefined;
   const workspaceSearchRoot = resolve(options.workspaceSearchRoot ?? process.env.TINYIDE_WORKSPACES_ROOT ?? dirname(hostRoot));
+  const userDataRoot = resolve(options.userDataRoot ?? defaultTinyIdeUserDataRoot());
+  const userDataBackend = createUserDataBackend({ root: userDataRoot });
   // O motivo distingue recargas rotineiras (rebuild de plugin, limpeza de
   // cache), em que backends devem preservar recursos reataráveis, da troca ou
   // fechamento de workspace ("workspace-switch"), em que devem encerrá-los.
@@ -215,6 +234,39 @@ export function createTinyIdeRuntime(options) {
       throw new Error("O caminho solicitado está fora do workspace.");
     }
     return (await stat(resolvedTarget)).isDirectory() ? resolvedTarget : dirname(resolvedTarget);
+  }
+
+  async function workspaceResourcePath(activeWorkspaceRoot, workspacePath, allowMissing = false) {
+    if (!activeWorkspaceRoot) {
+      const error = new Error("Abra um workspace antes de acessar arquivos.");
+      error.statusCode = 409;
+      throw error;
+    }
+    const target = safeFile(activeWorkspaceRoot, typeof workspacePath === "string" ? workspacePath : "");
+    if (!target) {
+      const error = new Error("O caminho solicitado está fora do workspace.");
+      error.statusCode = 400;
+      throw error;
+    }
+    const realWorkspaceRoot = await realpath(activeWorkspaceRoot);
+    let probe = target;
+    while (!existsSync(probe)) {
+      if (!allowMissing) {
+        const error = new Error("O recurso solicitado não existe.");
+        error.statusCode = 404;
+        throw error;
+      }
+      const parent = dirname(probe);
+      if (parent === probe) break;
+      probe = parent;
+    }
+    const realProbe = await realpath(probe);
+    if (realProbe !== realWorkspaceRoot && !realProbe.startsWith(`${realWorkspaceRoot}${sep}`)) {
+      const error = new Error("O caminho solicitado resolve para fora do workspace.");
+      error.statusCode = 400;
+      throw error;
+    }
+    return target;
   }
 
   function isInsideWorkspaceSearchRoot(candidate) {
@@ -292,7 +344,10 @@ export function createTinyIdeRuntime(options) {
       }
       const imported = await import(`${pathToFileURL(backendPath).href}?v=${backendMtime}`);
       if (typeof imported.createBackend !== "function") throw new Error(`Plugin backend must export createBackend(): ${pluginId}`);
-      const handler = imported.createBackend({workspaceRoot: activeWorkspaceRoot});
+      const handler = imported.createBackend({
+        workspaceRoot: activeWorkspaceRoot,
+        configuration: createWorkspacePluginConfiguration(activeWorkspaceRoot, pluginId),
+      });
       context.backendHandlers.set(cacheKey, {mtime: backendMtime, handler});
       return handler;
     }
@@ -371,10 +426,140 @@ export function createTinyIdeRuntime(options) {
       return;
     }
 
+    if (requestUrl.pathname === "/core-api/workspace/resources") {
+      if (request.method === "GET") {
+        void workspaceResourcePath(context.workspaceRoot, requestUrl.searchParams.get("path") ?? "")
+          .then(async (directory) => {
+            const directoryStat = await stat(directory);
+            if (!directoryStat.isDirectory()) {
+              const error = new Error("O recurso solicitado não é um diretório.");
+              error.statusCode = 400;
+              throw error;
+            }
+            const entries = await readdir(directory, { withFileTypes: true });
+            writeJson(response, 200, entries
+              .filter((entry) => entry.isFile() || entry.isDirectory())
+              .map((entry) => ({ name: entry.name, kind: entry.isDirectory() ? "directory" : "file" })));
+          })
+          .catch((error) => writeJson(
+            response,
+            Number.isInteger(error?.statusCode) ? error.statusCode : 500,
+            { error: error instanceof Error ? error.message : String(error) },
+          ));
+        return;
+      }
+      if (request.method === "POST") {
+        void readJson(request).then(async (payload) => {
+          const path = typeof payload.path === "string" ? payload.path : "";
+          const kind = payload.kind === "directory" ? "directory" : payload.kind === "file" ? "file" : undefined;
+          if (!path || !kind) {
+            const error = new Error("Caminho e tipo do recurso são obrigatórios.");
+            error.statusCode = 400;
+            throw error;
+          }
+          const target = await workspaceResourcePath(context.workspaceRoot, path, payload.create === true);
+          if (existsSync(target)) {
+            const targetStat = await stat(target);
+            if ((kind === "directory") !== targetStat.isDirectory()) {
+              const error = new Error(`O recurso '${path}' existe com outro tipo.`);
+              error.statusCode = 409;
+              throw error;
+            }
+          } else if (payload.create === true) {
+            if (kind === "directory") await mkdir(target);
+            else await writeFile(target, Buffer.alloc(0), { flag: "wx" });
+          } else {
+            const error = new Error("O recurso solicitado não existe.");
+            error.statusCode = 404;
+            throw error;
+          }
+          writeJson(response, 200, { ok: true });
+        }).catch((error) => writeJson(
+          response,
+          Number.isInteger(error?.statusCode) ? error.statusCode : 500,
+          { error: error instanceof Error ? error.message : String(error) },
+        ));
+        return;
+      }
+    }
+
+    if (requestUrl.pathname === "/core-api/workspace/resource") {
+      const resourcePath = requestUrl.searchParams.get("path") ?? "";
+      if (request.method === "GET") {
+        void workspaceResourcePath(context.workspaceRoot, resourcePath)
+          .then(async (target) => {
+            const targetStat = await stat(target);
+            if (!targetStat.isFile()) {
+              const error = new Error("O recurso solicitado não é um arquivo.");
+              error.statusCode = 400;
+              throw error;
+            }
+            response.statusCode = 200;
+            response.setHeader("Content-Type", "application/octet-stream");
+            response.setHeader("Content-Length", String(targetStat.size));
+            response.setHeader("X-TinyIde-Last-Modified", String(targetStat.mtimeMs));
+            response.setHeader("Cache-Control", "no-store");
+            createReadStream(target).pipe(response);
+          })
+          .catch((error) => {
+            if (!response.headersSent && !response.writableEnded) {
+              writeJson(response, Number.isInteger(error?.statusCode) ? error.statusCode : 500, {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          });
+        return;
+      }
+      if (request.method === "PUT") {
+        void Promise.all([
+          workspaceResourcePath(context.workspaceRoot, resourcePath),
+          readBinary(request),
+        ]).then(async ([target, bytes]) => {
+          const targetStat = await stat(target);
+          if (!targetStat.isFile()) {
+            const error = new Error("O recurso solicitado não é um arquivo.");
+            error.statusCode = 400;
+            throw error;
+          }
+          await writeFile(target, bytes);
+          writeJson(response, 200, { ok: true });
+        }).catch((error) => writeJson(
+          response,
+          Number.isInteger(error?.statusCode) ? error.statusCode : 500,
+          { error: error instanceof Error ? error.message : String(error) },
+        ));
+        return;
+      }
+      if (request.method === "DELETE") {
+        void workspaceResourcePath(context.workspaceRoot, resourcePath)
+          .then(async (target) => {
+            if (target === context.workspaceRoot) {
+              const error = new Error("A raiz do workspace não pode ser removida.");
+              error.statusCode = 400;
+              throw error;
+            }
+            const targetStat = await stat(target);
+            await rm(target, {
+              recursive: targetStat.isDirectory() && requestUrl.searchParams.get("recursive") === "1",
+              force: false,
+            });
+            writeJson(response, 200, { ok: true });
+          })
+          .catch((error) => writeJson(
+            response,
+            Number.isInteger(error?.statusCode) ? error.statusCode : 500,
+            { error: error instanceof Error ? error.message : String(error) },
+          ));
+        return;
+      }
+    }
+
     if (requestUrl.pathname.startsWith("/core-api/")) {
       // Uma rejeição não tratada aqui derruba o processo Node inteiro — e com
       // ele todos os PTYs de terminal hospedados neste runtime.
-      void Promise.resolve(context.executionBackend(request, response, requestUrl.pathname.slice("/core-api".length)))
+      const apiPath = requestUrl.pathname.slice("/core-api".length);
+      void Promise.resolve(userDataBackend(request, response, apiPath))
+        .then((handled) => handled ? undefined : context.executionBackend(request, response, apiPath))
         .catch((error) => {
           if (!response.headersSent && !response.writableEnded) {
             writeJson(response, 500, {error: error instanceof Error ? error.message : String(error)});
@@ -462,6 +647,7 @@ export function createTinyIdeRuntime(options) {
 
   return {
     middleware,
+    userDataRoot,
     pluginsRoot,
     webRoot,
     get workspaceRoot() { return sessionContext().workspaceRoot; },

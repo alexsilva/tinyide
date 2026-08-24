@@ -137,6 +137,12 @@
 .settings-workspace-badge svg { flex: 0 0 auto; color: var(--accent); }
 .settings-layout { display: grid; flex: 1; min-height: 0; overflow: hidden; grid-template-columns: 224px minmax(0, 1fr); background: var(--surface-panel); }
 .settings-navigation { display: flex; min-width: 0; padding: 13px 10px; overflow: auto; flex-direction: column; gap: 4px; border-right: 1px solid var(--border); background: var(--surface-sidebar); }
+.settings-scope-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin: 0 2px 6px; }
+.settings-scope-switch button { justify-content: center; padding-inline: 7px; }
+.settings-scope-switch button.is-active { box-shadow: none; }
+.settings-inline-actions { display: flex; align-items: center; gap: 8px; }
+.settings-inherit-button { width: fit-content; margin-top: 4px; border: 0; padding: 0; background: transparent; color: var(--accent); font: inherit; font-size: 10px; cursor: pointer; }
+.settings-inherit-button:hover { text-decoration: underline; }
 .settings-navigation button { position: relative; display: flex; align-items: center; min-width: 0; gap: 10px; border: 1px solid transparent; border-radius: 7px; padding: 9px 10px; background: transparent; color: var(--muted); font: inherit; text-align: left; cursor: pointer; }
 .settings-navigation button:hover { border-color: var(--border); background: var(--surface-3); color: var(--text); }
 .settings-navigation button.is-active { border-color: var(--accent); background: var(--accent-soft); color: var(--text); box-shadow: inset 3px 0 var(--accent); }

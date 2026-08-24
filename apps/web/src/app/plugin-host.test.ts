@@ -18,6 +18,11 @@ const plugin = (frontend?: string): PluginRecord => ({
 
 const context = (): PluginContext => ({
   backend: { request: vi.fn() },
+  configuration: {
+    read: vi.fn(async () => ({})),
+    replace: vi.fn(async (_scope, value) => value),
+    update: vi.fn(async (_scope, patch) => patch),
+  },
   commands: {} as PluginContext["commands"],
   events: {} as PluginContext["events"],
   extensions: {} as PluginContext["extensions"],

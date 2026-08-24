@@ -198,6 +198,152 @@ class DesktopDirectoryHandleImpl implements DesktopDirectoryHandle {
   }
 }
 
+class RuntimeFileHandle implements BrowserFileHandle {
+  readonly kind = "file" as const;
+  readonly name: string;
+
+  constructor(private readonly path: string) {
+    this.name = fileName(path);
+  }
+
+  async getFile(): Promise<File> {
+    const response = await projectRuntimeFetch(`/core-api/workspace/resource?path=${encodeURIComponent(this.path)}`, {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => undefined) as { readonly error?: string } | undefined;
+      throw new Error(payload?.error ?? `Não foi possível ler '${this.path}'.`);
+    }
+    const bytes = await response.arrayBuffer();
+    const lastModified = Number(response.headers.get("x-tinyide-last-modified"));
+    return new File([bytes], this.name, {
+      ...(Number.isFinite(lastModified) ? { lastModified } : {}),
+    });
+  }
+
+  async createWritable(): Promise<BrowserWritableFileStream> {
+    const parts: BlobPart[] = [];
+    return {
+      write: async (data) => {
+        parts.push(writablePart(data));
+      },
+      close: async () => {
+        const response = await projectRuntimeFetch(`/core-api/workspace/resource?path=${encodeURIComponent(this.path)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: await new Blob(parts).arrayBuffer(),
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => undefined) as { readonly error?: string } | undefined;
+          throw new Error(payload?.error ?? `Não foi possível salvar '${this.path}'.`);
+        }
+      },
+    };
+  }
+
+  async queryPermission(): Promise<PermissionState> {
+    return "granted";
+  }
+
+  async requestPermission(): Promise<PermissionState> {
+    return "granted";
+  }
+}
+
+export interface RuntimeDirectoryHandle extends BrowserDirectoryHandle {
+  readonly runtimeWorkspaceRoot: string;
+}
+
+class RuntimeDirectoryHandleImpl implements RuntimeDirectoryHandle {
+  readonly kind = "directory" as const;
+  readonly name: string;
+  readonly runtimeWorkspaceRoot: string;
+
+  constructor(
+    private readonly workspaceName: string,
+    workspaceRoot: string,
+    private readonly path = "",
+  ) {
+    this.name = path ? fileName(path) : workspaceName;
+    this.runtimeWorkspaceRoot = workspaceRoot;
+  }
+
+  async *values(): AsyncIterableIterator<BrowserFileHandle | BrowserDirectoryHandle> {
+    const response = await projectRuntimeFetch(`/core-api/workspace/resources?path=${encodeURIComponent(this.path)}`, {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => undefined) as { readonly error?: string } | undefined;
+      throw new Error(payload?.error ?? `Não foi possível listar '${this.path || this.name}'.`);
+    }
+    const entries = await response.json() as readonly DesktopWorkspaceEntryDescriptor[];
+    for (const entry of entries) {
+      const childPath = joinWorkspacePath(this.path, entry.name);
+      yield entry.kind === "directory"
+        ? new RuntimeDirectoryHandleImpl(this.workspaceName, this.runtimeWorkspaceRoot, childPath)
+        : new RuntimeFileHandle(childPath);
+    }
+  }
+
+  async getFileHandle(name: string, options?: { readonly create?: boolean }): Promise<BrowserFileHandle> {
+    const childPath = joinWorkspacePath(this.path, name);
+    await ensureRuntimeResource(childPath, "file", options?.create === true);
+    return new RuntimeFileHandle(childPath);
+  }
+
+  async getDirectoryHandle(name: string, options?: { readonly create?: boolean }): Promise<BrowserDirectoryHandle> {
+    const childPath = joinWorkspacePath(this.path, name);
+    await ensureRuntimeResource(childPath, "directory", options?.create === true);
+    return new RuntimeDirectoryHandleImpl(this.workspaceName, this.runtimeWorkspaceRoot, childPath);
+  }
+
+  async removeEntry(name: string, options?: { readonly recursive?: boolean }): Promise<void> {
+    const childPath = joinWorkspacePath(this.path, name);
+    const response = await projectRuntimeFetch(
+      `/core-api/workspace/resource?path=${encodeURIComponent(childPath)}&recursive=${options?.recursive === true ? "1" : "0"}`,
+      { method: "DELETE" },
+    );
+    if (!response.ok) {
+      const payload = await response.json().catch(() => undefined) as { readonly error?: string } | undefined;
+      throw new Error(payload?.error ?? `Não foi possível remover '${childPath}'.`);
+    }
+  }
+
+  async queryPermission(): Promise<PermissionState> {
+    return "granted";
+  }
+
+  async requestPermission(): Promise<PermissionState> {
+    return "granted";
+  }
+}
+
+async function ensureRuntimeResource(
+  path: string,
+  kind: "file" | "directory",
+  create: boolean,
+): Promise<void> {
+  const response = await projectRuntimeFetch("/core-api/workspace/resources", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, kind, create }),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => undefined) as { readonly error?: string } | undefined;
+    throw new Error(payload?.error ?? `Não foi possível acessar '${path}'.`);
+  }
+}
+
+export function runtimeWorkspaceHandle(workspaceName: string, workspaceRoot: string): BrowserDirectoryHandle {
+  return new RuntimeDirectoryHandleImpl(workspaceName, workspaceRoot);
+}
+
+export function isRuntimeWorkspaceHandle(
+  handle: BrowserDirectoryHandle | undefined,
+): handle is RuntimeDirectoryHandle {
+  return Boolean(handle && "runtimeWorkspaceRoot" in handle);
+}
+
 export function isDesktopHost(): boolean {
   return typeof window !== "undefined" && supportsDesktopWorkspace(window.tinyideDesktop);
 }
@@ -348,6 +494,7 @@ export async function workspaceRootHintForHandle(
     : window.tinyideDesktop,
 ): Promise<string | undefined> {
   if (isDesktopWorkspaceHandle(handle)) return handle.desktopWorkspaceRoot;
+  if (isRuntimeWorkspaceHandle(handle)) return handle.runtimeWorkspaceRoot;
   if (!desktop) return undefined;
 
   const backingFile = await findBackingFile(handle);

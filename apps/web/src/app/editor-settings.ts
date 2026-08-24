@@ -1,4 +1,4 @@
-import type { WorkspaceSettings } from "./workspace-settings";
+import type { WorkspaceEditorSettings } from "./workspace-settings";
 
 export interface ResolvedEditorSettings {
   readonly lineNumbers: boolean;
@@ -11,9 +11,11 @@ export const DEFAULT_EDITOR_SETTINGS: ResolvedEditorSettings = {
 export const EDITOR_DEFAULT_LINE_HEIGHT = 21.45;
 export const EDITOR_CONTENT_PADDING = 18;
 
-export function resolveEditorSettings(settings: WorkspaceSettings): ResolvedEditorSettings {
+export function resolveEditorSettings(
+  userSettings?: WorkspaceEditorSettings,
+): ResolvedEditorSettings {
   return {
-    lineNumbers: settings.editor?.lineNumbers !== false,
+    lineNumbers: userSettings?.lineNumbers ?? true,
   };
 }
 

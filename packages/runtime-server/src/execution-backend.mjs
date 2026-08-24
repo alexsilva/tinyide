@@ -9,6 +9,8 @@ const DEFAULT_MAX_OUTPUT_READ_CHARS = 64 * 1024;
 const DEFAULT_MAX_SNAPSHOT_STREAM_CHARS = 64 * 1024;
 const DEFAULT_MAX_SNAPSHOT_OUTPUT_CHARS = 128 * 1024;
 const WORKSPACE_SETTINGS_VERSION = 1;
+const PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
+const workspaceSettingsWrites = new Map();
 
 function writeJson(response, statusCode, value) {
   response.statusCode = statusCode;
@@ -263,7 +265,7 @@ async function stopProcessRecord(record, timeoutMs = 1_500) {
   await waitForProcessExit(record, timeoutMs);
 }
 
-function workspaceSettingsPath(workspaceRoot) {
+export function workspaceSettingsPath(workspaceRoot) {
   return join(workspaceRoot, ".tinyide", "settings.json");
 }
 
@@ -274,7 +276,7 @@ function normalizeWorkspaceSettings(value) {
   return { ...value, version: WORKSPACE_SETTINGS_VERSION };
 }
 
-async function readWorkspaceSettings(workspaceRoot) {
+export async function readWorkspaceSettings(workspaceRoot) {
   try {
     return normalizeWorkspaceSettings(JSON.parse(await readFile(workspaceSettingsPath(workspaceRoot), "utf8")));
   } catch (error) {
@@ -284,7 +286,7 @@ async function readWorkspaceSettings(workspaceRoot) {
   }
 }
 
-async function writeWorkspaceSettings(workspaceRoot, value) {
+export async function writeWorkspaceSettings(workspaceRoot, value) {
   const settings = normalizeWorkspaceSettings(value);
   const settingsPath = workspaceSettingsPath(workspaceRoot);
   const temporaryPath = `${settingsPath}.${randomUUID()}.tmp`;
@@ -292,6 +294,77 @@ async function writeWorkspaceSettings(workspaceRoot, value) {
   await writeFile(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
   await rename(temporaryPath, settingsPath);
   return settings;
+}
+
+export async function updateWorkspaceSettings(workspaceRoot, updater) {
+  const root = resolve(workspaceRoot);
+  const previous = workspaceSettingsWrites.get(root) ?? Promise.resolve();
+  const operation = previous.catch(() => undefined).then(async () => {
+    const current = await readWorkspaceSettings(root);
+    const next = await updater(current);
+    return writeWorkspaceSettings(root, next);
+  });
+  const tail = operation.then(() => undefined, () => undefined);
+  workspaceSettingsWrites.set(root, tail);
+  try {
+    return await operation;
+  } finally {
+    if (workspaceSettingsWrites.get(root) === tail) workspaceSettingsWrites.delete(root);
+  }
+}
+
+function normalizedPluginData(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function assertPluginId(pluginId) {
+  if (!PLUGIN_ID_PATTERN.test(pluginId)) throw new Error("Identificador de plugin inválido.");
+  return pluginId;
+}
+
+export async function readWorkspacePluginData(workspaceRoot, pluginId) {
+  const id = assertPluginId(pluginId);
+  const settings = await readWorkspaceSettings(workspaceRoot);
+  return normalizedPluginData(settings.pluginData?.[id]);
+}
+
+export async function replaceWorkspacePluginData(workspaceRoot, pluginId, value) {
+  const id = assertPluginId(pluginId);
+  const data = normalizedPluginData(value);
+  const settings = await updateWorkspaceSettings(workspaceRoot, (current) => ({
+    ...current,
+    pluginData: {
+      ...(current.pluginData ?? {}),
+      [id]: data,
+    },
+  }));
+  return normalizedPluginData(settings.pluginData?.[id]);
+}
+
+export async function patchWorkspacePluginData(workspaceRoot, pluginId, patch) {
+  const id = assertPluginId(pluginId);
+  const delta = normalizedPluginData(patch);
+  const settings = await updateWorkspaceSettings(workspaceRoot, (current) => ({
+    ...current,
+    pluginData: {
+      ...(current.pluginData ?? {}),
+      [id]: {
+        ...normalizedPluginData(current.pluginData?.[id]),
+        ...delta,
+      },
+    },
+  }));
+  return normalizedPluginData(settings.pluginData?.[id]);
+}
+
+export function createWorkspacePluginConfiguration(workspaceRoot, pluginId) {
+  const root = resolve(workspaceRoot);
+  const id = assertPluginId(pluginId);
+  return Object.freeze({
+    read: () => readWorkspacePluginData(root, id),
+    replace: (value) => replaceWorkspacePluginData(root, id, value),
+    update: (patch) => patchWorkspacePluginData(root, id, patch),
+  });
 }
 
 function assertExpectedWorkspace(request, workspaceRoot) {
@@ -382,10 +455,32 @@ export function createExecutionBackend({
           return;
         }
         if (request.method === "PUT") {
-          writeJson(response, 200, await writeWorkspaceSettings(workspaceRoot, await readJson(request)));
+          const payload = await readJson(request);
+          writeJson(response, 200, await updateWorkspaceSettings(workspaceRoot, (current) => ({
+            ...payload,
+            ...(current.pluginData === undefined ? {} : { pluginData: current.pluginData }),
+          })));
           return;
         }
         writeJson(response, 405, { error: "Método não permitido para configuração do workspace." });
+        return;
+      }
+      if (relativePath.startsWith("/workspace/plugin-data/")) {
+        const pluginId = decodeURIComponent(relativePath.slice("/workspace/plugin-data/".length));
+        assertPluginId(pluginId);
+        if (request.method === "GET") {
+          writeJson(response, 200, await readWorkspacePluginData(workspaceRoot, pluginId));
+          return;
+        }
+        if (request.method === "PUT") {
+          writeJson(response, 200, await replaceWorkspacePluginData(workspaceRoot, pluginId, await readJson(request)));
+          return;
+        }
+        if (request.method === "PATCH") {
+          writeJson(response, 200, await patchWorkspacePluginData(workspaceRoot, pluginId, await readJson(request)));
+          return;
+        }
+        writeJson(response, 405, { error: "Método não permitido para dados de plugin do workspace." });
         return;
       }
       if (request.method === "POST" && relativePath === "/execution/processes") {

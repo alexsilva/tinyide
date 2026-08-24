@@ -49,6 +49,7 @@ import {
   Trash2,
   Type,
   Undo2,
+  UserRound,
   WrapText,
   Eraser,
   X,
@@ -103,6 +104,7 @@ import type {
   LanguageProvider,
   PluginSettingValue,
   PluginSettingValues,
+  PluginSettingsProvider,
   ResourceContext,
   ResourceDecoration,
   ResourceContextMenuItem,
@@ -297,11 +299,11 @@ import {
   openInSystemFileManager,
   openDesktopProjectWindow,
   isDesktopHost,
-  isDesktopWorkspaceHandle,
   pasteSystemResourcesIntoWorkspace,
   pickWorkspaceDirectory,
   restoreDesktopWorkspaceHandle,
   restoreLastDesktopWorkspaceHandle,
+  runtimeWorkspaceHandle,
   supportsSystemResourceClipboard,
   workspaceRootHintForHandle,
 } from "./workspace-host";
@@ -309,7 +311,6 @@ import {
   classifyOpenedDirectory,
   readProjectOpenPreference,
   readRecentProjects,
-  recentProjectHandle,
   rememberRecentProject,
   removeRecentProject,
   writeProjectOpenPreference,
@@ -407,7 +408,7 @@ import {
 } from "./editor/pointer-mapping";
 import { EditorLineRuler } from "./editor/EditorLineRuler";
 import { hydrateExpandedEntries, hydrateExplorerPath } from "./explorer/hydration";
-import { defaultLintSettings, lintSettingsStorageKey, profileStorageKey, readLegacyLintSettings, readLegacyProfiles } from "./workspace/legacy-state";
+import { defaultLintSettings } from "./workspace/legacy-state";
 import { WindowedHighlightedSource } from "./editor/WindowedHighlightedSource";
 import {
   createEditorViewportStore,
@@ -446,18 +447,14 @@ import { CompletionPopup } from "./editor/CompletionPopup";
 import { useWorkbenchContributions } from "./workbench/useWorkbenchContributions";
 import {
   applyWorkbenchTheme,
-  persistThemePreference,
-  readPersistedThemePreference,
-  readThemePreference,
   resolveTheme,
+  workbenchThemeDefaults,
   workbenchThemes,
 } from "./workbench/theme-manager";
 import {
   applyWorkbenchFonts,
   clampEditorFontSize,
-  persistFontPreferences,
-  readFontPreferences,
-  readPersistedFontPreferences,
+  defaultFontPreferences,
   resolveFont,
   workbenchFontDefaults,
   workbenchFonts,
@@ -466,12 +463,16 @@ import {
 } from "./workbench/font-manager";
 import {
   applyWorkbenchIconPack,
-  persistIconPackPreference,
-  readIconPackPreference,
-  readPersistedIconPackPreference,
   resolveIconPack,
+  workbenchIconDefaults,
   workbenchIconPacks,
 } from "./workbench/icon-manager";
+import {
+  EMPTY_USER_SETTINGS,
+  readUserSettings,
+  writeUserSettings,
+  type UserSettings,
+} from "./user-settings";
 import { nextDebugSession } from "./debug-session-updates";
 import {
   applyVirtualDocumentChanges,
@@ -706,6 +707,7 @@ export function App() {
   const [debugOutputFollowTail, setDebugOutputFollowTail] = useState<boolean>(DEFAULT_DEBUG_PANEL_LAYOUT.outputFollowTail);
   const [debugVariableQuery, setDebugVariableQuery] = useState("");
   const [debugOutputOffsets, setDebugOutputOffsets] = useState<Readonly<Record<string, DebugOutputOffsets>>>({});
+  const [userSettings, setUserSettings] = useState<UserSettings>(EMPTY_USER_SETTINGS);
   const [workspaceSettings, setWorkspaceSettings] = useState<WorkspaceSettings>(EMPTY_WORKSPACE_SETTINGS);
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -714,9 +716,9 @@ export function App() {
   const [pluginRemovalId, setPluginRemovalId] = useState<string>();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSectionId, setSettingsSectionId] = useState("editor");
-  const [preferredThemeId, setPreferredThemeId] = useState(() => readThemePreference());
-  const [preferredIconPackId, setPreferredIconPackId] = useState(() => readIconPackPreference());
-  const [fontPreferences, setFontPreferences] = useState<WorkbenchFontPreferences>(() => readFontPreferences());
+  const [preferredThemeId, setPreferredThemeId] = useState<string>(workbenchThemeDefaults.themeId);
+  const [preferredIconPackId, setPreferredIconPackId] = useState<string>(workbenchIconDefaults.packId);
+  const [fontPreferences, setFontPreferences] = useState<WorkbenchFontPreferences>(() => defaultFontPreferences());
   const [pluginSettingsDraft, setPluginSettingsDraft] = useState<PluginSettingValues>({});
   const [pluginStringArrayDrafts, setPluginStringArrayDrafts] = useState<Record<string, string>>({});
   const [watcherIgnoredDraft, setWatcherIgnoredDraft] = useState("");
@@ -944,8 +946,23 @@ export function App() {
   const debugRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
   const debugLayoutRef = useRef<HTMLDivElement | null>(null);
   const debugOutputRef = useRef<HTMLDivElement | null>(null);
+  const userSettingsRef = useRef<UserSettings>(EMPTY_USER_SETTINGS);
+  const userSettingsWriteQueueRef = useRef<Promise<UserSettings>>(Promise.resolve(EMPTY_USER_SETTINGS));
   const workspaceSettingsRef = useRef<WorkspaceSettings>(EMPTY_WORKSPACE_SETTINGS);
   const workspaceSettingsWriteQueueRef = useRef<Promise<WorkspaceSettings>>(Promise.resolve(EMPTY_WORKSPACE_SETTINGS));
+  const settingsProviders = pluginSettingsProviders();
+  const resolvedPluginSettings = useMemo(
+    () => Object.fromEntries(settingsProviders.map((provider) => [
+      provider.pluginId,
+      resolvePluginSettingValues(
+        provider,
+        provider.scope === "user"
+          ? userSettings.plugins?.[provider.pluginId]
+          : workspaceSettings.plugins?.[provider.pluginId],
+      ),
+    ])),
+    [settingsProviders, userSettings.plugins, workspaceSettings.plugins],
+  );
   const workbenchStateRef = useRef<WorkbenchStateSnapshot>({
     workspaceName,
     ...(workspaceRoot ? { workspaceRoot } : {}),
@@ -959,7 +976,7 @@ export function App() {
     ...(Object.keys(selectedEnvironmentIds).length
       ? { selectedExecutionEnvironmentIds: selectedEnvironmentIds }
       : {}),
-    pluginSettings: workspaceSettings.plugins ?? {},
+    pluginSettings: resolvedPluginSettings,
   });
   const executionStateListenersRef = useRef(new Set<(snapshot: WorkbenchExecutionSnapshot) => void>());
   const updateProfilesRef = useRef<(
@@ -1388,7 +1405,7 @@ export function App() {
   const activeIconPack = useMemo(
     () => resolveIconPack(availableIconPacks, preferredIconPackId),
     [availableIconPacks, preferredIconPackId],
-  );  const settingsProviders = pluginSettingsProviders();
+  );
   const activePluginSettingsProvider = ["editor", "appearance", "fonts", "watcher"].includes(settingsSectionId)
     ? undefined
     : settingsProviders.find((provider) => provider.pluginId === settingsSectionId);
@@ -1425,7 +1442,7 @@ export function App() {
     });
     return () => { cancelled = true; };
   }, [fileCreationTargetPath, resolveWorkspaceFileCreationOptions]);
-  const editorSettings = resolveEditorSettings(workspaceSettings);
+  const editorSettings = resolveEditorSettings(userSettings.editor);
   const activeDocumentFolds = activeDocument ? (documentFolds.get(activeDocument.id) ?? []) : [];
   const activeFoldProjection = useMemo<FoldProjection | undefined>(() => (
     activeDocument?.kind === "text" && activeDocumentFolds.length
@@ -1858,11 +1875,11 @@ export function App() {
       ...(Object.keys(selectedEnvironmentIds).length
         ? { selectedExecutionEnvironmentIds: selectedEnvironmentIds }
         : {}),
-      pluginSettings: workspaceSettings.plugins ?? {},
+      pluginSettings: resolvedPluginSettings,
     };
     workbenchStateRef.current = snapshot;
     for (const listener of workbenchStateListenersRef.current) listener(snapshot);
-  }, [workspaceName, workspaceRoot, sidebarView, sidebarVisible, panelTab, panelVisible, activeToolWindowId, toolWindowVisible, selectedEnvironmentId, selectedEnvironmentIds, workspaceSettings.plugins]);
+  }, [workspaceName, workspaceRoot, sidebarView, sidebarVisible, panelTab, panelVisible, activeToolWindowId, toolWindowVisible, selectedEnvironmentId, selectedEnvironmentIds, resolvedPluginSettings]);
 
   useEffect(() => {
     const snapshot = executionSnapshot();
@@ -2247,6 +2264,27 @@ export function App() {
     setWorkspaceSettings(settings);
   }, []);
 
+  const replaceUserSettings = useCallback((settings: UserSettings) => {
+    userSettingsRef.current = settings;
+    setUserSettings(settings);
+  }, []);
+
+  const persistUserSettings = useCallback(async (settings: UserSettings) => {
+    replaceUserSettings(settings);
+    const write = userSettingsWriteQueueRef.current
+      .catch(() => EMPTY_USER_SETTINGS)
+      .then(() => writeUserSettings(settings));
+    userSettingsWriteQueueRef.current = write;
+    const saved = await write;
+    if (userSettingsRef.current === settings) replaceUserSettings(saved);
+  }, [replaceUserSettings]);
+
+  const updateUserSettings = useCallback(async (
+    update: (current: UserSettings) => UserSettings,
+  ) => {
+    await persistUserSettings(update(userSettingsRef.current));
+  }, [persistUserSettings]);
+
   const persistWorkspaceSettings = useCallback(async (settings: WorkspaceSettings) => {
     if (!workspaceRoot) throw new Error("Abra um workspace antes de salvar configurações locais.");
     const targetWorkspaceRoot = workspaceRoot;
@@ -2275,21 +2313,9 @@ export function App() {
       setLintEnabledRuleIds(configured.enabledRuleIds);
       return;
     }
-    const legacy = readLegacyLintSettings(workspaceName, activeLanguageProvider);
-    const settings = legacy ?? defaultLintSettings(activeLanguageProvider);
+    const settings = defaultLintSettings(activeLanguageProvider);
     setLintEnabledRuleIds(settings.enabledRuleIds);
-    if (legacy && workspaceRoot) {
-      void updateWorkspaceSettings((current) => ({
-        ...current,
-        lint: {
-          ...current.lint,
-          [activeLanguageProvider.id]: legacy,
-        },
-      })).then(() => {
-        localStorage.removeItem(lintSettingsStorageKey(workspaceName, activeLanguageProvider.id));
-      }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
-    }
-  }, [workspaceName, workspaceRoot, workspaceSettings.lint, activeLanguageProvider?.id, updateWorkspaceSettings]);
+  }, [workspaceSettings.lint, activeLanguageProvider?.id]);
 
   const invoke = useCallback((operation: () => void | Promise<void>) => {
     setError(undefined);
@@ -2342,12 +2368,6 @@ export function App() {
     return platform.subscribe(() => setPlatformSnapshot(platform.snapshot()));
   }, []);
 
-  useEffect(() => {
-    void readPersistedThemePreference().then(setPreferredThemeId);
-    void readPersistedFontPreferences().then(setFontPreferences);
-    void readPersistedIconPackPreference().then(setPreferredIconPackId);
-  }, []);
-
   useLayoutEffect(() => {
     if (activeTheme) applyWorkbenchTheme(activeTheme);
   }, [activeTheme]);
@@ -2363,24 +2383,18 @@ export function App() {
   }, [activeEditorFont, activeInterfaceFont, fontPreferences.editorFontSize]);
 
   const loadLocalWorkspaceSettings = useCallback(async (
-    name: string,
+    _name: string,
     root: string,
     legacySelectedEnvironmentId?: string,
   ): Promise<WorkspaceSettings> => {
     let settings = await readWorkspaceSettings(root);
     let migrated = false;
-    const legacyProfiles = settings.executionProfiles ? undefined : readLegacyProfiles(name);
-    if (legacyProfiles) {
-      settings = { ...settings, executionProfiles: legacyProfiles };
-      migrated = true;
-    }
     if (!settings.environment?.selectedId && legacySelectedEnvironmentId) {
       settings = { ...settings, environment: { selectedId: legacySelectedEnvironmentId } };
       migrated = true;
     }
     if (migrated) {
       settings = await writeWorkspaceSettings(root, settings);
-      if (legacyProfiles) localStorage.removeItem(profileStorageKey(name));
     }
     replaceWorkspaceSettings(settings);
     setProfilesState(settings.executionProfiles ?? { profiles: [] });
@@ -2396,7 +2410,14 @@ export function App() {
   useEffect(() => {
     platform.initialize()
       .then(async () => {
-        const persistedSession = await readPersistedSession();
+        const [persistedSession, persistedUserSettings] = await Promise.all([
+          readPersistedSession(),
+          readUserSettings(),
+        ]);
+        replaceUserSettings(persistedUserSettings);
+        setPreferredThemeId(persistedUserSettings.appearance?.themeId ?? workbenchThemeDefaults.themeId);
+        setPreferredIconPackId(persistedUserSettings.appearance?.iconPackId ?? workbenchIconDefaults.packId);
+        setFontPreferences(defaultFontPreferences(persistedUserSettings.appearance?.fonts));
         setSidebarView(persistedSession.sidebarView);
         setSidebarVisible(persistedSession.sidebarVisible);
         setSidebarViewsBySide(persistedSession.sidebarViewsBySide);
@@ -2420,7 +2441,9 @@ export function App() {
         let restoredDocuments: readonly OpenDocument[] = [];
         let restoredWorkspaceName = snapshot?.workspaceName ?? persistedSession.workspaceName;
         let restoredWorkspaceRoot = snapshot?.workspaceRoot ?? persistedSession.workspaceRoot;
-        let restoredWorkspaceHandle = isDesktopHost() ? undefined : snapshot?.workspaceHandle;
+        // Handles vivos nunca são restaurados de JSON. Eles são reconstruídos
+        // pelo host a partir do caminho persistido do workspace.
+        let restoredWorkspaceHandle: BrowserDirectoryHandle | undefined;
         const requestedProject = requestedProjectReference();
         if (requestedProject) {
           if (requestedProject.startsWith("path:") && isDesktopHost()) {
@@ -2430,8 +2453,11 @@ export function App() {
           } else {
             const requestedRecent = (await readRecentProjects()).find((project) => project.id === requestedProject);
             if (requestedRecent) {
-              restoredWorkspaceHandle = await recentProjectHandle(requestedRecent);
-              restoredWorkspaceRoot = requestedRecent.path;
+              const hostWorkspace = await setHostWorkspace(requestedRecent.name, requestedRecent.path);
+              restoredWorkspaceRoot = hostWorkspace.workspaceRoot;
+              restoredWorkspaceHandle = isDesktopHost()
+                ? await restoreDesktopWorkspaceHandle(hostWorkspace.workspaceRoot)
+                : runtimeWorkspaceHandle(requestedRecent.name, hostWorkspace.workspaceRoot);
             }
           }
           if (!restoredWorkspaceHandle) throw new Error("O projeto solicitado não está mais disponível.");
@@ -2458,6 +2484,9 @@ export function App() {
             const hostWorkspace = await setHostWorkspace(restoredWorkspaceName, restoredWorkspaceRoot);
             restoredWorkspaceRoot = hostWorkspace.workspaceRoot;
             setWorkspaceRoot(hostWorkspace.workspaceRoot);
+            if (!isDesktopHost()) {
+              restoredWorkspaceHandle = runtimeWorkspaceHandle(restoredWorkspaceName, hostWorkspace.workspaceRoot);
+            }
             await loadLocalWorkspaceSettings(
               restoredWorkspaceName,
               hostWorkspace.workspaceRoot,
@@ -2774,7 +2803,6 @@ export function App() {
       void writeReactSnapshot({
         workspaceName,
         ...(workspaceRoot ? { workspaceRoot } : {}),
-        ...(workspaceHandle && !isDesktopWorkspaceHandle(workspaceHandle) ? { workspaceHandle } : {}),
         workspaceEntries: entries,
         documents,
         documentFolds,
@@ -2885,16 +2913,19 @@ export function App() {
     const workspaceRootHint = knownRoot ?? await workspaceRootHintForHandle(handle);
     const hostWorkspace = await setHostWorkspace(handle.name, workspaceRootHint);
     const localSettings = await loadLocalWorkspaceSettings(handle.name, hostWorkspace.workspaceRoot);
+    const activeHandle = isDesktopHost()
+      ? handle
+      : runtimeWorkspaceHandle(handle.name, hostWorkspace.workspaceRoot);
     resetProjectDependentState();
-    setWorkspaceHandle(handle);
+    setWorkspaceHandle(activeHandle);
     setWorkspaceName(handle.name);
     setWorkspaceRoot(hostWorkspace.workspaceRoot);
     setEntries(rootEntries);
     setWorkspaceAccess("ready");
     await refreshEnvironments(localSettings.environment?.selectedId, hostWorkspace.workspaceRoot);
     await rememberRecentProject({
-      handle,
-      ...(workspaceRootHint ? { path: workspaceRootHint } : {}),
+      handle: activeHandle,
+      path: hostWorkspace.workspaceRoot,
       kind: classifyOpenedDirectory(rootEntries),
     });
     setRecentProjects(await readRecentProjects());
@@ -2978,11 +3009,35 @@ export function App() {
         setProjectOpenDialog(false);
         return;
       }
-      const handle = project.path && isDesktopHost()
-        ? await restoreDesktopWorkspaceHandle(project.path)
-        : await recentProjectHandle(project);
+      const dirtyDocuments = documentsRef.current.filter((document) => document.content !== document.savedContent);
+      if (dirtyDocuments.length && !window.confirm(
+        `${dirtyDocuments.length === 1 ? "Há um arquivo não salvo" : `Há ${dirtyDocuments.length} arquivos não salvos`}. Abrir outro projeto na tela atual descartará essas alterações. Continuar?`,
+      )) return;
+      const hostWorkspace = await setHostWorkspace(project.name, project.path);
+      const handle = isDesktopHost()
+        ? await restoreDesktopWorkspaceHandle(hostWorkspace.workspaceRoot)
+        : runtimeWorkspaceHandle(project.name, hostWorkspace.workspaceRoot);
       if (!handle) throw new Error("O projeto recente não está mais disponível ou perdeu permissão de acesso.");
-      await openProjectInTarget(handle, project, undefined, target);
+      // O descarte de alterações já foi confirmado antes de trocar o contexto
+      // do runtime. Evita deixar plugins apontando para outro projeto se o
+      // usuário cancelar a troca.
+      resetProjectDependentState();
+      const rootEntries = await listDirectory(handle);
+      const localSettings = await loadLocalWorkspaceSettings(project.name, hostWorkspace.workspaceRoot);
+      setWorkspaceHandle(handle);
+      setWorkspaceName(project.name);
+      setWorkspaceRoot(hostWorkspace.workspaceRoot);
+      setEntries(rootEntries);
+      setWorkspaceAccess("ready");
+      await refreshEnvironments(localSettings.environment?.selectedId, hostWorkspace.workspaceRoot);
+      await rememberRecentProject({
+        handle,
+        path: hostWorkspace.workspaceRoot,
+        kind: classifyOpenedDirectory(rootEntries),
+      });
+      setRecentProjects(await readRecentProjects());
+      await persistProjectOpenChoice(target);
+      setProjectOpenDialog(false);
     } catch (cause) {
       reservedBrowserTab?.close();
       throw cause;
@@ -6271,12 +6326,17 @@ export function App() {
   const importedEnvironmentCount = providerEnvironments.filter((environment) => environment.type === "venv" && environment.managed === false).length;
   const executableEnvironmentCount = providerEnvironments.filter((environment) => environment.type === "process").length;
 
+  const pluginSettingsForProvider = (provider: PluginSettingsProvider): PluginSettingValues => resolvePluginSettingValues(
+    provider,
+    provider.scope === "user"
+      ? userSettings.plugins?.[provider.pluginId]
+      : workspaceSettings.plugins?.[provider.pluginId],
+  );
+
   const openSettings = (sectionId = "editor") => {
     setSettingsSectionId(sectionId);
     const provider = settingsProviders.find((candidate) => candidate.pluginId === sectionId);
-    setPluginSettingsDraft(provider
-      ? resolvePluginSettingValues(provider, workspaceSettings.plugins?.[provider.pluginId])
-      : {});
+    setPluginSettingsDraft(provider ? pluginSettingsForProvider(provider) : {});
     setWatcherDraftDirectories(workspaceSettings.watcher?.extraIgnoredDirectories ?? []);
     setSettingsOpen(true);
   };
@@ -6284,18 +6344,22 @@ export function App() {
   const selectSettingsSection = (sectionId: string) => {
     setSettingsSectionId(sectionId);
     const provider = settingsProviders.find((candidate) => candidate.pluginId === sectionId);
-    setPluginSettingsDraft(provider
-      ? resolvePluginSettingValues(provider, workspaceSettings.plugins?.[provider.pluginId])
-      : {});
+    setPluginSettingsDraft(provider ? pluginSettingsForProvider(provider) : {});
   };
 
   const selectTheme = (themeId: string) => {
     setPreferredThemeId(themeId);
-    void persistThemePreference(themeId);
+    void updateUserSettings((current) => ({
+      ...current,
+      appearance: { ...current.appearance, themeId },
+    }));
   };
   const selectIconPack = (packId: string) => {
     setPreferredIconPackId(packId);
-    void persistIconPackPreference(packId);
+    void updateUserSettings((current) => ({
+      ...current,
+      appearance: { ...current.appearance, iconPackId: packId },
+    }));
   };
   const updateFontPreferences = (patch: Partial<WorkbenchFontPreferences>) => {
     setFontPreferences((current) => {
@@ -6304,18 +6368,18 @@ export function App() {
         ...patch,
         editorFontSize: clampEditorFontSize(patch.editorFontSize ?? current.editorFontSize),
       };
-      void persistFontPreferences(next);
+      void updateUserSettings((settings) => ({
+        ...settings,
+        appearance: { ...settings.appearance, fonts: next },
+      }));
       return next;
     });
   };
 
   const applyEditorLineNumbers = async (lineNumbers: boolean) => {
-    await updateWorkspaceSettings((current) => ({
+    await updateUserSettings((current) => ({
       ...current,
-      editor: {
-        ...current.editor,
-        lineNumbers,
-      },
+      editor: { ...current.editor, lineNumbers },
     }));
   };
 
@@ -6376,11 +6440,27 @@ export function App() {
       value,
     );
     setPluginSettingsDraft(values);
+    if (activePluginSettingsProvider.scope === "user") {
+      await updateUserSettings((current) => ({
+        ...current,
+        plugins: {
+          ...current.plugins,
+          [activePluginSettingsProvider.pluginId]: {
+            ...(current.plugins?.[activePluginSettingsProvider.pluginId] ?? {}),
+            [settingId]: value,
+          },
+        },
+      }));
+      return;
+    }
     await updateWorkspaceSettings((current) => ({
       ...current,
       plugins: {
         ...current.plugins,
-        [activePluginSettingsProvider.pluginId]: values,
+        [activePluginSettingsProvider.pluginId]: {
+          ...(current.plugins?.[activePluginSettingsProvider.pluginId] ?? {}),
+          [settingId]: value,
+        },
       },
     }));
   };
@@ -8102,10 +8182,10 @@ export function App() {
                 <div className="settings-dialog__identity">
                   <span className="settings-dialog__icon"><Settings2 size={20} /></span>
                   <div>
-                    <span className="eyebrow">PREFERÊNCIAS DO PROJETO</span>
+                    <span className="eyebrow">CONFIGURAÇÕES</span>
                     <Dialog.Title>Configurações</Dialog.Title>
                     <Dialog.Description>
-                      Ajustes locais do editor e extensões instaladas.
+                      Preferências e comportamento da IDE.
                     </Dialog.Description>
                   </div>
                 </div>
@@ -8179,13 +8259,12 @@ export function App() {
                         <label className="plugin-setting">
                           <span className="plugin-setting__copy">
                             <strong>Régua numérica</strong>
-                            <small>Mostra a numeração das linhas e serve como área de indicadores do editor.</small>
+                            <small>Exibe os números das linhas no editor de texto.</small>
                           </span>
                           <span className="settings-switch">
                             <input
                               type="checkbox"
-                              checked={editorSettings.lineNumbers}
-                              disabled={!workspaceRoot}
+                              checked={userSettings.editor?.lineNumbers !== false}
                               onChange={(event) => invoke(() => applyEditorLineNumbers(event.target.checked))}
                             />
                             <i aria-hidden="true" />
@@ -8451,7 +8530,7 @@ export function App() {
                         <div>
                           <span className="eyebrow">PLUGIN</span>
                           <h3>{activePluginSettingsProvider.title}</h3>
-                          <p>{activePluginSettingsProvider.description ?? "Configurações específicas deste plugin para o workspace."}</p>
+                          <p>{activePluginSettingsProvider.description ?? "Configurações do plugin."}</p>
                         </div>
                       </div>
                       <div className="plugin-setting-list">
@@ -8469,7 +8548,7 @@ export function App() {
                                     <button
                                       type="button"
                                       aria-label={`Remover ${entry}`}
-                                      disabled={!workspaceRoot}
+                                      disabled={activePluginSettingsProvider.scope === "project" && !workspaceRoot}
                                       onClick={() => invoke(() => removePluginStringArraySetting(setting.id, entry))}
                                     >
                                       <X size={12} />
@@ -8482,7 +8561,7 @@ export function App() {
                                   type="text"
                                   placeholder={setting.inputPlaceholder}
                                   value={pluginStringArrayDrafts[setting.id] ?? ""}
-                                  disabled={!workspaceRoot}
+                                  disabled={activePluginSettingsProvider.scope === "project" && !workspaceRoot}
                                   onChange={(event) => setPluginStringArrayDrafts((drafts) => ({
                                     ...drafts,
                                     [setting.id]: event.target.value,
@@ -8497,7 +8576,7 @@ export function App() {
                                 <button
                                   className="button"
                                   type="button"
-                                  disabled={!workspaceRoot || !(pluginStringArrayDrafts[setting.id] ?? "").trim()}
+                                  disabled={(activePluginSettingsProvider.scope === "project" && !workspaceRoot) || !(pluginStringArrayDrafts[setting.id] ?? "").trim()}
                                   onClick={() => invoke(() => addPluginStringArraySetting(setting.id))}
                                 >
                                   <WorkbenchIcon icon="plus" size={14} /> {setting.addLabel ?? "Adicionar"}
@@ -8516,7 +8595,7 @@ export function App() {
                                 <input
                                   type="checkbox"
                                   checked={resolvePluginBooleanSettingValue(setting, pluginSettingsDraft)}
-                                  disabled={!workspaceRoot}
+                                  disabled={activePluginSettingsProvider.scope === "project" && !workspaceRoot}
                                   onChange={(event) => invoke(() => applyPluginSetting(setting.id, event.target.checked))}
                                 />
                                 <i aria-hidden="true" />
@@ -8525,7 +8604,7 @@ export function App() {
                               <select
                                 className="plugin-setting__control"
                                 value={String(pluginSettingsDraft[setting.id] ?? setting.defaultValue)}
-                                disabled={!workspaceRoot}
+                                disabled={activePluginSettingsProvider.scope === "project" && !workspaceRoot}
                                 onChange={(event) => invoke(() => applyPluginSetting(setting.id, event.target.value))}
                               >
                                 {setting.options.map((option) => (
@@ -8538,7 +8617,7 @@ export function App() {
                                 type="text"
                                 value={String(pluginSettingsDraft[setting.id] ?? setting.defaultValue)}
                                 placeholder={setting.placeholder}
-                                disabled={!workspaceRoot}
+                                disabled={activePluginSettingsProvider.scope === "project" && !workspaceRoot}
                                 onChange={(event) => invoke(() => applyPluginSetting(setting.id, event.target.value))}
                               />
                             ) : (
@@ -8549,7 +8628,7 @@ export function App() {
                                 min={setting.min}
                                 max={setting.max}
                                 step={setting.step}
-                                disabled={!workspaceRoot}
+                                disabled={activePluginSettingsProvider.scope === "project" && !workspaceRoot}
                                 onChange={(event) => {
                                   const value = event.target.valueAsNumber;
                                   if (Number.isFinite(value)) invoke(() => applyPluginSetting(setting.id, value));
@@ -8566,16 +8645,14 @@ export function App() {
                 </section>
               </div>
               <div className="settings-dialog__footer">
-                {settingsSectionId === "appearance" ? (
-                  <p className="settings-scope-note"><Check size={14} /> Tema aplicado globalmente e salvo na aplicação.</p>
-                ) : settingsSectionId === "fonts" ? (
-                  <p className="settings-scope-note"><Check size={14} /> Fontes aplicadas globalmente e salvas na aplicação.</p>
-                ) : !workspaceRoot ? (
-                  <p className="settings-scope-note"><WorkbenchIcon icon="problems" size={14} /> Abra um workspace para alterar configurações locais.</p>
+                {settingsSectionId === "watcher" && !workspaceRoot ? (
+                  <p className="settings-scope-note"><WorkbenchIcon icon="problems" size={14} /> Abra um workspace para alterar esta configuração.</p>
+                ) : activePluginSettingsProvider?.scope === "project" && !workspaceRoot ? (
+                  <p className="settings-scope-note"><WorkbenchIcon icon="problems" size={14} /> Abra um workspace para alterar esta configuração.</p>
                 ) : settingsSectionId === "watcher" ? (
                   <p className="settings-scope-note"><Check size={14} /> Alterações só são aplicadas ao clicar em "Concluir".</p>
                 ) : (
-                  <p className="settings-scope-note"><Check size={14} /> Alterações salvas automaticamente em <code>.tinyide/settings.json</code>.</p>
+                  <p className="settings-scope-note"><Check size={14} /> Alterações salvas automaticamente.</p>
                 )}
                 <button
                   className="button primary"

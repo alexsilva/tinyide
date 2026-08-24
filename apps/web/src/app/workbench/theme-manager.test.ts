@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   WORKBENCH_THEME_CSS_VARIABLES,
   type WorkbenchThemeDefinition,
@@ -6,7 +6,6 @@ import {
 } from "@tinyide/plugin-api";
 import {
   applyWorkbenchTheme,
-  readThemePreference,
   resolveTheme,
   workbenchThemes,
   workbenchThemeDefaults,
@@ -33,8 +32,6 @@ function theme(id: string, order = 0): WorkbenchThemeDefinition {
   };
 }
 
-afterEach(() => vi.unstubAllGlobals());
-
 describe("theme manager", () => {
   it("keeps the highest-priority contribution for duplicate theme ids", () => {
     const low: WorkbenchThemeProvider = { id: "low", priority: 1, themes: () => [theme("same", 20), theme("other", 10)] };
@@ -49,11 +46,6 @@ describe("theme manager", () => {
   it("falls back to the neutral builtin theme when the stored id is unavailable", () => {
     const neutral = theme(workbenchThemeDefaults.themeId);
     expect(resolveTheme([theme("other"), neutral], "missing")).toBe(neutral);
-  });
-
-  it("uses the neutral theme when storage is empty or unavailable", () => {
-    expect(readThemePreference({ getItem: () => null })).toBe(workbenchThemeDefaults.themeId);
-    expect(readThemePreference({ getItem: () => { throw new Error("blocked"); } })).toBe(workbenchThemeDefaults.themeId);
   });
 
   it("maps theme tokens to CSS custom properties and appearance metadata", () => {

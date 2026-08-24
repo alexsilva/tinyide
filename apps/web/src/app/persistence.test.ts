@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readPersistedSession,
   readSession,
+  normalizeSession,
   restoreWorkspaceDocuments,
   writeSession,
   workspaceDocumentsForSnapshot,
@@ -71,24 +72,10 @@ function directoryHandle(
   };
 }
 
-function localStorageWith(session?: unknown): Storage {
-  const values = new Map<string, string>();
-  if (session !== undefined) values.set("tinyide.react.session.v2", JSON.stringify(session));
-  return {
-    get length() { return values.size; },
-    clear() { values.clear(); },
-    getItem(key) { return values.get(key) ?? null; },
-    key(index) { return [...values.keys()][index] ?? null; },
-    removeItem(key) { values.delete(key); },
-    setItem(key, value) { values.set(key, value); },
-  };
-}
-
 afterEach(() => vi.unstubAllGlobals());
 
 describe("layout persistence", () => {
   it("starts with the execution output panel closed", () => {
-    vi.stubGlobal("localStorage", localStorageWith());
     expect(readSession()).toMatchObject({
       panelVisible: false,
       panelTab: "output",
@@ -99,37 +86,34 @@ describe("layout persistence", () => {
     });
   });
 
-  it("restores independent widths for the two vertical columns", () => {
-    vi.stubGlobal("localStorage", localStorageWith({
+  it("normalizes independent widths for the two vertical columns", () => {
+    expect(normalizeSession({
       sidebarWidth: 290,
       problemsWidth: 410,
       leftVerticalPanelWidth: 360,
       rightVerticalPanelWidth: 470,
-    }));
-    expect(readSession()).toMatchObject({
+    })).toMatchObject({
       leftVerticalPanelWidth: 360,
       rightVerticalPanelWidth: 470,
     });
   });
 
   it("migrates legacy sidebar and problems widths to each side", () => {
-    vi.stubGlobal("localStorage", localStorageWith({
+    expect(normalizeSession({
       sidebarWidth: 350,
       problemsWidth: 430,
-    }));
-    expect(readSession()).toMatchObject({
+    })).toMatchObject({
       leftVerticalPanelWidth: 350,
       rightVerticalPanelWidth: 430,
     });
   });
 
   it("migrates the legacy Problems tab to the dedicated right panel", () => {
-    vi.stubGlobal("localStorage", localStorageWith({
+    expect(normalizeSession({
       panelVisible: true,
       panelTab: "problems",
       problemsWidth: 410,
-    }));
-    expect(readSession()).toMatchObject({
+    })).toMatchObject({
       panelVisible: false,
       panelTab: "output",
       problemsVisible: true,
@@ -138,41 +122,34 @@ describe("layout persistence", () => {
   });
 
   it("does not reopen a persisted profile output until a new or resumed execution", () => {
-    vi.stubGlobal("localStorage", localStorageWith({
+    expect(normalizeSession({
       panelVisible: true,
       panelTab: "execution-profile:python",
-    }));
-    expect(readSession().panelVisible).toBe(false);
+    }).panelVisible).toBe(false);
   });
 
   it("restores only valid activity button placements", () => {
-    vi.stubGlobal("localStorage", localStorageWith({
+    expect(normalizeSession({
       activityButtonPlacements: {
         "toolWindow:docker": { side: "right", order: 2 },
         "toolWindow:git": { side: "center", order: 1 },
         "sidebar:git.changes": { side: "left", order: "first" },
       },
-    }));
-
-    expect(readSession().activityButtonPlacements).toEqual({
+    }).activityButtonPlacements).toEqual({
       "toolWindow:docker": { side: "right", order: 2 },
     });
   });
 
-  it("restores the desktop session independently from the runtime origin", async () => {
-    vi.stubGlobal("localStorage", localStorageWith({
-      activityButtonPlacements: {
-        "toolWindow:git": { side: "left", order: 1 },
-      },
-    }));
-    const readState = vi.fn(async () => ({
+  it("restores the visual session from host persistence", async () => {
+    const stored = {
       activityButtonPlacements: {
         "toolWindow:git": { side: "right", order: 7 },
       },
       sidebarViewsBySide: { right: "git.changes" },
       sidebarView: "git.changes",
-    }));
-    vi.stubGlobal("window", { tinyideDesktop: { readState } });
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(stored), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
 
     await expect(readPersistedSession()).resolves.toMatchObject({
       activityButtonPlacements: {
@@ -180,14 +157,12 @@ describe("layout persistence", () => {
       },
       sidebarViewsBySide: { right: "git.changes" },
     });
-    expect(readState).toHaveBeenCalledWith("ui-session");
+    expect(fetchMock).toHaveBeenCalled();
   });
 
-  it("writes the visual session to both browser and stable desktop storage", async () => {
-    const storage = localStorageWith();
-    vi.stubGlobal("localStorage", storage);
-    const writeState = vi.fn(async () => true);
-    vi.stubGlobal("window", { tinyideDesktop: { writeState } });
+  it("writes the visual session only through host persistence", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => new Response(init?.body as string, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
     const session = {
       ...readSession(),
       activityButtonPlacements: {
@@ -196,22 +171,21 @@ describe("layout persistence", () => {
     };
 
     writeSession(session);
-    await vi.waitFor(() => expect(writeState).toHaveBeenCalledWith("ui-session", session));
-    expect(JSON.parse(storage.getItem("tinyide.react.session.v2") ?? "null"))
-      .toMatchObject(session);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/core-api/user/state/ui-session",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify(session) }),
+    ));
   });
 
   it("restores every open vertical panel", () => {
-    vi.stubGlobal("localStorage", localStorageWith({
+    expect(normalizeSession({
       sidebarVisible: true,
       sidebarView: "plugins",
       sidebarViewsBySide: {
         left: "plugins",
         right: "git.changes",
       },
-    }));
-
-    expect(readSession()).toMatchObject({
+    })).toMatchObject({
       sidebarVisible: true,
       sidebarViewsBySide: {
         left: "plugins",
@@ -221,20 +195,18 @@ describe("layout persistence", () => {
   });
 
   it("preserves an explicitly closed set of vertical panels", () => {
-    vi.stubGlobal("localStorage", localStorageWith({
+    expect(normalizeSession({
       sidebarVisible: true,
       sidebarView: "explorer",
       sidebarViewsBySide: {},
-    }));
-
-    expect(readSession()).toMatchObject({
+    })).toMatchObject({
       sidebarVisible: false,
       sidebarViewsBySide: {},
     });
   });
 
   it("collapses a view duplicated on both sides to the button side", () => {
-    vi.stubGlobal("localStorage", localStorageWith({
+    expect(normalizeSession({
       sidebarVisible: true,
       sidebarView: "git.changes",
       sidebarViewsBySide: {
@@ -244,21 +216,17 @@ describe("layout persistence", () => {
       activityButtonPlacements: {
         "sidebar:git.changes": { side: "right", order: 2 },
       },
-    }));
-
-    expect(readSession().sidebarViewsBySide).toEqual({ right: "git.changes" });
+    }).sidebarViewsBySide).toEqual({ right: "git.changes" });
   });
 
   it("migrates the legacy single sidebar to its configured side", () => {
-    vi.stubGlobal("localStorage", localStorageWith({
+    expect(normalizeSession({
       sidebarVisible: true,
       sidebarView: "git.changes",
       activityButtonPlacements: {
         "sidebar:git.changes": { side: "right", order: 2 },
       },
-    }));
-
-    expect(readSession().sidebarViewsBySide).toEqual({ right: "git.changes" });
+    }).sidebarViewsBySide).toEqual({ right: "git.changes" });
   });
 });
 

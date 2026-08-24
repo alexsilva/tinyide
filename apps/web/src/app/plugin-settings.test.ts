@@ -10,6 +10,7 @@ const provider: PluginSettingsProvider = {
   id: "settings",
   pluginId: "plugin.example",
   title: "Example",
+  scope: "project",
   settings: [
     {
       id: "enabled",

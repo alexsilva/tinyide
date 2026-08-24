@@ -12,6 +12,9 @@ import type {
   PluginContext,
   PluginBackendRequestOptions,
   PluginBackendApi,
+  PluginConfigurationApi,
+  PluginConfigurationData,
+  PluginConfigurationScope,
   PluginManifest,
   PluginRecord,
   WorkbenchApi,
@@ -34,11 +37,10 @@ import { AppPluginHost } from "./plugin-host";
 import { createOutputFollowControl } from "./output-follow";
 import { createExtensionApi } from "./extension-api";
 import { AppModuleHost } from "./module-host";
-import type { TinyIdeDesktopApi } from "./workspace-host";
+import { readStoredState, writeStoredState } from "../session-store";
 
 const PLATFORM_VERSION = "0.4.0";
-const STORAGE_KEY = "tinyide.react.plugins.v1";
-const DESKTOP_STORAGE_KEY = "plugins";
+const PLUGINS_STATE_KEY = "plugins";
 
 export interface StoredPlugin {
   readonly manifest: PluginManifest;
@@ -47,38 +49,18 @@ export interface StoredPlugin {
   readonly enabled: boolean;
 }
 
-type PluginLocalStorage = Pick<Storage, "getItem" | "removeItem" | "setItem">;
-type PluginDesktopStorage = Pick<TinyIdeDesktopApi, "readState" | "writeState">;
-
 function parseStoredPlugins(value: unknown): readonly StoredPlugin[] {
   return Array.isArray(value) ? value as readonly StoredPlugin[] : [];
 }
 
-export async function readStoredPlugins(
-  storage: PluginLocalStorage,
-  desktop?: PluginDesktopStorage,
-): Promise<readonly StoredPlugin[]> {
-  if (desktop?.readState) {
-    const stored = await desktop.readState(DESKTOP_STORAGE_KEY);
-    if (stored !== undefined) return parseStoredPlugins(stored);
-  }
-
-  try {
-    const raw = storage.getItem(STORAGE_KEY);
-    return raw ? parseStoredPlugins(JSON.parse(raw)) : [];
-  } catch {
-    storage.removeItem(STORAGE_KEY);
-    return [];
-  }
+export async function readStoredPlugins(): Promise<readonly StoredPlugin[]> {
+  return parseStoredPlugins(await readStoredState(PLUGINS_STATE_KEY));
 }
 
 export async function writeStoredPlugins(
-  storage: PluginLocalStorage,
   stored: readonly StoredPlugin[],
-  desktop?: PluginDesktopStorage,
 ): Promise<void> {
-  storage.setItem(STORAGE_KEY, JSON.stringify(stored));
-  if (desktop?.writeState) await desktop.writeState(DESKTOP_STORAGE_KEY, stored);
+  await writeStoredState(PLUGINS_STATE_KEY, stored);
 }
 
 export function rebaseLoopbackPluginUrl(storedUrl: string, currentUrl: string): string {
@@ -357,9 +339,50 @@ export function pluginBackend(pluginId: string): PluginBackendApi {
   };
 }
 
+export function pluginConfiguration(pluginId: string): PluginConfigurationApi {
+  const endpoint = (scope: PluginConfigurationScope) => (
+    scope === "user"
+      ? `/core-api/user/plugin-data/${encodeURIComponent(pluginId)}`
+      : `/core-api/workspace/plugin-data/${encodeURIComponent(pluginId)}`
+  );
+  const request = async (
+    scope: PluginConfigurationScope,
+    method: "GET" | "PUT" | "PATCH",
+    value?: PluginConfigurationData,
+  ): Promise<PluginConfigurationData> => {
+    if (scope === "project" && !getActiveHostWorkspaceRoot()) {
+      throw Object.assign(new Error("Abra um workspace antes de alterar a configuração do projeto."), { statusCode: 409 });
+    }
+    const response = await projectRuntimeFetch(endpoint(scope), {
+      method,
+      cache: "no-store",
+      ...(value === undefined ? {} : {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(value),
+      }),
+    });
+    const payload = response.status === 204 ? {} : await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = payload && typeof payload === "object" && "error" in payload
+        ? String(payload.error)
+        : `Configuração do plugin indisponível: HTTP ${response.status}`;
+      throw Object.assign(new Error(message), { statusCode: response.status });
+    }
+    return payload && typeof payload === "object" && !Array.isArray(payload)
+      ? payload as PluginConfigurationData
+      : {};
+  };
+  return {
+    read: (scope) => request(scope, "GET"),
+    replace: (scope, value) => request(scope, "PUT", value),
+    update: (scope, patch) => request(scope, "PATCH", patch),
+  };
+}
+
 function pluginContext(platform: TinyIdePlatform, pluginId: string): PluginContext {
   return {
     backend: pluginBackend(pluginId),
+    configuration: pluginConfiguration(pluginId),
     commands: platform.commands,
     events: platform.events,
     workbench: platform.workbench,
@@ -556,7 +579,7 @@ export class TinyIdePlatform {
   }
 
   async #restore(): Promise<void> {
-    const stored = await readStoredPlugins(localStorage, window.tinyideDesktop);
+    const stored = await readStoredPlugins();
 
     const restored: StoredPlugin[] = [];
     for (const entry of stored) {
@@ -606,7 +629,7 @@ export class TinyIdePlatform {
         enabled: plugin.state === "active" || plugin.state === "enabled",
       }];
     });
-    await writeStoredPlugins(localStorage, stored, window.tinyideDesktop);
+    await writeStoredPlugins(stored);
   }
 
   #notify(): void {

@@ -1,136 +1,46 @@
-const DATABASE_NAME = "tinyide-state";
-const DATABASE_VERSION = 1;
-const STORE_NAME = "session";
+import { projectRuntimeFetch } from "./app/project-session";
 import { projectSessionStateKey } from "./app/project-session";
 
 const SNAPSHOT_KEY = () => projectSessionStateKey("application-snapshot");
 
-let databasePromise: Promise<IDBDatabase> | undefined;
-
-function requestResult<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    request.addEventListener("success", () => resolve(request.result), { once: true });
-    request.addEventListener("error", () => reject(request.error ?? new Error("IndexedDB request failed.")), {
-      once: true,
-    });
+async function stateRequest<T>(key: string, init?: RequestInit): Promise<T | undefined> {
+  const response = await projectRuntimeFetch(`/core-api/user/state/${encodeURIComponent(key)}`, {
+    cache: "no-store",
+    ...init,
   });
-}
-
-function transactionCompleted(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    transaction.addEventListener("complete", () => resolve(), { once: true });
-    transaction.addEventListener(
-      "abort",
-      () => reject(transaction.error ?? new Error("IndexedDB transaction was aborted.")),
-      { once: true },
-    );
-    transaction.addEventListener(
-      "error",
-      () => reject(transaction.error ?? new Error("IndexedDB transaction failed.")),
-      { once: true },
-    );
-  });
-}
-
-function openDatabase(): Promise<IDBDatabase> {
-  if (databasePromise) return databasePromise;
-
-  databasePromise = new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-    request.addEventListener("upgradeneeded", () => {
-      const database = request.result;
-      if (!database.objectStoreNames.contains(STORE_NAME)) {
-        database.createObjectStore(STORE_NAME);
-      }
-    });
-    request.addEventListener("success", () => {
-      const database = request.result;
-      database.addEventListener("versionchange", () => {
-        database.close();
-        databasePromise = undefined;
-      });
-      resolve(database);
-    }, { once: true });
-    request.addEventListener(
-      "error",
-      () => reject(request.error ?? new Error("Unable to open the tinyIde state database.")),
-      { once: true },
-    );
-  });
-
-  return databasePromise;
+  if (response.status === 404) return undefined;
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { readonly error?: string };
+    throw new Error(payload.error ?? `Não foi possível acessar o estado persistente '${key}'.`);
+  }
+  if (response.status === 204) return undefined;
+  return await response.json() as T;
 }
 
 export async function readApplicationSnapshot<T>(): Promise<T | undefined> {
-  const desktop = window.tinyideDesktop;
-  if (desktop?.readState) return await desktop.readState(SNAPSHOT_KEY()) as T | undefined;
-  const database = await openDatabase();
-  const transaction = database.transaction(STORE_NAME, "readonly");
-  const completed = transactionCompleted(transaction);
-  const value = await requestResult(transaction.objectStore(STORE_NAME).get(SNAPSHOT_KEY()));
-  await completed;
-  return value as T | undefined;
+  return await readStoredState<T>(SNAPSHOT_KEY());
 }
 
 export async function writeApplicationSnapshot<T>(snapshot: T): Promise<void> {
-  const desktop = window.tinyideDesktop;
-  if (desktop?.writeState) {
-    await desktop.writeState(SNAPSHOT_KEY(), snapshot);
-    return;
-  }
-  const database = await openDatabase();
-  const transaction = database.transaction(STORE_NAME, "readwrite");
-  const completed = transactionCompleted(transaction);
-  await requestResult(transaction.objectStore(STORE_NAME).put(snapshot, SNAPSHOT_KEY()));
-  await completed;
+  await writeStoredState(SNAPSHOT_KEY(), snapshot);
 }
 
 export async function clearApplicationSnapshot(): Promise<void> {
-  const desktop = window.tinyideDesktop;
-  if (desktop?.removeState) {
-    await desktop.removeState(SNAPSHOT_KEY());
-    return;
-  }
-  const database = await openDatabase();
-  const transaction = database.transaction(STORE_NAME, "readwrite");
-  const completed = transactionCompleted(transaction);
-  await requestResult(transaction.objectStore(STORE_NAME).delete(SNAPSHOT_KEY()));
-  await completed;
+  await removeStoredState(SNAPSHOT_KEY());
 }
 
 export async function readStoredState<T>(key: string): Promise<T | undefined> {
-  const desktop = window.tinyideDesktop;
-  if (desktop?.readState) return await desktop.readState(key) as T | undefined;
-  const database = await openDatabase();
-  const transaction = database.transaction(STORE_NAME, "readonly");
-  const completed = transactionCompleted(transaction);
-  const value = await requestResult(transaction.objectStore(STORE_NAME).get(key));
-  await completed;
-  return value as T | undefined;
+  return await stateRequest<T>(key);
 }
 
 export async function writeStoredState<T>(key: string, value: T): Promise<void> {
-  const desktop = window.tinyideDesktop;
-  if (desktop?.writeState) {
-    await desktop.writeState(key, value);
-    return;
-  }
-  const database = await openDatabase();
-  const transaction = database.transaction(STORE_NAME, "readwrite");
-  const completed = transactionCompleted(transaction);
-  await requestResult(transaction.objectStore(STORE_NAME).put(value, key));
-  await completed;
+  await stateRequest<T>(key, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(value),
+  });
 }
 
 export async function removeStoredState(key: string): Promise<void> {
-  const desktop = window.tinyideDesktop;
-  if (desktop?.removeState) {
-    await desktop.removeState(key);
-    return;
-  }
-  const database = await openDatabase();
-  const transaction = database.transaction(STORE_NAME, "readwrite");
-  const completed = transactionCompleted(transaction);
-  await requestResult(transaction.objectStore(STORE_NAME).delete(key));
-  await completed;
+  await stateRequest(key, { method: "DELETE" });
 }

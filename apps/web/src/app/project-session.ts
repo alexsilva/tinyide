@@ -1,18 +1,9 @@
 const PROJECT_SESSION_QUERY = "tinyideSession";
 const PROJECT_OPEN_QUERY = "tinyideOpenProject";
-const PROJECT_SESSION_STORAGE_KEY = "tinyide.project-session";
 const DEFAULT_PROJECT_SESSION_ID = "default";
 const PROJECT_SESSION_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 
 let cachedSessionId: string | undefined;
-
-function safeSessionStorage(): Storage | undefined {
-  try {
-    return typeof window === "undefined" ? undefined : window.sessionStorage;
-  } catch {
-    return undefined;
-  }
-}
 
 function validSessionId(value: string | null | undefined): value is string {
   return Boolean(value && PROJECT_SESSION_PATTERN.test(value));
@@ -35,14 +26,9 @@ export function projectSessionId(): string {
       return undefined;
     }
   })();
-  const storage = safeSessionStorage();
-  const stored = storage?.getItem(PROJECT_SESSION_STORAGE_KEY);
   cachedSessionId = validSessionId(queryValue)
     ? queryValue
-    : validSessionId(stored)
-      ? stored
-      : DEFAULT_PROJECT_SESSION_ID;
-  storage?.setItem(PROJECT_SESSION_STORAGE_KEY, cachedSessionId);
+    : DEFAULT_PROJECT_SESSION_ID;
   return cachedSessionId;
 }
 

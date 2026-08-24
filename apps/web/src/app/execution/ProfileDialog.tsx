@@ -208,7 +208,7 @@ export function ProfileDialog({
                       className="profile-card__select"
                       onClick={() => setEditingId(profile.id)}
                     >
-                      <WorkbenchIcon icon="terminal" size={16} />
+                      <WorkbenchIcon icon="play" size={16} />
                       <span>
                         <strong>{profile.name}</strong>
                         <small>{profile.steps.length} etapa(s)</small>
@@ -282,7 +282,7 @@ export function ProfileDialog({
 
                   <section className="form-section">
                     <div className="form-section-heading">
-                      <WorkbenchIcon icon="terminal" size={17} />
+                      <WorkbenchIcon icon="play" size={17} />
                       <div>
                         <strong>Comando</strong>
                         <small>Primeira etapa do perfil.</small>

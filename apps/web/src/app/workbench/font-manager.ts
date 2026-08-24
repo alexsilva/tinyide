@@ -6,8 +6,6 @@ import type {
 import { WORKBENCH_FONT_CSS_VARIABLES } from "@tinyide/plugin-api";
 import type { TinyIdePlatform } from "../platform";
 
-const FONT_STORAGE_KEY = "tinyide.appearance.fonts.v1";
-const DESKTOP_FONT_STATE_KEY = "appearance-fonts";
 const DEFAULT_EDITOR_FONT_ID = "tinyide.editor.jetbrains-mono";
 const DEFAULT_INTERFACE_FONT_ID = "tinyide.interface.inter";
 const DEFAULT_EDITOR_FONT_SIZE = 13;
@@ -21,7 +19,6 @@ export interface WorkbenchFontPreferences {
 }
 
 export const workbenchFontDefaults = {
-  storageKey: FONT_STORAGE_KEY,
   editorFontId: DEFAULT_EDITOR_FONT_ID,
   interfaceFontId: DEFAULT_INTERFACE_FONT_ID,
   editorFontSize: DEFAULT_EDITOR_FONT_SIZE,
@@ -59,7 +56,7 @@ export function workbenchFontsForTarget(
   return fonts.filter((font) => font.target === target);
 }
 
-function normalizeFontPreferences(value: unknown): WorkbenchFontPreferences {
+export function defaultFontPreferences(value?: unknown): WorkbenchFontPreferences {
   const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const editorFontId = typeof record.editorFontId === "string" && record.editorFontId.trim()
     ? record.editorFontId
@@ -69,46 +66,6 @@ function normalizeFontPreferences(value: unknown): WorkbenchFontPreferences {
     : DEFAULT_INTERFACE_FONT_ID;
   const editorFontSize = clampEditorFontSize(Number(record.editorFontSize));
   return { editorFontId, interfaceFontId, editorFontSize };
-}
-
-export function readFontPreferences(storage: Pick<Storage, "getItem"> = localStorage): WorkbenchFontPreferences {
-  try {
-    const raw = storage.getItem(FONT_STORAGE_KEY);
-    return normalizeFontPreferences(raw ? JSON.parse(raw) : undefined);
-  } catch {
-    return normalizeFontPreferences(undefined);
-  }
-}
-
-export function writeFontPreferences(
-  preferences: WorkbenchFontPreferences,
-  storage: Pick<Storage, "setItem"> = localStorage,
-): void {
-  storage.setItem(FONT_STORAGE_KEY, JSON.stringify(preferences));
-}
-
-export async function readPersistedFontPreferences(): Promise<WorkbenchFontPreferences> {
-  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
-  if (desktop?.readState) {
-    try {
-      const value = await desktop.readState(DESKTOP_FONT_STATE_KEY);
-      if (typeof value === "string" && value.trim()) return normalizeFontPreferences(JSON.parse(value));
-    } catch (error) {
-      console.warn("Não foi possível restaurar as fontes da aplicação.", error);
-    }
-  }
-  return readFontPreferences();
-}
-
-export async function persistFontPreferences(preferences: WorkbenchFontPreferences): Promise<void> {
-  writeFontPreferences(preferences);
-  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
-  if (!desktop?.writeState) return;
-  try {
-    await desktop.writeState(DESKTOP_FONT_STATE_KEY, JSON.stringify(preferences));
-  } catch (error) {
-    console.warn("Não foi possível persistir as fontes da aplicação no desktop.", error);
-  }
 }
 
 export function resolveFont(

@@ -94,11 +94,22 @@ export interface PluginBackendApi {
 
 export interface PluginContext {
   readonly backend: PluginBackendApi;
+  /** Persistent configuration owned by this plugin. Data is namespaced by plugin id and stored only in tinyIde settings files. */
+  readonly configuration: PluginConfigurationApi;
   readonly commands: CommandRegistryApi;
   readonly events: EventBusApi;
   readonly extensions: PluginExtensionApi;
   readonly workbench: WorkbenchApi;
   readonly subscriptions: Disposable[];
+}
+
+export type PluginConfigurationScope = "user" | "project";
+export type PluginConfigurationData = Readonly<Record<string, unknown>>;
+
+export interface PluginConfigurationApi {
+  read(scope: PluginConfigurationScope): Promise<PluginConfigurationData>;
+  replace(scope: PluginConfigurationScope, value: PluginConfigurationData): Promise<PluginConfigurationData>;
+  update(scope: PluginConfigurationScope, patch: PluginConfigurationData): Promise<PluginConfigurationData>;
 }
 
 /** Contexto público entregue a implementações básicas distribuídas com a IDE. */
@@ -845,6 +856,8 @@ export interface PluginSettingsProvider {
   readonly pluginId: string;
   readonly title: string;
   readonly description?: string;
+  /** Defines the single persistence owner for these settings. */
+  readonly scope: "user" | "project";
   readonly settings: readonly PluginSettingDefinition[];
 }
 

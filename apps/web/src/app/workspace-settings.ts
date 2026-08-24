@@ -47,6 +47,8 @@ export interface WorkspaceSettings {
   readonly debugPanel?: DebugPanelLayoutSettings;
   /** Reserved namespace for project-local plugin settings. */
   readonly plugins?: PluginSettingsMap;
+  /** Private persistent plugin data. Managed through the plugin configuration API and stored in this same file. */
+  readonly pluginData?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
 }
 
 export const EMPTY_WORKSPACE_SETTINGS: WorkspaceSettings = { version: 1 };

@@ -1,6 +1,8 @@
 import type { TextDiagnostic } from "@tinyide/plugin-api";
 import {
   readApplicationSnapshot,
+  readStoredState,
+  writeStoredState,
   writeApplicationSnapshot,
 } from "../session-store";
 import type {
@@ -21,8 +23,7 @@ import {
 import { projectSessionStateKey } from "./project-session";
 import { isVirtualDocumentId } from "./virtual-documents";
 
-const SESSION_KEY = () => projectSessionStateKey("tinyide.react.session.v2");
-const DESKTOP_SESSION_STATE_KEY = () => projectSessionStateKey("ui-session");
+const SESSION_STATE_KEY = () => projectSessionStateKey("ui-session");
 
 export type PersistedSidebarView = string;
 
@@ -97,7 +98,6 @@ export interface ApplicationSnapshot {
   readonly version: 2;
   readonly workspaceName: string;
   readonly workspaceRoot?: string;
-  readonly workspaceHandle?: BrowserDirectoryHandle;
   readonly workspaceEntries: readonly StoredWorkspaceEntry[];
   readonly documents: readonly StoredDocument[];
   readonly diagnostics: readonly TextDiagnostic[];
@@ -154,7 +154,7 @@ function defaultSession(): SessionState {
   };
 }
 
-function normalizeSession(value: unknown): SessionState {
+export function normalizeSession(value: unknown): SessionState {
   try {
     if (!value || typeof value !== "object") return defaultSession();
     const parsed = value as Partial<SessionState>;
@@ -238,36 +238,23 @@ function normalizeSession(value: unknown): SessionState {
 }
 
 export function readSession(): SessionState {
-  try {
-    const raw = localStorage.getItem(SESSION_KEY());
-    return raw ? normalizeSession(JSON.parse(raw)) : defaultSession();
-  } catch {
-    localStorage.removeItem(SESSION_KEY());
-    return defaultSession();
-  }
+  return defaultSession();
 }
 
 export async function readPersistedSession(): Promise<SessionState> {
-  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
-  if (desktop?.readState) {
-    try {
-      const stored = await desktop.readState(DESKTOP_SESSION_STATE_KEY());
-      if (stored !== undefined) return normalizeSession(stored);
-    } catch (error) {
-      console.warn("Não foi possível restaurar a sessão visual do desktop.", error);
-    }
+  try {
+    const stored = await readStoredState(SESSION_STATE_KEY());
+    if (stored !== undefined) return normalizeSession(stored);
+  } catch (error) {
+    console.warn("Não foi possível restaurar a sessão visual persistente.", error);
   }
-  return readSession();
+  return defaultSession();
 }
 
 export function writeSession(session: SessionState): void {
-  localStorage.setItem(SESSION_KEY(), JSON.stringify(session));
-  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
-  if (desktop?.writeState) {
-    void desktop.writeState(DESKTOP_SESSION_STATE_KEY(), session).catch((error) => {
-      console.warn("Não foi possível persistir a sessão visual do desktop.", error);
-    });
-  }
+  void writeStoredState(SESSION_STATE_KEY(), session).catch((error) => {
+    console.warn("Não foi possível persistir a sessão visual.", error);
+  });
 }
 
 function serializeEntries(entries: readonly WorkspaceEntry[]): readonly StoredWorkspaceEntry[] {
@@ -380,7 +367,6 @@ export async function restoreWorkspaceDocuments(
 export async function writeReactSnapshot(input: {
   readonly workspaceName: string;
   readonly workspaceRoot?: string;
-  readonly workspaceHandle?: BrowserDirectoryHandle;
   readonly workspaceEntries: readonly WorkspaceEntry[];
   readonly documents: readonly OpenDocument[];
   readonly documentFolds?: ReadonlyMap<string, readonly StoredDocumentFold[]>;
@@ -416,18 +402,8 @@ export async function writeReactSnapshot(input: {
     output: input.output,
   };
 
-  const snapshotWithHandles = {
-    ...base,
-    ...(input.workspaceHandle ? { workspaceHandle: input.workspaceHandle } : {}),
-  };
-
-  try {
-    await writeApplicationSnapshot(snapshotWithHandles);
-    return;
-  } catch (error) {
-    console.warn("Não foi possível persistir o handle do workspace; salvando apenas dados serializáveis.", error);
-  }
-
-  const { workspaceHandle: _workspaceHandle, ...serializableSnapshot } = snapshotWithHandles;
-  await writeApplicationSnapshot(serializableSnapshot);
+  // FileSystemHandle exige structured clone (IndexedDB). Como a persistência da
+  // IDE agora é exclusivamente em arquivos do host, o snapshot deve ser JSON
+  // serializável e nunca depender de browser storage.
+  await writeApplicationSnapshot(base);
 }

@@ -63,45 +63,36 @@ function storedPlugin(id: string, enabled: boolean): StoredPlugin {
   };
 }
 
-function localStorageWith(value?: readonly StoredPlugin[]) {
-  const values = new Map<string, string>();
-  if (value) values.set("tinyide.react.plugins.v1", JSON.stringify(value));
-  return {
-    getItem: vi.fn((key: string) => values.get(key) ?? null),
-    removeItem: vi.fn((key: string) => values.delete(key)),
-    setItem: vi.fn((key: string, next: string) => values.set(key, next)),
-  };
-}
-
 describe("plugin state persistence", () => {
-  it("uses desktop state instead of origin-scoped local storage", async () => {
-    const local = [storedPlugin("local", true)];
-    const desktop = [storedPlugin("desktop", false)];
-    const storage = localStorageWith(local);
-    const readState = vi.fn(async () => desktop);
+  it("reads plugin state from the host persistence API", async () => {
+    const stored = [storedPlugin("desktop", false)];
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(stored), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
 
-    await expect(readStoredPlugins(storage, { readState })).resolves.toEqual(desktop);
-    expect(readState).toHaveBeenCalledWith("plugins");
-    expect(storage.getItem).not.toHaveBeenCalled();
+    await expect(readStoredPlugins()).resolves.toEqual(stored);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/core-api/user/state/plugins",
+      expect.objectContaining({ cache: "no-store" }),
+    );
   });
 
-  it("migrates local plugin state when desktop state does not exist yet", async () => {
-    const local = [storedPlugin("local", false)];
-    const storage = localStorageWith(local);
-    const readState = vi.fn(async () => undefined);
+  it("uses an empty plugin list when no host state exists", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "missing" }), { status: 404 })));
 
-    await expect(readStoredPlugins(storage, { readState })).resolves.toEqual(local);
+    await expect(readStoredPlugins()).resolves.toEqual([]);
   });
 
-  it("writes plugin state to durable desktop storage", async () => {
+  it("writes plugin state to the host persistence API", async () => {
     const stored = [storedPlugin("python", false)];
-    const storage = localStorageWith();
-    const writeState = vi.fn(async () => true);
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => new Response(init?.body as string, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
 
-    await writeStoredPlugins(storage, stored, { writeState });
+    await writeStoredPlugins(stored);
 
-    expect(writeState).toHaveBeenCalledWith("plugins", stored);
-    expect(storage.setItem).toHaveBeenCalledWith("tinyide.react.plugins.v1", JSON.stringify(stored));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/core-api/user/state/plugins",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify(stored) }),
+    );
   });
 
   it("rebases packaged plugin URLs when the local runtime port changes", () => {

@@ -42,6 +42,7 @@ export const htmlPreviewSettingsProvider: PluginSettingsProvider = {
   pluginId: HTML_MODULE_OWNER_ID,
   title: "HTML",
   description: "Configura o modo inicial dos documentos HTML.",
+  scope: "user",
   settings: [openInPreviewSetting],
 };
 

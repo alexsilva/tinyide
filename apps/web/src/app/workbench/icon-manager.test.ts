@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkbenchIconPackDefinition, WorkbenchIconProvider } from "@tinyide/plugin-api";
 import {
   applyWorkbenchIconPack,
-  readIconPackPreference,
   resolveIconPack,
   resolveWorkbenchIcon,
   subscribeWorkbenchIcons,
@@ -46,15 +45,6 @@ describe("icon manager", () => {
   it("falls back to the default builtin pack when the stored id is unavailable", () => {
     const fallback = pack(workbenchIconDefaults.packId);
     expect(resolveIconPack([pack("other"), fallback], "missing")).toBe(fallback);
-  });
-
-  it("uses the default pack when storage is empty or unavailable", () => {
-    expect(readIconPackPreference({ getItem: () => null })).toBe(workbenchIconDefaults.packId);
-    expect(readIconPackPreference({
-      getItem: () => {
-        throw new Error("blocked");
-      },
-    })).toBe(workbenchIconDefaults.packId);
   });
 
   it("resolves icons from the active pack and falls back to box", () => {

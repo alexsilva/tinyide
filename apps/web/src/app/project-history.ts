@@ -1,6 +1,5 @@
 import type { BrowserDirectoryHandle, WorkspaceEntry } from "../browser-filesystem";
 import { readStoredState, removeStoredState, writeStoredState } from "../session-store";
-import { isDesktopWorkspaceHandle } from "./workspace-host";
 
 const RECENT_PROJECTS_KEY = "recent-projects";
 const PROJECT_OPEN_PREFERENCE_KEY = "project-open-preference";
@@ -63,6 +62,7 @@ export async function rememberRecentProject(input: {
   const recent = await readRecentProjects();
   const existing = input.path
     ? recent.find((item) => item.path === input.path)
+      ?? recent.find((item) => item.name === input.handle.name && !item.path)
     : recent.find((item) => item.name === input.handle.name && !item.path);
   const id = existing?.id ?? crypto.randomUUID();
   const project: RecentProject = {
@@ -72,18 +72,11 @@ export async function rememberRecentProject(input: {
     ...(input.path ? { path: input.path } : {}),
     lastOpenedAt: Date.now(),
   };
-  // Desktop workspace handles wrap live IPC bridge functions and cannot survive
-  // Electron's structured-clone based IPC (throws "An object could not be cloned.").
-  // They are reconstructed from `project.path` via restoreDesktopWorkspaceHandle instead.
-  if (!isDesktopWorkspaceHandle(input.handle)) {
-    await writeStoredState(`recent-project-handle.${id}`, input.handle);
-  }
+  // Handles são objetos vivos e nunca são persistidos. Projetos recentes são
+  // reconstruídos exclusivamente a partir do caminho resolvido pelo host.
+  await removeStoredState(`recent-project-handle.${id}`).catch(() => undefined);
   await writeStoredState(RECENT_PROJECTS_KEY, [project, ...recent.filter((item) => item.id !== id)].slice(0, MAX_RECENT_PROJECTS));
   return project;
-}
-
-export async function recentProjectHandle(project: RecentProject): Promise<BrowserDirectoryHandle | undefined> {
-  return readStoredState<BrowserDirectoryHandle>(`recent-project-handle.${project.id}`);
 }
 
 export async function removeRecentProject(id: string): Promise<void> {

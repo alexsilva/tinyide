@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@tinyide/module-code-formatter": "0.1.0",
     "@tinyide/module-fonts": "0.1.0",
     "@tinyide/module-html": "0.1.0",
     "@tinyide/module-icons": "0.1.0",

@@ -126,6 +126,7 @@ export interface TinyIdeModule {
 
 export interface PluginExtensionApi {
   registerLanguageProvider(provider: LanguageProvider): Disposable;
+  getLanguageProviders(): readonly LanguageProvider[];
   registerResourceIconProvider(provider: ResourceIconProvider): Disposable;
   registerResourceDecorationProvider(provider: ResourceDecorationProvider): Disposable;
   registerWorkspaceFileCreationProvider(provider: WorkspaceFileCreationProvider): Disposable;
@@ -456,6 +457,8 @@ export interface LanguageProvider {
   readonly id: string;
   readonly name: string;
   readonly extensions: readonly string[];
+  /** Runtime provider used by language services that execute tools from the selected project environment. */
+  readonly environmentProviderId?: string;
   /** Maior prioridade vence. Módulos devem usar prioridade negativa para permitir substituição por plugins. */
   readonly priority?: number;
   readonly lintRules?: readonly LanguageLintRule[];
@@ -463,6 +466,12 @@ export interface LanguageProvider {
   provideFoldingRanges?(
     context: TextEditorFoldingContext,
   ): Promise<readonly TextEditorFoldingRange[]> | readonly TextEditorFoldingRange[];
+  formatDocument?(
+    context: LanguageDocumentFormattingContext,
+  ):
+    | Promise<LanguageDocumentFormattingResult | undefined>
+    | LanguageDocumentFormattingResult
+    | undefined;
   lint(
     source: string,
     fileName: string,
@@ -471,6 +480,46 @@ export interface LanguageProvider {
 }
 
 export const LANGUAGE_PROVIDER_CAPABILITY = "language.provider";
+
+export interface LanguageDocumentFormattingContext {
+  readonly document: TextEditorDocumentSnapshot;
+  readonly selectionStart: number;
+  readonly selectionEnd: number;
+  /** Runtime selecionado no workspace, quando o override da linguagem depende dele. */
+  readonly environmentExecutable?: string;
+}
+
+export interface LanguageDocumentFormattingResult {
+  readonly content: string;
+  readonly selectionStart?: number;
+  readonly selectionEnd?: number;
+}
+
+/**
+ * Resolve o provider dono de um arquivo sem conhecer linguagens específicas.
+ * Prioridade do provider vence; em empate, a extensão mais específica vence.
+ */
+export function languageProviderForFile(
+  fileName: string,
+  providers: readonly LanguageProvider[],
+): LanguageProvider | undefined {
+  const lowerName = fileName.toLocaleLowerCase();
+  return providers
+    .map((provider, index) => ({
+      provider,
+      index,
+      extension: provider.extensions
+        .map((extension) => extension.toLocaleLowerCase())
+        .filter((extension) => lowerName.endsWith(extension))
+        .sort((left, right) => right.length - left.length)[0],
+    }))
+    .filter((item): item is { provider: LanguageProvider; index: number; extension: string } => Boolean(item.extension))
+    .sort((left, right) =>
+      (right.provider.priority ?? 0) - (left.provider.priority ?? 0)
+      || right.extension.length - left.extension.length
+      || left.index - right.index
+    )[0]?.provider;
+}
 
 export interface ScriptExecutionContribution {
   readonly id: string;
@@ -582,6 +631,8 @@ export interface TextEditorContextMenuContext {
   readonly document: TextEditorDocumentSnapshot;
   readonly selectionStart: number;
   readonly selectionEnd: number;
+  /** Runtime selecionado no workspace, quando uma ação da linguagem depende dele. */
+  readonly environmentExecutable?: string;
   /** One-based cursor line. */
   readonly line: number;
   /** One-based cursor column. */
@@ -597,6 +648,7 @@ export interface TextEditorContextMenuProvider {
 }
 
 export const TEXT_EDITOR_CONTEXT_MENU_CAPABILITY = "textEditor.contextMenu";
+export const TEXT_EDITOR_FORMAT_DOCUMENT_COMMAND = "textEditor.formatDocument";
 
 export interface TextEditorPosition {
   /** One-based line. */
@@ -1311,9 +1363,16 @@ export interface WorkbenchTextEditorSaveRequest {
   readonly documentId: string;
 }
 
+export interface WorkbenchTextEditorBusyRequest {
+  readonly documentId: string;
+  readonly label: string;
+}
+
 export interface WorkbenchTextEditorApi {
   replaceContent(request: WorkbenchTextEditorReplaceContentRequest): Promise<void>;
   save(request: WorkbenchTextEditorSaveRequest): Promise<void>;
+  /** Shows a document-scoped busy state until the returned disposable is released. */
+  beginBusy(request: WorkbenchTextEditorBusyRequest): Disposable;
 }
 
 export interface WorkbenchWorkspaceResourceOpenRequest {

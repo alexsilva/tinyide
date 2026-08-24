@@ -84,6 +84,7 @@ import {
 import {
   TEXT_EDITOR_DOCUMENT_CHANGED_EVENT,
   TEXT_EDITOR_DOCUMENT_SAVED_EVENT,
+  TEXT_EDITOR_FORMAT_DOCUMENT_COMMAND,
   WORKSPACE_RESOURCES_CHANGED_EVENT,
 } from "@tinyide/plugin-api";
 import type {
@@ -246,7 +247,7 @@ import {
   type PersistedSidebarView,
 } from "./persistence";
 import { resolveSyntaxHighlighter, type SyntaxHighlighter } from "./generic-syntax";
-import { resolveEnvironmentSelections } from "./environment-selection";
+import { resolveEnvironmentSelections, selectedEnvironmentForProvider } from "./environment-selection";
 import {
   debugAdapterProviders,
   debugAdapterForProfile,
@@ -548,6 +549,7 @@ const EDITOR_VIEWPORT_TRAILING_DELAY_MS = 120;
 const EDITOR_STATE_CAPTURE_DELAY_MS = 200;
 const EDITOR_NAVIGATION_LOADING_DELAY_MS = 150;
 const EDITOR_NAVIGATION_LOADING_MINIMUM_MS = 350;
+const EDITOR_BUSY_MINIMUM_MS = 300;
 
 interface ExplorerFilterResultState {
   readonly query: string;
@@ -648,6 +650,12 @@ export function App() {
   const [explorerIgnoreRevision, setExplorerIgnoreRevision] = useState(0);
   const [documents, setDocuments] = useState<readonly OpenDocument[]>([]);
   const [activeDocumentId, setActiveDocumentId] = useState<string | undefined>(initialSession.activeDocumentId);
+  const [editorBusyOperation, setEditorBusyOperation] = useState<{
+    readonly token: symbol;
+    readonly documentId: string;
+    readonly label: string;
+    readonly startedAt: number;
+  }>();
   const [draggingDocumentId, setDraggingDocumentId] = useState<string>();
   const [dropTargetDocumentId, setDropTargetDocumentId] = useState<string>();
   const [output, setOutput] = useState<string[]>(["tinyIde React shell inicializado."]);
@@ -1028,6 +1036,48 @@ export function App() {
     [activeDocument, platformSnapshot.plugins, resourceEditorRevision, restorationComplete, workspaceSettings.plugins],
   );
   const activeLanguageProvider = activeResourceEditorProvider ? undefined : languageProviderFor(activeDocument);
+  const activeEditorBusyOperation = editorBusyOperation?.documentId === activeDocument?.id
+    ? editorBusyOperation
+    : undefined;
+  const languageEnvironmentExecutable = (provider: LanguageProvider | undefined): string | undefined => {
+    const selectedForProvider = selectedEnvironmentForProvider(
+      environments,
+      selectedEnvironmentIds,
+      provider?.environmentProviderId,
+    );
+    if (selectedForProvider?.status === "ready" && selectedForProvider.executable) {
+      return selectedForProvider.executable;
+    }
+    if (provider?.environmentProviderId) return undefined;
+    return environments.find((environment) => environment.id === selectedEnvironmentId)?.executable;
+  };
+  const canFormatActiveDocument = Boolean(
+    activeDocument?.kind === "text"
+    && !activeResourceEditorProvider
+    && !activeEditorBusyOperation,
+  );
+  const formatActiveDocument = async () => {
+    if (!canFormatActiveDocument || !activeDocument || activeDocument.kind !== "text") return;
+    const textarea = editorRef.current;
+    const content = textarea?.value ?? activeDocument.content;
+    const selectionStart = textarea?.selectionStart ?? activeDocument.selectionStart;
+    const selectionEnd = textarea?.selectionEnd ?? activeDocument.selectionEnd;
+    const beforeCursor = content.slice(0, selectionStart);
+    const lineStart = beforeCursor.lastIndexOf("\n") + 1;
+    const environmentExecutable = languageEnvironmentExecutable(activeLanguageProvider);
+    const context: TextEditorContextMenuContext = {
+      document: {
+        ...editorToolbarDocumentSnapshot(activeDocument),
+        content,
+      },
+      selectionStart,
+      selectionEnd,
+      ...(environmentExecutable ? { environmentExecutable } : {}),
+      line: beforeCursor.split("\n").length,
+      column: selectionStart - lineStart + 1,
+    };
+    await platform.commands.execute(TEXT_EDITOR_FORMAT_DOCUMENT_COMMAND, context);
+  };
   const openEditorSearch = useCallback((selectedText = "") => {
     if (activeDocument?.kind !== "text" || activeResourceEditorProvider) return false;
     if (selectedText) {
@@ -1861,6 +1911,19 @@ export function App() {
       return {
         dispose: () => {
           setWorkbenchDialog((current) => current?.token === token ? undefined : current);
+        },
+      };
+    },
+    beginEditorBusy(request) {
+      const token = Symbol(request.label);
+      const startedAt = window.performance.now();
+      setEditorBusyOperation({ token, ...request, startedAt });
+      return {
+        dispose: () => {
+          const clear = () => setEditorBusyOperation((current) => current?.token === token ? undefined : current);
+          const remaining = EDITOR_BUSY_MINIMUM_MS - (window.performance.now() - startedAt);
+          if (remaining > 0) window.setTimeout(clear, remaining);
+          else clear();
         },
       };
     },
@@ -3460,6 +3523,7 @@ export function App() {
     const selectionEnd = preparedSelection?.selectionEnd ?? textarea.selectionEnd;
     const beforeCursor = textarea.value.slice(0, selectionStart);
     const lineStart = beforeCursor.lastIndexOf("\n") + 1;
+    const environmentExecutable = languageEnvironmentExecutable(languageProviderFor(document));
     const context: TextEditorContextMenuContext = {
       document: {
         ...editorToolbarDocumentSnapshot(document),
@@ -3467,6 +3531,7 @@ export function App() {
       },
       selectionStart,
       selectionEnd,
+      ...(environmentExecutable ? { environmentExecutable } : {}),
       line: beforeCursor.split("\n").length,
       column: selectionStart - lineStart + 1,
     };
@@ -6694,6 +6759,8 @@ export function App() {
           onNewDocument={newDocument}
           onOpenFile={() => invoke(openSingleFile)}
           onSave={(forceSaveAs) => invoke(() => saveDocument(forceSaveAs))}
+          canFormatDocument={canFormatActiveDocument}
+          onFormatDocument={() => invoke(formatActiveDocument)}
           onOpenSettings={() => openSettings("editor")}
           onOpenAbout={() => setAboutOpen(true)}
           onSelectProfile={(profileId) => updateProfiles(profilesState.profiles, profileId)}
@@ -7101,8 +7168,8 @@ export function App() {
                   ) : (
                     <>
                   <div
-                    className={`editor-canvas${showEditorGutter ? " has-editor-gutter" : ""}${editorSettings.lineNumbers ? " has-line-numbers" : ""}${editorNavigationLoading ? " is-symbol-navigation-loading" : ""}`}
-                    aria-busy={editorNavigationLoading}
+                    className={`editor-canvas${showEditorGutter ? " has-editor-gutter" : ""}${editorSettings.lineNumbers ? " has-line-numbers" : ""}${editorNavigationLoading ? " is-symbol-navigation-loading" : ""}${activeEditorBusyOperation ? " is-editor-operation-busy" : ""}`}
+                    aria-busy={editorNavigationLoading || Boolean(activeEditorBusyOperation)}
                     style={{
                       "--editor-gutter-width": `${editorMetrics.gutterWidth}px`,
                       "--editor-line-height": `${editorLayoutMetrics.lineHeight}px`,
@@ -7111,6 +7178,12 @@ export function App() {
                     onMouseMove={trackFoldHover}
                     onMouseLeave={() => { setHoveredFoldLine(undefined); scheduleFoldPreviewClose(); }}
                   >
+                    {activeEditorBusyOperation ? (
+                      <div className="editor-operation-mask" role="status" aria-live="polite">
+                        <RefreshCw className="is-spinning" size={18} />
+                        <span>{activeEditorBusyOperation.label}</span>
+                      </div>
+                    ) : null}
                     {showEditorGutter ? (
                       <EditorLineRuler
                         viewportStore={editorViewportStore}

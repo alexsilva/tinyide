@@ -1,5 +1,6 @@
 import type { TinyIdeModule } from "@tinyide/plugin-api";
 import { htmlModule } from "@tinyide/module-html";
+import { codeFormatterModule } from "@tinyide/module-code-formatter";
 import { textCompletionModule } from "@tinyide/module-text-completion";
 import { themeModule } from "@tinyide/module-themes";
 import { fontModule } from "@tinyide/module-fonts";
@@ -12,4 +13,5 @@ export const builtinModules: readonly TinyIdeModule[] = [
   iconModule,
   htmlModule,
   textCompletionModule,
+  codeFormatterModule,
 ];

@@ -437,6 +437,29 @@
 .code-editor.is-navigation-modifier { cursor: pointer; }
 .editor-canvas.is-symbol-navigation-loading,
 .editor-canvas.is-symbol-navigation-loading * { cursor: progress !important; }
+.editor-operation-mask {
+  position: absolute;
+  z-index: 50;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 9px;
+  background: color-mix(in srgb, var(--surface-editor) 82%, transparent);
+  color: var(--text);
+  cursor: progress;
+  backdrop-filter: blur(1px);
+}
+.editor-operation-mask span {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 9px;
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-size: 11px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 24%);
+}
+.editor-operation-mask svg { color: var(--accent); }
 .editor-completion-popup { position: fixed; z-index: 80; display: grid; width: min(360px, calc(100vw - 24px)); max-height: min(320px, calc(100vh - 40px)); overflow: auto; padding: 4px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border)); border-radius: 7px; background: color-mix(in srgb, var(--surface-raised) 98%, transparent); box-shadow: 0 18px 48px rgb(0 0 0 / 36%); color: var(--text); font: 12px/1.35 var(--font-editor, monospace); }
 .editor-completion-item { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; gap: 8px; width: 100%; min-height: 27px; border: 0; border-radius: 5px; padding: 4px 7px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .editor-completion-item:hover,

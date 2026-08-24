@@ -36,6 +36,7 @@ import type { TinyIdePlatform } from "./platform";
 export function createExtensionApi(platform: TinyIdePlatform): PluginExtensionApi {
   return {
     registerLanguageProvider: (provider: LanguageProvider) => platform.capabilities.register("language.provider", provider),
+    getLanguageProviders: () => platform.capabilities.getAll<LanguageProvider>("language.provider"),
     registerResourceIconProvider: (provider: ResourceIconProvider) => platform.capabilities.register("resource.icon", provider),
     registerResourceDecorationProvider: (provider: ResourceDecorationProvider) => platform.capabilities.register("resource.decoration", provider),
     registerWorkspaceFileCreationProvider: (provider: WorkspaceFileCreationProvider) => platform.capabilities.register("workspace.fileCreation", provider),

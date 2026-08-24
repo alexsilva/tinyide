@@ -31,6 +31,9 @@
       "@tinyide/module-html": [
         "./modules/html/src/index.ts"
       ],
+      "@tinyide/module-code-formatter": [
+        "./modules/code-formatter/src/index.ts"
+      ],
       "@tinyide/module-text-completion": [
         "./modules/text-completion/src/index.ts"
       ]

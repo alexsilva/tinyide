@@ -1,4 +1,4 @@
-import type { LanguageProvider, SyntaxToken } from "@tinyide/plugin-api";
+import { languageProviderForFile, type LanguageProvider, type SyntaxToken } from "@tinyide/plugin-api";
 
 export type GenericSyntaxKind =
   | "source"
@@ -240,26 +240,11 @@ export function highlightGenericSyntax(context: SyntaxHighlightContext): readonl
   }
 }
 
-function matchingExtension(provider: LanguageProvider, fileName: string): string | undefined {
-  const lowerName = fileName.toLocaleLowerCase();
-  return provider.extensions
-    .map((extension) => extension.toLocaleLowerCase())
-    .filter((extension) => lowerName.endsWith(extension))
-    .sort((left, right) => right.length - left.length)[0];
-}
-
 export function pluginLanguageProviderFor(
   context: Pick<SyntaxHighlightContext, "fileName">,
   providers: readonly LanguageProvider[],
 ): LanguageProvider | undefined {
-  return providers
-    .map((provider, index) => ({ provider, index, extension: matchingExtension(provider, context.fileName) }))
-    .filter((item): item is { provider: LanguageProvider; index: number; extension: string } => Boolean(item.extension))
-    .sort((left, right) =>
-      (right.provider.priority ?? 0) - (left.provider.priority ?? 0)
-      || right.extension.length - left.extension.length
-      || left.index - right.index
-    )[0]?.provider;
+  return languageProviderForFile(context.fileName, providers);
 }
 
 const GENERIC_NAMES: Readonly<Record<GenericSyntaxKind, string>> = {

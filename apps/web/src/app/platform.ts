@@ -22,6 +22,7 @@ import type {
   WorkbenchVirtualDocumentRequest,
   WorkbenchWorkspaceResourceOpenRequest,
   WorkbenchTextEditorReplaceContentRequest,
+  WorkbenchTextEditorBusyRequest,
   WorkbenchTextEditorSaveRequest,
   WorkbenchTextHighlightRequest,
   WorkbenchTextHighlightResult,
@@ -148,6 +149,7 @@ interface WorkbenchBinding {
   openDialog(dialog: WorkbenchDialogContribution): Disposable;
   confirm(request: WorkbenchConfirmRequest): Promise<boolean>;
   replaceEditorContent(request: WorkbenchTextEditorReplaceContentRequest): Promise<void>;
+  beginEditorBusy(request: WorkbenchTextEditorBusyRequest): Disposable;
   saveEditorDocument(request: WorkbenchTextEditorSaveRequest): Promise<void>;
   highlightText(request: WorkbenchTextHighlightRequest): WorkbenchTextHighlightResult;
   openWorkspaceResource(request: WorkbenchWorkspaceResourceOpenRequest): Promise<void>;
@@ -191,6 +193,10 @@ class AppWorkbenchApi implements WorkbenchApi {
     replaceContent: async (request: WorkbenchTextEditorReplaceContentRequest): Promise<void> => {
       if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
       await this.#binding.replaceEditorContent(request);
+    },
+    beginBusy: (request: WorkbenchTextEditorBusyRequest): Disposable => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      return this.#binding.beginEditorBusy(request);
     },
     save: async (request: WorkbenchTextEditorSaveRequest): Promise<void> => {
       if (!this.#binding) throw new Error("O workbench ainda não está disponível.");

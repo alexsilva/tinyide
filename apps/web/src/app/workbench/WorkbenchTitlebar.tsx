@@ -1,5 +1,5 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Check, ChevronDown, ChevronRight, FolderRoot, Info, RotateCw, Save, Settings2 } from "lucide-react";
+import { AlignLeft, Check, ChevronDown, ChevronRight, FolderRoot, Info, RotateCw, Save, Settings2 } from "lucide-react";
 import type {
   ExecutionProfile,
   WorkbenchStateApi,
@@ -31,6 +31,8 @@ export interface WorkbenchTitlebarProps {
   readonly onNewDocument: (option?: WorkspaceFileCreationOption) => void;
   readonly onOpenFile: () => void;
   readonly onSave: (forceSaveAs?: boolean) => void;
+  readonly canFormatDocument: boolean;
+  readonly onFormatDocument: () => void;
   readonly onOpenSettings: () => void;
   readonly onOpenAbout: () => void;
   readonly onSelectProfile: (profileId: string | undefined) => void;
@@ -63,6 +65,8 @@ export function WorkbenchTitlebar({
   onNewDocument,
   onOpenFile,
   onSave,
+  canFormatDocument,
+  onFormatDocument,
   onOpenSettings,
   onOpenAbout,
   onSelectProfile,
@@ -154,6 +158,10 @@ export function WorkbenchTitlebar({
         <DropdownMenu.Trigger asChild><button className="menu-button" type="button">Editar <ChevronDown size={13} /></button></DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content className="menu-content" align="start" sideOffset={6}>
+            <DropdownMenu.Item className="menu-item" disabled={!canFormatDocument} onSelect={onFormatDocument}>
+              <AlignLeft size={15} /> Formatar documento
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator className="menu-separator" />
             <DropdownMenu.Item className="menu-item" onSelect={onOpenSettings}><Settings2 size={15} /> Configurações</DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Portal>

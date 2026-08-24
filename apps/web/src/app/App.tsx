@@ -198,7 +198,6 @@ import {
   flattenVisibleEntries,
   joinWorkspacePath,
   nearestRemainingItemId,
-  nextExplorerHiddenVisibility,
   parentEntryPath,
   remapOpenDocumentResource,
   replaceWorkspacePathPrefix,
@@ -4656,13 +4655,13 @@ export function App() {
   }, [explorerFilterProvider, workspaceHandle]);
 
   const explorerHiddenEntriesVisible = explorerShowHidden || explorerRevealedHiddenPaths.size > 0;
-  const toggleExplorerHiddenEntries = () => {
-    const nextVisibility = nextExplorerHiddenVisibility(
-      explorerShowHidden,
-      explorerRevealedHiddenPaths,
-    );
-    setExplorerShowHidden(nextVisibility.showHidden);
-    setExplorerRevealedHiddenPaths(nextVisibility.revealedHiddenPaths);
+  const explorerSpecialEntriesVisible = explorerHiddenEntriesVisible
+    && (!explorerIgnoreProviders.length || explorerShowIgnored);
+  const toggleExplorerSpecialEntries = () => {
+    const visible = !explorerSpecialEntriesVisible;
+    setExplorerShowHidden(visible);
+    setExplorerRevealedHiddenPaths(new Set());
+    setExplorerShowIgnored(visible);
   };
 
   const revealActiveDocumentInExplorer = async () => {
@@ -6346,16 +6345,10 @@ export function App() {
                               <WorkbenchIcon icon="refresh" size={15} /> Atualizar
                             </DropdownMenu.Item>
                             <DropdownMenu.Separator className="menu-separator" />
-                            <DropdownMenu.Item className="menu-item" onSelect={toggleExplorerHiddenEntries}>
-                              {explorerHiddenEntriesVisible ? <WorkbenchIcon icon="preview" size={15} /> : <WorkbenchIcon icon="preview" size={15} />}
-                              {explorerHiddenEntriesVisible ? "Ocultar arquivos ocultos" : "Mostrar arquivos ocultos"}
+                            <DropdownMenu.Item className="menu-item" onSelect={toggleExplorerSpecialEntries}>
+                              <WorkbenchIcon icon="preview" size={15} />
+                              {explorerSpecialEntriesVisible ? "Ocultar arquivos ignorados" : "Exibir arquivos ocultos"}
                             </DropdownMenu.Item>
-                            {explorerIgnoreProviders.length ? (
-                              <DropdownMenu.Item className="menu-item" onSelect={() => setExplorerShowIgnored((visible) => !visible)}>
-                                {explorerShowIgnored ? <WorkbenchIcon icon="preview" size={15} /> : <WorkbenchIcon icon="preview" size={15} />}
-                                {explorerShowIgnored ? "Ocultar arquivos ignorados" : "Mostrar arquivos ignorados"}
-                              </DropdownMenu.Item>
-                            ) : null}
                           </DropdownMenu.Content>
                         </DropdownMenu.Portal>
                       </DropdownMenu.Root>

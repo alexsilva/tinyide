@@ -316,6 +316,9 @@ export async function setHostWorkspace(
   workspaceName: string,
   workspaceRootHint?: string,
 ): Promise<{ readonly workspaceRoot: string }> {
+  // Durante a troca, nenhum plugin deve continuar consultando o backend do
+  // workspace anterior enquanto o runtime desmonta seus handlers.
+  setActiveHostWorkspaceRoot(undefined);
   const response = await projectRuntimeFetch("/core-api/workspace", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

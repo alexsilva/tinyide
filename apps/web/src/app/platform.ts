@@ -28,6 +28,7 @@ import type {
   Disposable,
 } from "@tinyide/plugin-api";
 import { projectRuntimeFetch } from "./project-session";
+import { getActiveHostWorkspaceRoot } from "./host-workspace-state";
 import { AppPluginHost } from "./plugin-host";
 import { createOutputFollowControl } from "./output-follow";
 import { createExtensionApi } from "./extension-api";
@@ -315,13 +316,16 @@ export function resolvePluginIconUrl(manifest: PluginManifest, manifestUrl: stri
   return iconUrl.origin === baseUrl.origin ? iconUrl.href : undefined;
 }
 
-function pluginBackend(pluginId: string): PluginBackendApi {
+export function pluginBackend(pluginId: string): PluginBackendApi {
   return {
     async request<Response>(path: string, options: PluginBackendRequestOptions = {}): Promise<Response> {
       const suffix = path.startsWith("/") ? path : `/${path}`;
       const pathname = suffix.split(/[?#]/, 1)[0] ?? "";
       if (suffix.startsWith("//") || pathname.split("/").includes("..")) {
         throw new Error("O caminho do backend do plugin deve ser relativo ao próprio plugin.");
+      }
+      if (!getActiveHostWorkspaceRoot()) {
+        throw Object.assign(new Error("Abra um workspace antes de usar este plugin."), { statusCode: 409 });
       }
       const response = await projectRuntimeFetch(`/plugin-api/${encodeURIComponent(pluginId)}${suffix}`, {
         ...options,

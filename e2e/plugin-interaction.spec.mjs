@@ -12,6 +12,8 @@ test.describe("conjunto de plugins", () => {
   let workspace;
   /** @type {Awaited<ReturnType<typeof launchIde>>} */
   let ide;
+  /** @type {string[]} */
+  let startupConflictResponses;
 
   test.beforeAll(async () => {
     workspace = await createWorkspace({
@@ -23,6 +25,12 @@ test.describe("conjunto de plugins", () => {
     execFileSync("git", ["config", "user.email", "e2e@tinyide.local"], { cwd: workspace.root });
     execFileSync("git", ["config", "user.name", "E2E"], { cwd: workspace.root });
     ide = await launchIde(workspace.root);
+    startupConflictResponses = [];
+    ide.window.on("response", (response) => {
+      if (response.status() === 409 && response.url().includes("/plugin-api/")) {
+        startupConflictResponses.push(response.url());
+      }
+    });
     await openProject(ide.window);
   });
 
@@ -34,6 +42,7 @@ test.describe("conjunto de plugins", () => {
   test("todos os plugins ativam e nenhum reporta falha na barra de atividades", async () => {
     const { window } = ide;
     await expect(window.getByText(/plugin\(s\)/)).toContainText(/\d+ plugin\(s\)/);
+    expect(startupConflictResponses, "plugins não devem consultar o runtime antes do workspace ficar pronto").toEqual([]);
 
     // Um plugin que falha ao ativar deixa a mensagem no rótulo do seu botão.
     const failures = await window.evaluate(() => [...document.querySelectorAll("[aria-label], [title]")]
@@ -49,6 +58,19 @@ test.describe("conjunto de plugins", () => {
     }
     await expect(window.getByLabel("Busca indexada")).toBeVisible();
     await expect(window.getByLabel("Ambientes de execução")).toBeVisible();
+  });
+
+  test("botões de ferramenta expõem e alternam o estado aberto de forma acessível", async () => {
+    const { window } = ide;
+    for (const name of ["Git", "Docker", "Banco de dados", "TERMINAL", "Node.js"]) {
+      const closed = window.locator(`button[aria-label^="Exibir ${name}"]`).first();
+      await expect(closed).toHaveAttribute("aria-pressed", "false");
+      await closed.click();
+      const opened = window.locator(`button[aria-label^="Ocultar ${name}"]`).first();
+      await expect(opened).toHaveAttribute("aria-pressed", "true");
+      await opened.click();
+      await expect(window.locator(`button[aria-label^="Exibir ${name}"]`).first()).toHaveAttribute("aria-pressed", "false");
+    }
   });
 
   test("busca encontra o arquivo e o editor abre no resultado", async () => {
@@ -120,5 +142,23 @@ test.describe("conjunto de plugins", () => {
     await editor.press("Control+End");
     await editor.type("\nDEPOIS_DOS_PLUGINS = 1\n");
     await expect(editor).toHaveValue(/DEPOIS_DOS_PLUGINS/);
+  });
+
+  test("titlebar continua utilizável ao reduzir a janela com todos os plugins ativos", async () => {
+    const { window } = ide;
+    const original = await window.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    try {
+      await window.setViewportSize({ width: 820, height: 600 });
+      await expect(window.getByLabel("Perfil de execução")).toBeVisible();
+      await expect(window.getByLabel("Gerenciar perfis")).toBeVisible();
+      await expect(window.getByLabel("Recarregar página")).toBeVisible();
+      await expect.poll(() => window.evaluate(() => ({
+        viewport: innerWidth,
+        document: document.documentElement.scrollWidth,
+        titlebar: Math.ceil(document.querySelector(".titlebar")?.getBoundingClientRect().right ?? 0),
+      }))).toEqual({ viewport: 820, document: 820, titlebar: 820 });
+    } finally {
+      await window.setViewportSize(original);
+    }
   });
 });

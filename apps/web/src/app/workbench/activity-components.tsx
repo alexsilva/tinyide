@@ -30,6 +30,7 @@ export function IconButton({
           className={`icon-button${active ? " is-active" : ""}`}
           type="button"
           aria-label={label}
+          aria-pressed={active}
           disabled={disabled}
           onClick={onClick}
           onKeyDown={onKeyDown}

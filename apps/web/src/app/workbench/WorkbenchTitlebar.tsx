@@ -151,7 +151,7 @@ export function WorkbenchTitlebar({
       </DropdownMenu.Root>
 
       <DropdownMenu.Root>
-        <DropdownMenu.Trigger asChild><button className="menu-button" type="button">Edit <ChevronDown size={13} /></button></DropdownMenu.Trigger>
+        <DropdownMenu.Trigger asChild><button className="menu-button" type="button">Editar <ChevronDown size={13} /></button></DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content className="menu-content" align="start" sideOffset={6}>
             <DropdownMenu.Item className="menu-item" onSelect={onOpenSettings}><Settings2 size={15} /> Configurações</DropdownMenu.Item>
@@ -160,7 +160,7 @@ export function WorkbenchTitlebar({
       </DropdownMenu.Root>
 
       <DropdownMenu.Root>
-        <DropdownMenu.Trigger asChild><button className="menu-button" type="button">Help <ChevronDown size={13} /></button></DropdownMenu.Trigger>
+        <DropdownMenu.Trigger asChild><button className="menu-button" type="button">Ajuda <ChevronDown size={13} /></button></DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content className="menu-content" align="start" sideOffset={6}>
             <DropdownMenu.Item className="menu-item" onSelect={onOpenAbout}><Info size={15} /> Sobre</DropdownMenu.Item>

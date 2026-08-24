@@ -175,8 +175,10 @@ button { color: inherit; }
 
 .titlebar {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 2px;
+  overflow: hidden;
   border-bottom: 1px solid var(--border);
   background: var(--surface-titlebar);
   padding: 0 8px;
@@ -246,7 +248,22 @@ button { color: inherit; }
 .execution-profile-select__menu {
   width: min(280px, calc(100vw - 24px));
 }
-@media (max-width: 720px) {
+@media (max-width: 1100px) {
+  .app-brand { display: none; }
+  .menu-button { padding-inline: 6px; }
+  .execution-profile-select {
+    flex-basis: 136px;
+    width: 136px;
+    max-width: 136px;
+  }
+}
+@media (max-width: 900px) {
+  /*
+   * Os plugins continuam acessíveis pela barra de atividades. Em uma janela
+   * estreita, repetir seus controles no titlebar empurra execução e reload para
+   * fora do viewport, então o titlebar conserva apenas as ações essenciais.
+   */
+  .titlebar-plugin-actions { display: none; }
   .execution-profile-select {
     flex-basis: 124px;
     width: 124px;

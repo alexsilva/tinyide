@@ -2,11 +2,13 @@ import type { PluginManifest } from "@tinyide/plugin-api";
 import { describe, expect, it, vi } from "vitest";
 import {
   orderPluginsByDependencies,
+  pluginBackend,
   readStoredPlugins,
   rebaseLoopbackPluginUrl,
   type StoredPlugin,
   writeStoredPlugins,
 } from "./platform";
+import { setActiveHostWorkspaceRoot } from "./host-workspace-state";
 
 function plugin(id: string, name: string, dependencies?: Readonly<Record<string, string>>) {
   const manifest: PluginManifest = {
@@ -114,5 +116,24 @@ describe("plugin state persistence", () => {
       "https://plugins.example.com/python/plugin.json",
       "http://127.0.0.1:43990/",
     )).toBe("https://plugins.example.com/python/plugin.json");
+  });
+});
+
+describe("plugin backend lifecycle", () => {
+  it("does not hit the runtime before a workspace is ready", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof fetch;
+    setActiveHostWorkspaceRoot(undefined);
+    try {
+      await expect(pluginBackend("tinyide.sample").request("/status")).rejects.toMatchObject({
+        message: "Abra um workspace antes de usar este plugin.",
+        statusCode: 409,
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      setActiveHostWorkspaceRoot(undefined);
+      globalThis.fetch = originalFetch;
+    }
   });
 });

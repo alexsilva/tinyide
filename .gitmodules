@@ -25,9 +25,6 @@
 [submodule "plugins/pytest"]
 	path = plugins/pytest
 	url = git@github.com:alexsilva/tinyide.pytest.git
-[submodule "plugins/pytest"]
-	path = plugins/pytest
-	url = git@github.com:alexsilva/tinyide.pytest.git
 [submodule "plugins/markdown"]
 	path = plugins/markdown
 	url = git@github.com:alexsilva/tinyide.markdown.git

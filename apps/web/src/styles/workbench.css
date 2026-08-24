@@ -335,3 +335,21 @@
   .profile-layout { grid-template-columns: 210px minmax(0, 1fr); }
   .form-grid.two-columns { grid-template-columns: 1fr; }
 }
+.editor-region.is-external-file-drop {
+  position: relative;
+}
+.editor-region.is-external-file-drop::after {
+  position: absolute;
+  inset: 8px;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  border: 1px dashed rgb(92 146 255 / 70%);
+  border-radius: 10px;
+  background: rgb(92 146 255 / 10%);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+  content: "Solte o arquivo para abrir";
+}

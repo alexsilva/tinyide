@@ -480,6 +480,12 @@ import {
   virtualDocumentId,
 } from "./virtual-documents";
 
+import {
+  collectExternalFileCandidates,
+  dataTransferHasExternalFiles,
+  openDocumentFromExternalFile,
+} from "./external-file-open";
+
 interface FoldPreviewState {
   readonly line: number;
   readonly text: string;
@@ -794,6 +800,7 @@ export function App() {
   const [draggingExplorerPaths, setDraggingExplorerPaths] = useState<ReadonlySet<string>>(new Set());
   const [dropTargetExplorerPath, setDropTargetExplorerPath] = useState<string>();
   const [explorerHistory, setExplorerHistory] = useState<ExplorerHistoryState>(createExplorerHistoryState);
+  const [externalFileDropActive, setExternalFileDropActive] = useState(false);
   const [explorerFilterOpen, setExplorerFilterOpen] = useState(false);
   const [explorerFilterQuery, setExplorerFilterQuery] = useState("");
   const [explorerFilterResult, setExplorerFilterResult] = useState<ExplorerFilterResultState>();
@@ -3036,6 +3043,62 @@ export function App() {
     const document = await readFileDocument(handle);
     setDocuments((current) => current.some((item) => item.id === document.id) ? current : [...current, document]);
     setActiveDocumentId(document.id);
+  };
+
+  const presentOpenedDocument = (document: OpenDocument) => {
+    setDocuments((current) => {
+      const index = current.findIndex((item) => item.id === document.id);
+      return index === -1
+        ? [...current, document]
+        : current.map((item) => item.id === document.id ? document : item);
+    });
+    setActiveDocumentId(document.id);
+  };
+
+  const openExternalFilesFromDataTransfer = async (dataTransfer: DataTransfer) => {
+    const getAbsolutePath = isDesktopHost()
+      ? (file: File) => {
+          try {
+            return window.tinyideDesktop?.getPathForFile(file) || undefined;
+          } catch {
+            return undefined;
+          }
+        }
+      : undefined;
+    const candidates = await collectExternalFileCandidates(dataTransfer, getAbsolutePath);
+    if (!candidates.length) return;
+    let lastId: string | undefined;
+    for (const candidate of candidates) {
+      const document = await openDocumentFromExternalFile(candidate);
+      presentOpenedDocument(document);
+      lastId = document.id;
+    }
+    if (lastId) setActiveDocumentId(lastId);
+  };
+
+  const handleExternalFileDragOver = (event: React.DragEvent) => {
+    if (!dataTransferHasExternalFiles(event.dataTransfer)) return;
+    // Evita conflitar com reordenação de abas e arrasto interno do explorer.
+    if (draggingDocumentId || draggingExplorerPaths.size) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    if (!externalFileDropActive) setExternalFileDropActive(true);
+  };
+
+  const handleExternalFileDragLeave = (event: React.DragEvent<HTMLElement>) => {
+    if (!externalFileDropActive) return;
+    const next = event.relatedTarget;
+    if (next instanceof Node && event.currentTarget.contains(next)) return;
+    setExternalFileDropActive(false);
+  };
+
+  const handleExternalFileDrop = (event: React.DragEvent) => {
+    if (!dataTransferHasExternalFiles(event.dataTransfer)) return;
+    if (draggingDocumentId || draggingExplorerPaths.size) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setExternalFileDropActive(false);
+    void invoke(() => openExternalFilesFromDataTransfer(event.dataTransfer));
   };
 
   /**
@@ -6807,7 +6870,13 @@ export function App() {
           {sidebarViewsBySide.left ? renderVerticalSidebar("left", sidebarViewsBySide.left) : null}
           {sidebarViewsBySide.right ? renderVerticalSidebar("right", sidebarViewsBySide.right) : null}
 
-          <main className="editor-region">
+          <main
+            className={`editor-region${externalFileDropActive ? " is-external-file-drop" : ""}`}
+            onDragEnter={handleExternalFileDragOver}
+            onDragOver={handleExternalFileDragOver}
+            onDragLeave={handleExternalFileDragLeave}
+            onDrop={handleExternalFileDrop}
+          >
             {documents.length ? (
               <>
                 <Tabs.Root className="document-tabs" value={activeDocumentId ?? ""} onValueChange={setActiveDocumentId}>
@@ -7503,7 +7572,7 @@ export function App() {
               <div className="welcome-screen">
                 <span className="welcome-kicker">Bem-vindo</span>
                 <h1>tinyIde</h1>
-                <p>Crie ou abra um arquivo para começar.</p>
+                <p>Crie, abra ou arraste um arquivo para começar.</p>
                 <div className="welcome-actions">
                   {workspaceFileCreationOptions.length ? (
                     <DropdownMenu.Root>

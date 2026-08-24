@@ -142,6 +142,7 @@ A avaliação considera quatro critérios:
 - Navegação para símbolos.
 - Diagnósticos, decorações e ações de Git.
 - Exibição de imagens e detecção de binários.
+ - Arrastar e soltar arquivos externos na região do editor para abrir, editar e executar quando plugins suportarem o tipo.
 
 ### Pontos fortes
 

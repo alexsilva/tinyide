@@ -1,7 +1,7 @@
 import { Check, ChevronDown, ChevronRight, X } from "lucide-react";
 import { WorkbenchIcon } from "../workbench/activity-components";
 import { fileIconIdFor, hasWorkbenchIcon } from "../workbench/icon-manager";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ResourceDecoration } from "@tinyide/plugin-api";
 import type { WorkspaceEntry } from "../../browser-filesystem";
 import {
@@ -12,6 +12,72 @@ import {
   ignoredExplorerEntryCount,
 } from "../explorer";
 import { resourceIconFor } from "../runtime";
+
+const EXPLORER_VIRTUALIZE_THRESHOLD = 400;
+const EXPLORER_ROW_HEIGHT = 27;
+const EXPLORER_VIRTUAL_OVERSCAN = 24;
+
+interface ExplorerVirtualRange {
+  readonly start: number;
+  readonly end: number;
+}
+
+function explorerScrollParent(element: HTMLElement): HTMLElement | undefined {
+  let parent = element.parentElement;
+  while (parent) {
+    const style = window.getComputedStyle(parent);
+    if (/(auto|scroll)/.test(`${style.overflowY} ${style.overflow}`)) return parent;
+    parent = parent.parentElement;
+  }
+  return undefined;
+}
+
+function useExplorerVirtualRange(
+  enabled: boolean,
+  itemCount: number,
+  focusIndex: number,
+): { readonly ref: React.RefObject<HTMLDivElement | null>; readonly range: ExplorerVirtualRange } {
+  const ref = useRef<HTMLDivElement>(null);
+  const initialEnd = enabled ? Math.min(itemCount, EXPLORER_VIRTUAL_OVERSCAN * 3) : itemCount;
+  const [range, setRange] = useState<ExplorerVirtualRange>({ start: 0, end: initialEnd });
+
+  useLayoutEffect(() => {
+    if (!enabled) {
+      setRange((current) => current.start === 0 && current.end === itemCount ? current : { start: 0, end: itemCount });
+      return;
+    }
+    const tree = ref.current;
+    if (!tree) return;
+    const scrollParent = explorerScrollParent(tree);
+    const update = () => {
+      const treeRect = tree.getBoundingClientRect();
+      const viewportRect = scrollParent?.getBoundingClientRect() ?? {
+        top: 0,
+        bottom: window.innerHeight,
+      };
+      const visibleTop = Math.max(0, viewportRect.top - treeRect.top);
+      const visibleBottom = Math.max(visibleTop, viewportRect.bottom - treeRect.top);
+      let start = Math.max(0, Math.floor(visibleTop / EXPLORER_ROW_HEIGHT) - EXPLORER_VIRTUAL_OVERSCAN);
+      let end = Math.min(itemCount, Math.ceil(visibleBottom / EXPLORER_ROW_HEIGHT) + EXPLORER_VIRTUAL_OVERSCAN);
+      if (end <= start) end = Math.min(itemCount, start + EXPLORER_VIRTUAL_OVERSCAN * 3);
+      if (focusIndex >= 0 && (focusIndex < start || focusIndex >= end)) {
+        start = Math.max(0, focusIndex - EXPLORER_VIRTUAL_OVERSCAN);
+        end = Math.min(itemCount, focusIndex + EXPLORER_VIRTUAL_OVERSCAN + 1);
+      }
+      setRange((current) => current.start === start && current.end === end ? current : { start, end });
+    };
+    update();
+    scrollParent?.addEventListener("scroll", update, { passive: true });
+    const resizeObserver = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update);
+    if (scrollParent) resizeObserver?.observe(scrollParent);
+    return () => {
+      scrollParent?.removeEventListener("scroll", update);
+      resizeObserver?.disconnect();
+    };
+  }, [enabled, focusIndex, itemCount]);
+
+  return { ref, range };
+}
 
 export function ExplorerCreationRow({
   kind,
@@ -181,10 +247,27 @@ export function EntryTree({
     | { readonly type: "entry"; readonly entry: WorkspaceEntry }
   > = visibleEntries.map((entry) => ({ type: "entry", entry }));
   if (creationRow) treeItems.splice(creationIndex, 0, { type: "creation" });
+  // Diretórios com milhares de arquivos eram materializados integralmente no DOM: 5 mil arquivos
+  // custavam >1,5 s só para montar o Explorer. Listas planas de arquivos têm altura fixa e podem
+  // ser virtualizadas sem afetar diretórios expandidos ou a semântica da árvore.
+  const virtualized = !creationRow
+    && treeItems.length >= EXPLORER_VIRTUALIZE_THRESHOLD
+    && visibleEntries.every((entry) => entry.kind === "file");
+  const focusPath = renamePath ?? selectedPath ?? highlightedPath;
+  const focusIndex = virtualized && focusPath
+    ? visibleEntries.findIndex((entry) => entry.path === focusPath)
+    : -1;
+  const { ref: treeRef, range: virtualRange } = useExplorerVirtualRange(virtualized, treeItems.length, focusIndex);
+  const renderedTreeItems = virtualized
+    ? treeItems.slice(virtualRange.start, virtualRange.end)
+    : treeItems;
 
   return (
-    <div className="tree" data-explorer-directory-path={parentPath}>
-      {treeItems.map((item) => {
+    <div ref={treeRef} className="tree" data-explorer-directory-path={parentPath}>
+      {virtualized && virtualRange.start > 0 ? (
+        <div aria-hidden="true" data-explorer-virtual-spacer style={{ height: virtualRange.start * EXPLORER_ROW_HEIGHT }} />
+      ) : null}
+      {renderedTreeItems.map((item) => {
         if (item.type === "creation") {
           return <div key="explorer-creation-entry">{creationRow}</div>;
         }
@@ -429,6 +512,13 @@ export function EntryTree({
           ) : null}
         </div>;
       })}
+      {virtualized && virtualRange.end < treeItems.length ? (
+        <div
+          aria-hidden="true"
+          data-explorer-virtual-spacer
+          style={{ height: (treeItems.length - virtualRange.end) * EXPLORER_ROW_HEIGHT }}
+        />
+      ) : null}
     </div>
   );
 }

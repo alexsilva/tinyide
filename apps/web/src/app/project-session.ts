@@ -4,6 +4,7 @@ const DEFAULT_PROJECT_SESSION_ID = "default";
 const PROJECT_SESSION_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 
 let cachedSessionId: string | undefined;
+const workspaceScopeHashes = new Map<string, Promise<string>>();
 
 function validSessionId(value: string | null | undefined): value is string {
   return Boolean(value && PROJECT_SESSION_PATTERN.test(value));
@@ -54,7 +55,12 @@ export async function projectWorkspaceStateKey(key: string, workspaceRoot: strin
   const root = workspaceRoot.trim();
   if (!root) throw new Error("Workspace obrigatório para estado escopado.");
   const scope = `${projectSessionId()}\0${root}`;
-  return `${key}.workspace.${await sha256Hex(scope)}`;
+  let hash = workspaceScopeHashes.get(scope);
+  if (!hash) {
+    hash = sha256Hex(scope);
+    workspaceScopeHashes.set(scope, hash);
+  }
+  return `${key}.workspace.${await hash}`;
 }
 
 export function projectSessionHeaders(headers?: HeadersInit): Headers {

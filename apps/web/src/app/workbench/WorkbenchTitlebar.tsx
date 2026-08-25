@@ -20,7 +20,7 @@ export interface WorkbenchTitlebarProps {
   readonly selectedProfile: ExecutionProfile | undefined;
   readonly selectedProfileRunning: boolean;
   readonly selectedProfileDebuggable: boolean;
-  readonly debugSessionActive: boolean;
+  readonly selectedProfileDebugging: boolean;
   readonly busy: boolean;
   readonly pageReloading: boolean;
   readonly contributions: readonly WorkbenchTitlebarContribution[];
@@ -54,7 +54,7 @@ export function WorkbenchTitlebar({
   selectedProfile,
   selectedProfileRunning,
   selectedProfileDebuggable,
-  debugSessionActive,
+  selectedProfileDebugging,
   busy,
   pageReloading,
   contributions,
@@ -237,7 +237,7 @@ export function WorkbenchTitlebar({
             className="icon-button small debug-run"
             type="button"
             aria-label="Depurar perfil"
-            disabled={!selectedProfileDebuggable || busy || debugSessionActive}
+            disabled={!selectedProfileDebuggable || busy || selectedProfileDebugging}
             onClick={onDebugProfile}
           ><WorkbenchIcon icon="bug" size={15} /></button>
         </ButtonTooltip>

@@ -38,7 +38,7 @@ export interface TinyIdeDesktopApi {
   removeState?(key: string): Promise<boolean>;
   notifyReady?(): void;
   getPathForFile(file: File): string;
-  pickDirectory?(): Promise<DesktopWorkspaceDescriptor | undefined>;
+  pickDirectory?(defaultPath?: string): Promise<DesktopWorkspaceDescriptor | undefined>;
   restoreDirectory?(path: string): Promise<DesktopWorkspaceDescriptor | undefined>;
   restoreLastDirectory?(): Promise<DesktopWorkspaceDescriptor | undefined>;
   openProjectWindow?(path: string, sessionId: string): Promise<boolean>;
@@ -410,15 +410,22 @@ export function isDesktopWorkspaceHandle(
   return Boolean(handle && "desktopWorkspaceRoot" in handle);
 }
 
-export async function pickWorkspaceDirectory(): Promise<BrowserDirectoryHandle> {
+/**
+ * O seletor sempre reabre onde o usuário estava: no desktop o caminho conhecido
+ * vira `defaultPath` do diálogo nativo; no navegador o `id` faz o próprio Chrome
+ * lembrar o último diretório escolhido para este mesmo seletor.
+ */
+export const WORKSPACE_PICKER_ID = "tinyide-workspace";
+
+export async function pickWorkspaceDirectory(defaultPath?: string): Promise<BrowserDirectoryHandle> {
   const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
   if (supportsDesktopWorkspace(desktop)) {
-    const descriptor = await desktop.pickDirectory();
+    const descriptor = await desktop.pickDirectory(defaultPath?.trim() || undefined);
     if (!descriptor) throw new DOMException("A seleção do diretório foi cancelada.", "AbortError");
     return new DesktopDirectoryHandleImpl(desktop, descriptor);
   }
   if (!window.showDirectoryPicker) throw new Error("Este navegador não oferece seleção de pastas.");
-  return window.showDirectoryPicker();
+  return window.showDirectoryPicker({ id: WORKSPACE_PICKER_ID, mode: "readwrite" });
 }
 
 export async function restoreDesktopWorkspaceHandle(

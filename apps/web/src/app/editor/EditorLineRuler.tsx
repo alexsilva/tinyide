@@ -1,4 +1,4 @@
-import type { RefObject, ReactElement } from "react";
+import type { RefObject, ReactElement, ReactNode } from "react";
 import type { DebugBreakpoint, TextEditorLineDecoration } from "@tinyide/plugin-api";
 import { useEditorViewportLineRange, type EditorViewportStore } from "./editor-viewport";
 
@@ -35,6 +35,8 @@ export interface EditorLineRulerProps {
   readonly onChangeMarkerEnter: (decoration: TextEditorLineDecoration, changeKey: string | undefined) => void;
   readonly onChangeMarkerLeave: () => void;
   readonly onLineEnter: () => void;
+  /** Overlays em coordenadas de conteúdo (fold toggles) que rolam junto com a régua. */
+  readonly children?: ReactNode;
 }
 
 /**
@@ -59,6 +61,7 @@ export function EditorLineRuler({
   onChangeMarkerEnter,
   onChangeMarkerLeave,
   onLineEnter,
+  children,
 }: EditorLineRulerProps) {
   const range = useEditorViewportLineRange(
     viewportStore,
@@ -67,6 +70,9 @@ export function EditorLineRuler({
     lineHeight,
     contentPadding,
     EDITOR_RULER_STEP_LINES,
+    // A régua é barata de renderizar; o commit síncrono no evento de scroll elimina o atraso
+    // visível que o agendamento contínuo do React introduz sob rolagem prolongada.
+    true,
   );
   const editorLineTop = (line: number) => contentPadding + (line - 1) * lineHeight;
   const lines: ReactElement[] = [];
@@ -124,6 +130,7 @@ export function EditorLineRuler({
         style={{ height: `${contentPadding * 2 + lineCount * lineHeight}px` }}
       >
         {lines}
+        {children}
       </pre>
     </div>
   );

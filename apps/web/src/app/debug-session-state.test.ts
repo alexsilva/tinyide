@@ -1,16 +1,21 @@
 import type { DebugAdapterProvider, DebugSessionSnapshot } from "@tinyide/plugin-api";
 import { describe, expect, it, vi } from "vitest";
 import {
-  restoreActiveDebugSession,
+  restoreActiveDebugSessions,
   sameDebugSessionSnapshot,
   workspaceRelativeDebugPath,
 } from "./debug-session-state";
 
-function session(id: string, startedAt: number, status: DebugSessionSnapshot["status"] = "paused"): DebugSessionSnapshot {
+function session(
+  id: string,
+  startedAt: number,
+  status: DebugSessionSnapshot["status"] = "paused",
+  profileId = `profile-${id}`,
+): DebugSessionSnapshot {
   return {
     id,
     adapterId: "test-adapter",
-    profileId: `profile-${id}`,
+    profileId,
     profileName: `Profile ${id}`,
     status,
     breakpoints: [],
@@ -41,19 +46,32 @@ function adapter(sessions: readonly DebugSessionSnapshot[]): DebugAdapterProvide
 }
 
 describe("debug session restoration", () => {
-  it("restores the newest active session and stops older active sessions", async () => {
+  it("restores active sessions from different profiles without stopping them", async () => {
     const provider = adapter([
-      session("old", 10),
+      session("profile-a", 10),
       session("finished", 15, "completed"),
-      session("current", 20, "running"),
+      session("profile-b", 20, "running"),
     ]);
 
-    const restored = await restoreActiveDebugSession([provider]);
+    const restored = await restoreActiveDebugSessions([provider]);
 
-    expect(restored.current?.session.id).toBe("current");
-    expect(provider.command).toHaveBeenCalledTimes(1);
-    expect(provider.command).toHaveBeenCalledWith("old", "stop");
+    expect(restored.sessions.map(({ session }) => session.id)).toEqual(["profile-a", "profile-b"]);
+    expect(provider.command).not.toHaveBeenCalled();
     expect(restored.errors).toEqual([]);
+  });
+
+  it("stops only an older duplicate session of the same profile", async () => {
+    const provider = adapter([
+      session("old", 10, "paused", "profile-a"),
+      session("current", 20, "running", "profile-a"),
+      session("other", 15, "paused", "profile-b"),
+    ]);
+
+    const restored = await restoreActiveDebugSessions([provider]);
+
+    expect(restored.sessions.map(({ session }) => session.id)).toEqual(["other", "current"]);
+    expect(provider.command).toHaveBeenCalledOnce();
+    expect(provider.command).toHaveBeenCalledWith("old", "stop");
   });
 
   it("keeps restoration available when another adapter cannot list sessions", async () => {
@@ -64,9 +82,9 @@ describe("debug session restoration", () => {
       list: vi.fn(async () => { throw new Error("offline"); }),
     };
 
-    const restored = await restoreActiveDebugSession([failing, provider]);
+    const restored = await restoreActiveDebugSessions([failing, provider]);
 
-    expect(restored.current?.session.id).toBe("current");
+    expect(restored.sessions.map(({ session }) => session.id)).toEqual(["current"]);
     expect(restored.errors.map((error) => error.message)).toEqual(["offline"]);
   });
 });

@@ -47,8 +47,20 @@ export function replaceTextMatches(
   matches: readonly TextSearchMatch[],
   replacement: string,
 ): string {
-  return [...matches].reverse().reduce(
-    (content, match) => replaceTextMatch(content, match, replacement),
-    source,
-  );
+  if (!matches.length) return source;
+  // Recriar a string inteira para cada ocorrência transforma "Substituir tudo" em O(n*m):
+  // 10 mil matches num arquivo de ~1 MB chegavam a bloquear a UI por vários segundos. Montar os
+  // segmentos uma única vez mantém o custo linear no tamanho do documento + número de matches.
+  const ordered = [...matches].sort((left, right) => left.start - right.start || left.end - right.end);
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const match of ordered) {
+    const start = Math.max(cursor, Math.min(source.length, match.start));
+    const end = Math.max(start, Math.min(source.length, match.end));
+    if (match.start < cursor) continue;
+    parts.push(source.slice(cursor, start), replacement);
+    cursor = end;
+  }
+  parts.push(source.slice(cursor));
+  return parts.join("");
 }

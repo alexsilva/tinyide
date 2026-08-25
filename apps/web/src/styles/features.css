@@ -499,6 +499,19 @@
 .editor-line-ruler__execution-marker { display: block; z-index: 1; grid-row: 1; grid-column: 1; justify-self: start; width: 0; height: 0; margin-left: 2px; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 7px solid transparent; }
 .editor-line-ruler__execution-marker.is-current { border-left-color: #f0c75e; filter: drop-shadow(0 0 2px rgb(240 199 94 / 45%)); }
 .editor-fold-overlay { position: absolute; z-index: 3; top: 0; bottom: 0; left: var(--editor-gutter-width); width: 20px; pointer-events: none; }
+
+/* Gutter dentro do scroller: o compositor move régua, breakpoints e fold toggles junto com o
+   conteúdo — nenhuma sincronização JS, portanto nenhum frame de atraso. A régua fica sticky
+   para sobreviver ao scroll horizontal; os overlays usam coordenadas de conteúdo. */
+.editor-canvas.has-editor-gutter.has-inline-gutter { grid-template-columns: minmax(0, 1fr); }
+.highlight-editor.has-inline-ruler { display: flex; }
+/* Filhos flex esticam só até a altura do container (viewport), não até o conteúdo rolável:
+   fundo/borda da régua e camadas absolutas (textarea, diagnósticos, breakpoints) terminariam a
+   um viewport do topo. `height: max-content` faz ambos acompanharem a altura do conteúdo. */
+.highlight-editor.has-inline-ruler > .editor-line-ruler { position: sticky; z-index: 5; left: 0; flex: 0 0 var(--editor-gutter-width); overflow: visible; height: max-content; min-height: 100%; }
+.highlight-editor.has-inline-ruler > .highlight-editor__content { flex: 1 0 auto; min-width: calc(100% - var(--editor-gutter-width)); height: max-content; }
+.editor-fold-overlay--inline { top: 0; bottom: 0; left: 100%; }
+.editor-fold-overlay--inline .editor-fold-toggle { top: var(--fold-line-top); }
 .editor-fold-toggle { position: absolute; top: calc(var(--fold-line-top) - var(--editor-scroll-top, 0px)); left: 1px; display: flex; width: 14px; height: var(--editor-line-height, 21.45px); align-items: center; justify-content: center; border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 3px; padding: 0; background: color-mix(in srgb, var(--surface-editor) 84%, var(--surface-3)); color: var(--muted); font: 12px/1 var(--font-editor, monospace); pointer-events: auto; cursor: pointer; }
 .editor-fold-toggle:hover,
 .editor-fold-toggle:focus-visible { outline: none; border-color: var(--accent); background: var(--surface-3); color: var(--text); }
@@ -525,6 +538,8 @@
 .editor-debug-current-line { position: absolute; z-index: 1; top: calc(var(--debug-line-content-top) - var(--editor-scroll-top, 0px)); right: 0; left: var(--editor-gutter-width); height: var(--editor-line-height, 21.45px); pointer-events: none; background: color-mix(in srgb, var(--accent) 18%, transparent); border-top: 1px solid color-mix(in srgb, var(--accent) 18%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, transparent); }
 .editor-breakpoint-lines { position: absolute; z-index: 1; inset: 0; pointer-events: none; }
 .editor-breakpoint-line { position: absolute; top: calc(var(--breakpoint-line-top) - var(--editor-scroll-top, 0px)); right: 0; left: var(--editor-gutter-width); height: var(--editor-line-height, 21.45px); background: color-mix(in srgb, #e05252 14%, transparent); }
+.editor-breakpoint-lines--inline .editor-breakpoint-line { top: var(--breakpoint-line-top); left: 0; }
+.editor-debug-current-line--inline { top: var(--debug-line-content-top); left: 0; }
 .execution-panel-view { display: flex; height: calc(100% - var(--execution-tab-height, 30px)); min-height: 0; flex-direction: column; }
 .execution-panel-view[hidden] { display: none; }
 .execution-panel-toolbar { display: flex; min-height: 32px; flex: 0 0 32px; align-items: center; justify-content: space-between; gap: 10px; padding: 2px 8px; border-bottom: 1px solid var(--border); background: var(--surface-2); }

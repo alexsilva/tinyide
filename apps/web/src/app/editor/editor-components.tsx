@@ -35,11 +35,12 @@ export const HighlightedSource = memo(function HighlightedSource({
     readonly widthGuard?: string;
   };
 }) {
-  const tokens = useMemo(() => [...(provider?.highlight(source) ?? [])]
-    .filter((token) => token.start >= 0 && token.start < token.end && token.end <= source.length)
-    .sort((left, right) => left.start - right.start), [provider, source]);
   const windowStart = Math.max(0, Math.min(source.length, renderWindow?.start ?? 0));
   const windowEnd = Math.max(windowStart, Math.min(source.length, renderWindow?.end ?? source.length));
+  const tokens = useMemo(() => [...(provider?.highlight(source) ?? [])]
+    .filter((token) => token.start >= 0 && token.start < token.end && token.end <= source.length)
+    .filter((token) => token.end > windowStart && token.start < windowEnd)
+    .sort((left, right) => left.start - right.start), [provider, source, windowEnd, windowStart]);
   const clampToWindow = (offset: number) => Math.max(windowStart, Math.min(windowEnd, offset));
   const ranges = ([
     [highlight, "editor-search-match"],

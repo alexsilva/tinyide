@@ -243,6 +243,7 @@ import {
   readPersistedSession,
   readReactSnapshot,
   readSession,
+  resolveRestoredWorkspace,
   restoreWorkspaceDocuments,
   writeReactSnapshot,
   writeSession,
@@ -281,7 +282,7 @@ import {
   textEditorLineDecorationProviders,
   workbenchResourceDescriptor,
 } from "./runtime";
-import { restoreActiveDebugSession, workspaceRelativeDebugPath } from "./debug-session-state";
+import { restoreActiveDebugSessions, workspaceRelativeDebugPath } from "./debug-session-state";
 import {
   DEFAULT_DEBUG_PANEL_LAYOUT,
   EMPTY_DEBUG_OUTPUT_OFFSETS,
@@ -331,7 +332,7 @@ import {
 import {
   EDITOR_CONTENT_PADDING,
   EDITOR_DEFAULT_LINE_HEIGHT,
-  editorDocumentMetrics,
+  editorDocumentIndex,
   editorVisibleLineRange,
   resolveEditorSettings,
 } from "./editor-settings";
@@ -508,6 +509,11 @@ interface ActiveFoldRangeState {
 interface DebugCommandPendingState {
   readonly sessionId: string;
   readonly command: DebugAdapterCommand;
+}
+
+interface DebugSessionRecord {
+  readonly adapter: DebugAdapterProvider;
+  readonly session: DebugSessionSnapshot;
 }
 
 const FOLD_PREVIEW_MAX_HEIGHT = 520;
@@ -697,10 +703,9 @@ export function App() {
   const [resumedProfileProcesses, setResumedProfileProcesses] = useState<readonly ResumedProfileProcess[]>([]);
   const [profilesState, setProfilesState] = useState<StoredProfiles>({ profiles: [] });
   const [debugBreakpoints, setDebugBreakpoints] = useState<readonly DebugBreakpoint[]>([]);
-  const [debugSession, setDebugSession] = useState<DebugSessionSnapshot>();
-  const [debugAdapter, setDebugAdapter] = useState<DebugAdapterProvider>();
-  const [debugCommandPending, setDebugCommandPending] = useState<DebugCommandPendingState>();
-  const [debugRestartingProfileId, setDebugRestartingProfileId] = useState<string>();
+  const [debugSessions, setDebugSessions] = useState<Readonly<Record<string, DebugSessionRecord>>>({});
+  const [debugCommandPending, setDebugCommandPending] = useState<Readonly<Record<string, DebugCommandPendingState>>>({});
+  const [debugRestartingProfileIds, setDebugRestartingProfileIds] = useState<ReadonlySet<string>>(new Set());
   const [restartingProfileId, setRestartingProfileId] = useState<string>();
   const [debugInspectorWidth, setDebugInspectorWidth] = useState<number>(DEFAULT_DEBUG_PANEL_LAYOUT.inspectorWidth);
   const [debugOutputWrap, setDebugOutputWrap] = useState<boolean>(DEFAULT_DEBUG_PANEL_LAYOUT.outputWrap);
@@ -936,16 +941,15 @@ export function App() {
   }, [environments, selectedEnvironmentId, workspaceSettings.environment]);
   const profileExecutionsRef = useRef(profileExecutions);
   profileExecutionsRef.current = profileExecutions;
-  const debugSessionRef = useRef<DebugSessionSnapshot | undefined>(debugSession);
-  debugSessionRef.current = debugSession;
+  const debugSessionsRef = useRef(debugSessions);
+  debugSessionsRef.current = debugSessions;
   const openProfileTabIdsRef = useRef(openProfileTabIds);
   openProfileTabIdsRef.current = openProfileTabIds;
   const profileRunCancellationRef = useRef(new Map<string, { cancelled: boolean }>());
   const profileRunPromiseRef = useRef(new Map<string, Promise<void>>());
-  const debugCommandPromiseRef = useRef<Promise<void> | undefined>(undefined);
-  const debugRestartPromiseRef = useRef<Promise<void> | undefined>(undefined);
-  const debugLayoutRef = useRef<HTMLDivElement | null>(null);
-  const debugOutputRef = useRef<HTMLDivElement | null>(null);
+  const debugCommandPromiseRef = useRef(new Map<string, Promise<void>>());
+  const debugRestartPromiseRef = useRef(new Map<string, Promise<void>>());
+  const debugOutputRefs = useRef(new Map<string, HTMLDivElement>());
   const userSettingsRef = useRef<UserSettings>(EMPTY_USER_SETTINGS);
   const userSettingsWriteQueueRef = useRef<Promise<UserSettings>>(Promise.resolve(EMPTY_USER_SETTINGS));
   const workspaceSettingsRef = useRef<WorkspaceSettings>(EMPTY_WORKSPACE_SETTINGS);
@@ -993,7 +997,15 @@ export function App() {
     throw new Error("A interrupção de perfis ainda não está disponível.");
   });
 
-  const executionSnapshot = (): WorkbenchExecutionSnapshot => ({
+  const executionSnapshot = (): WorkbenchExecutionSnapshot => {
+    const activeDebugSessions = Object.values(debugSessionsRef.current)
+      .map((record) => record.session)
+      .sort((left, right) => left.startedAt - right.startedAt);
+    const selectedDebugSession = profilesStateRef.current.selectedId
+      ? debugSessionsRef.current[profilesStateRef.current.selectedId]?.session
+      : undefined;
+    const focusedDebugSession = selectedDebugSession ?? activeDebugSessions.at(-1);
+    return ({
     profiles: profilesStateRef.current.profiles.map((profile) => ({
       ...profile,
       environment: { ...profile.environment },
@@ -1032,8 +1044,10 @@ export function App() {
       output: [...execution.output],
       ...(execution.data ? { data: { ...execution.data } } : {}),
     })),
-    ...(debugSessionRef.current ? { debugSession: debugSessionRef.current } : {}),
-  });
+    ...(activeDebugSessions.length ? { debugSessions: activeDebugSessions } : {}),
+    ...(focusedDebugSession ? { debugSession: focusedDebugSession } : {}),
+    });
+  };
   const workbenchStateListenersRef = useRef(new Set<(snapshot: WorkbenchStateSnapshot) => void>());
   const workbenchState = useMemo<WorkbenchStateApi>(() => ({
     snapshot: () => workbenchStateRef.current,
@@ -1248,45 +1262,60 @@ export function App() {
     : undefined;
   const selectedProfileExecution = selectedProfile ? profileExecutions[selectedProfile.id] : undefined;
   const selectedProfileRunning = selectedProfileExecution?.status === "running";
-  const debugSessionActive = Boolean(debugSession && !["stopped", "completed", "failed"].includes(debugSession.status));
+  const selectedDebugRecord = selectedProfile ? debugSessions[selectedProfile.id] : undefined;
+  const selectedDebugSession = selectedDebugRecord?.session;
+  const selectedProfileDebugging = Boolean(selectedDebugSession && !["stopped", "completed", "failed"].includes(selectedDebugSession.status));
+  const focusedDebugTab = profileExecutionPanelTab(panelTab);
+  const focusedDebugRecord = focusedDebugTab?.mode === "debug" ? debugSessions[focusedDebugTab.profileId] : undefined;
+  const debugSession = focusedDebugRecord?.session ?? selectedDebugSession;
   const activeDebugFrame = debugSession?.status === "paused"
     ? debugSession.frames.find((frame) => frame.id === debugSession.selectedFrameId) ?? debugSession.frames[0]
     : undefined;
   const activeDebugPath = workspaceRelativeDebugPath(activeDebugFrame?.path, workspaceRoot);
   const activeDebugLine = activeDebugFrame?.line;
   useEffect(() => {
-    if (!debugSessionActive || !debugSession || !debugAdapter) return;
-    if (!["starting", "running"].includes(debugSession.status)) return;
-    let cancelled = false;
-    let timer: number | undefined;
-    let reading = false;
-    const delay = debugSession.status === "starting" ? 250 : 750;
-    const poll = async () => {
-      if (cancelled || reading) return;
-      reading = true;
-      try {
-        const snapshot = await debugAdapter.read(debugSession.id);
-        if (!cancelled) {
-          setDebugSession((current) => nextDebugSession(current, snapshot));
+    const timers = new Map<string, number>();
+    const cancelled = { value: false };
+    for (const [profileId, record] of Object.entries(debugSessions)) {
+      if (!["starting", "running"].includes(record.session.status)) continue;
+      let reading = false;
+      const delay = record.session.status === "starting" ? 250 : 750;
+      const poll = async () => {
+        if (cancelled.value || reading) return;
+        reading = true;
+        try {
+          const snapshot = await record.adapter.read(record.session.id);
+          if (!cancelled.value) {
+            setDebugSessions((current) => {
+              const currentRecord = current[profileId];
+              if (!currentRecord || currentRecord.session.id !== record.session.id) return current;
+              const nextSession = nextDebugSession(currentRecord.session, snapshot) ?? currentRecord.session;
+              if (nextSession === currentRecord.session) return current;
+              return {
+                ...current,
+                [profileId]: { ...currentRecord, session: nextSession },
+              };
+            });
+          }
+        } catch {
+          // A command or process transition may temporarily make a poll stale.
+        } finally {
+          reading = false;
+          if (!cancelled.value) timers.set(profileId, window.setTimeout(poll, delay));
         }
-      } catch {
-        // A command or process transition may temporarily make a poll stale.
-      } finally {
-        reading = false;
-        if (!cancelled) timer = window.setTimeout(poll, delay);
-      }
-    };
-    timer = window.setTimeout(poll, delay);
+      };
+      timers.set(profileId, window.setTimeout(poll, delay));
+    }
     return () => {
-      cancelled = true;
-      if (timer !== undefined) window.clearTimeout(timer);
+      cancelled.value = true;
+      for (const timer of timers.values()) window.clearTimeout(timer);
     };
-  }, [debugSessionActive, debugSession?.id, debugSession?.status, debugAdapter]);
+  }, [debugSessions]);
 
   useEffect(() => {
     if (!debugOutputFollowTail || !debugSession) return;
     window.requestAnimationFrame(() => {
-      const outputElement = debugOutputRef.current;
+      const outputElement = debugOutputRefs.current.get(debugSession.id);
       if (outputElement) outputElement.scrollTop = outputElement.scrollHeight;
     });
   }, [debugSession?.stdout, debugSession?.stderr, debugSession?.error, debugOutputFollowTail]);
@@ -1296,9 +1325,7 @@ export function App() {
     const configuredProfile = profilesState.profiles.find((candidate) => candidate.id === tab.profileId);
     const execution = tab.mode === "run" ? profileExecutions[tab.profileId] : undefined;
     const profile = configuredProfile ?? execution?.profile;
-    const tabDebugSession = tab.mode === "debug" && debugSession?.profileId === tab.profileId
-      ? debugSession
-      : undefined;
+    const tabDebugSession = tab.mode === "debug" ? debugSessions[tab.profileId]?.session : undefined;
     if (!profile && !execution && !tabDebugSession) return [];
     const name = profile?.name ?? execution?.profileName ?? tabDebugSession?.profileName ?? tab.profileId;
     const viewTarget: WorkbenchExecutionViewTarget = {
@@ -1379,7 +1406,7 @@ export function App() {
       ? sidebarWidthForView(verticalPanelWidths.right, sidebarViewsBySide.right)
       : 0;
   const bottomPanelAvailable = profileOutputTabs.length > 0
-    || Boolean(debugSession)
+    || Object.keys(debugSessions).length > 0
     || workbenchPanels.some((panel) => panel.id === panelTab);
   const availableThemes = useMemo(() => workbenchThemes(platform), [platformSnapshot]);
   const availableFonts = useMemo(() => workbenchFonts(platform), [platformSnapshot]);
@@ -1553,12 +1580,16 @@ export function App() {
     activeFoldProjection,
     activeEditorDisplayContent,
   ]);
-  const editorMetrics = useMemo(
+  const editorDocumentIndexValue = useMemo(
     () => activeDocument?.kind === "text"
-      ? editorDocumentMetrics(activeEditorDisplayContent)
+      ? editorDocumentIndex(
+          activeEditorDisplayContent,
+          activeEditorDisplayContent.length > SYNTAX_WINDOW_MIN_SOURCE_LENGTH,
+        )
       : { lineCount: 1, lineNumberWidth: 2, gutterWidth: 52 },
     [activeDocument?.id, activeDocument?.kind, activeEditorDisplayContent],
   );
+  const editorMetrics = editorDocumentIndexValue;
   useLayoutEffect(() => {
     if (activeDocument?.kind !== "text") return;
     let cancelled = false;
@@ -1610,40 +1641,9 @@ export function App() {
     editorLayoutMetrics.lineHeight,
     editorLayoutMetrics.contentPadding,
   );
-  // Offsets do início de cada linha; só materializados para fontes grandes, quando a janela de sintaxe é aplicada.
-  const editorSyntaxLineStarts = useMemo(() => {
-    if (activeEditorDisplayContent.length <= SYNTAX_WINDOW_MIN_SOURCE_LENGTH) return undefined;
-    const offsets = [0];
-    for (let index = 0; index < activeEditorDisplayContent.length; index += 1) {
-      if (activeEditorDisplayContent.charCodeAt(index) === 10) offsets.push(index + 1);
-    }
-    return offsets;
-  }, [activeEditorDisplayContent]);
-  // Linha visualmente mais larga (tabs expandidos, caracteres largos ≈ 2 colunas): mantém a
-  // largura rolável do `pre` quando o texto fora da janela vira espaçadores de altura fixa.
-  const editorSyntaxWidthGuard = useMemo(() => {
-    if (!editorSyntaxLineStarts) return undefined;
-    const source = activeEditorDisplayContent;
-    let bestStart = 0;
-    let bestEnd = 0;
-    let bestColumns = -1;
-    for (let line = 0; line < editorSyntaxLineStarts.length; line += 1) {
-      const start = editorSyntaxLineStarts[line] ?? 0;
-      const boundary = editorSyntaxLineStarts[line + 1];
-      const end = boundary === undefined ? source.length : boundary - 1;
-      let columns = 0;
-      for (let index = start; index < end; index += 1) {
-        const code = source.charCodeAt(index);
-        columns += code === 9 ? 4 - (columns % 4) : code >= 0x1100 ? 2 : 1;
-      }
-      if (columns > bestColumns) {
-        bestColumns = columns;
-        bestStart = start;
-        bestEnd = end;
-      }
-    }
-    return source.slice(bestStart, bestEnd);
-  }, [activeEditorDisplayContent, editorSyntaxLineStarts]);
+  // Métricas, offsets e linha-guarda são extraídos em uma única passagem pelo documento.
+  const editorSyntaxLineStarts = editorDocumentIndexValue.lineStarts;
+  const editorSyntaxWidthGuard = editorDocumentIndexValue.widthGuard;
   /**
    * Linha real do arquivo para cada linha visível (índice 0 = linha 1). Com blocos dobrados a régua
    * continua mostrando a numeração do arquivo, e breakpoints/depuração seguem usando o arquivo real.
@@ -1861,6 +1861,15 @@ export function App() {
       || activeDebugVisibleLine !== undefined
     );
 
+  // O conteúdo rola na thread do compositor; camadas fora do scroller sincronizadas por JS ficam
+  // sempre pelo menos um frame atrás (e congelam quando a main thread está ocupada). Quando o
+  // editor usa o scroller de highlight, régua e overlays vivem dentro dele e rolam nativamente.
+  const editorUsesHighlightScroller = Boolean(
+    (activeSyntaxHighlighter || activeEditorSearchMatch || activeFoldProjection || editorContextTargetHighlight)
+    && activeDocument,
+  );
+  const editorInlineGutter = showEditorGutter && editorUsesHighlightScroller;
+
   useEffect(() => {
     const snapshot: WorkbenchStateSnapshot = {
       workspaceName,
@@ -1884,7 +1893,7 @@ export function App() {
   useEffect(() => {
     const snapshot = executionSnapshot();
     for (const listener of executionStateListenersRef.current) listener(snapshot);
-  }, [profilesState, environments, selectedEnvironmentId, profileExecutions, debugSession]);
+  }, [profilesState, environments, selectedEnvironmentId, profileExecutions, debugSessions]);
 
   useEffect(() => {
     if (!restorationComplete) return;
@@ -2482,10 +2491,11 @@ export function App() {
         setPreferredIconPackId(persistedUserSettings.appearance?.iconPackId ?? workbenchIconDefaults.packId);
         setFontPreferences(defaultFontPreferences(persistedUserSettings.appearance?.fonts));
         let persistedSession = sessionLocator;
-        let snapshot = await readReactSnapshot();
+        const globalLocator = resolveRestoredWorkspace(sessionLocator, await readReactSnapshot());
+        let snapshot = globalLocator.snapshot;
         let restoredDocuments: readonly OpenDocument[] = [];
-        let restoredWorkspaceName = snapshot?.workspaceName ?? sessionLocator.workspaceName;
-        let restoredWorkspaceRoot = snapshot?.workspaceRoot ?? sessionLocator.workspaceRoot;
+        let restoredWorkspaceName = globalLocator.workspaceName;
+        let restoredWorkspaceRoot = globalLocator.workspaceRoot;
         // Handles vivos nunca são restaurados de JSON. Eles são reconstruídos
         // pelo host a partir do caminho persistido do workspace.
         let restoredWorkspaceHandle: BrowserDirectoryHandle | undefined;
@@ -2665,32 +2675,33 @@ export function App() {
     setProfileExecutions({});
     setOpenProfileTabIds([]);
     setClosingProfileTabIds(new Set());
-    setDebugSession(undefined);
-    setDebugAdapter(undefined);
-    setDebugCommandPending(undefined);
-    setDebugRestartingProfileId(undefined);
+    setDebugSessions({});
+    setDebugCommandPending({});
+    setDebugRestartingProfileIds(new Set());
     setRestartingProfileId(undefined);
     profileRunCancellationRef.current.clear();
     profileRunPromiseRef.current.clear();
-    debugCommandPromiseRef.current = undefined;
-    debugRestartPromiseRef.current = undefined;
+    debugCommandPromiseRef.current.clear();
+    debugRestartPromiseRef.current.clear();
     void Promise.all([
       listHostProcesses(),
-      restoreActiveDebugSession(debugAdapterProviders()),
+      restoreActiveDebugSessions(debugAdapterProviders()),
     ])
       .then(([processes, restoredDebug]) => {
         if (cancelled) return;
         const restoredProfiles = restoreProfileExecutions(processes);
-        const restoredDebugSession = restoredDebug.current?.session;
-        const restoredTabIds = restoredDebugSession
-          ? openProfileExecutionTab(restoredProfileExecutionTabIds(restoredProfiles.states), restoredDebugSession.profileId, "debug")
-          : restoredProfileExecutionTabIds(restoredProfiles.states);
+        const restoredDebugRecords = Object.fromEntries(restoredDebug.sessions.map(({ adapter, session }) => [
+          session.profileId,
+          { adapter, session } satisfies DebugSessionRecord,
+        ]));
+        const restoredDebugSessions = restoredDebug.sessions.map((item) => item.session);
+        const restoredTabIds = restoredDebugSessions.reduce(
+          (tabs, session) => openProfileExecutionTab(tabs, session.profileId, "debug"),
+          restoredProfileExecutionTabIds(restoredProfiles.states),
+        );
         setProfileExecutions(restoredProfiles.states);
         setOpenProfileTabIds(restoredTabIds);
-        if (restoredDebug.current) {
-          setDebugAdapter(restoredDebug.current.adapter);
-          setDebugSession(restoredDebug.current.session);
-        }
+        setDebugSessions(restoredDebugRecords);
         if (restoredDebug.errors.length) {
           setError(restoredDebug.errors.map((item) => item.message).join("\n"));
         }
@@ -2703,8 +2714,9 @@ export function App() {
         const latestRunningProfileStartedAt = latestRunningProfile
           ? restoredProfiles.states[latestRunningProfile.profileId]?.startedAt ?? 0
           : 0;
-        if (restoredDebugSession && restoredDebugSession.startedAt >= latestRunningProfileStartedAt) {
-          revealExecutionPanel(profileExecutionPanelTabId(restoredDebugSession.profileId, "debug"));
+        const latestDebugSession = restoredDebugSessions.at(-1);
+        if (latestDebugSession && latestDebugSession.startedAt >= latestRunningProfileStartedAt) {
+          revealExecutionPanel(profileExecutionPanelTabId(latestDebugSession.profileId, "debug"));
         } else if (latestRunningProfile) {
           revealExecutionPanel(profileExecutionPanelTabId(latestRunningProfile.profileId, "run"));
         }
@@ -2850,6 +2862,8 @@ export function App() {
   useEffect(() => {
     if (!restoredRef.current) return;
     if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
+    // Persistir buffers grandes exige serialização JSON no main thread. Enquanto o usuário está
+    // digitando, adiar esse trabalho até uma pausa evita introduzir travadas periódicas no editor.
     snapshotTimerRef.current = setTimeout(() => {
       void writeReactSnapshot({
         workspaceName,
@@ -2860,7 +2874,7 @@ export function App() {
         diagnostics,
         output,
       });
-    }, 180);
+    }, 900);
     return () => {
       if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
     };
@@ -2939,9 +2953,9 @@ export function App() {
     setClosingProfileTabIds(new Set());
     setActiveProcessId(undefined);
     setResumedProcessId(undefined);
-    setDebugSession(undefined);
-    setDebugAdapter(undefined);
-    setDebugCommandPending(undefined);
+    setDebugSessions({});
+    setDebugCommandPending({});
+    setDebugRestartingProfileIds(new Set());
     setDebugBreakpoints([]);
     documentFoldsRef.current = new Map();
     setDocumentFolds(new Map());
@@ -2953,8 +2967,8 @@ export function App() {
     setMountedToolWindowIds(new Set());
     profileRunCancellationRef.current.clear();
     profileRunPromiseRef.current.clear();
-    debugCommandPromiseRef.current = undefined;
-    debugRestartPromiseRef.current = undefined;
+    debugCommandPromiseRef.current.clear();
+    debugRestartPromiseRef.current.clear();
   };
 
   const activateProject = async (handle: BrowserDirectoryHandle, knownRoot?: string): Promise<boolean> => {
@@ -3032,7 +3046,7 @@ export function App() {
       : undefined;
     setProjectOpenBusy(true);
     try {
-      const handle = await pickWorkspaceDirectory();
+      const handle = await pickWorkspaceDirectory(workspaceRoot ?? recentProjects[0]?.path);
       await openProjectInTarget(handle, undefined, reservedBrowserTab);
     } catch (cause) {
       reservedBrowserTab?.close();
@@ -5242,12 +5256,24 @@ export function App() {
     setDebugBreakpoints(next);
     void updateWorkspaceSettings((current) => ({ ...current, debugBreakpoints: next }))
       .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
-    if (debugSession && debugAdapter) {
-      void debugAdapter.setBreakpoints(debugSession.id, next).then(setDebugSession).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+    for (const [profileId, record] of Object.entries(debugSessionsRef.current)) {
+      if (["stopped", "completed", "failed"].includes(record.session.status)) continue;
+      void record.adapter.setBreakpoints(record.session.id, next).then((snapshot) => {
+        setDebugSessions((current) => {
+          const active = current[profileId];
+          if (!active || active.session.id !== record.session.id) return current;
+          return { ...current, [profileId]: { ...active, session: snapshot } };
+        });
+      }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
     }
   };
 
   const startDebugForProfile = async (profile: ExecutionProfile): Promise<DebugSessionSnapshot> => {
+    const existing = debugSessionsRef.current[profile.id]?.session;
+    if (existing && !["stopped", "completed", "failed"].includes(existing.status)) {
+      revealExecutionPanel(profileExecutionPanelTabId(profile.id, "debug"));
+      return existing;
+    }
     const adapter = debugAdapterForProfile({
       profile,
       ...(activeDocument ? { activeDocument } : {}),
@@ -5261,8 +5287,10 @@ export function App() {
       environments,
       breakpoints: debugBreakpoints,
     });
-    setDebugAdapter(started.adapter);
-    setDebugSession(started.session);
+    setDebugSessions((current) => ({
+      ...current,
+      [profile.id]: { adapter: started.adapter, session: started.session },
+    }));
     const tabId = profileExecutionPanelTabId(profile.id, "debug");
     setOpenProfileTabIds((current) => openProfileExecutionTab(current, profile.id, "debug"));
     setPanelHeight((current) => Math.max(current, 420));
@@ -5277,40 +5305,58 @@ export function App() {
     await startDebugForProfile(selectedProfile);
   };
 
-  const debugCommand = async (command: DebugAdapterCommand) => {
-    if (!debugSession || !debugAdapter) throw new Error("Nenhuma sessão de debug ativa.");
+  const debugCommand = async (profileId: string, command: DebugAdapterCommand) => {
+    const record = debugSessionsRef.current[profileId];
+    if (!record) throw new Error("Nenhuma sessão de debug ativa para este perfil.");
+    const { session: targetSession, adapter: targetAdapter } = record;
     // "stop" e "pause" precisam funcionar mesmo com outro comando em andamento:
     // um continue pode ficar rodando indefinidamente e são eles a saída.
-    if (debugCommandPromiseRef.current && !["stop", "pause"].includes(command)) return debugCommandPromiseRef.current;
-    const sessionId = debugSession.id;
+    const existingCommand = debugCommandPromiseRef.current.get(targetSession.id);
+    if (existingCommand && !["stop", "pause"].includes(command)) return existingCommand;
+    const sessionId = targetSession.id;
     const pending = (async () => {
-      setDebugCommandPending({ sessionId, command });
-      const snapshot = await sendDebugCommand(debugAdapter, sessionId, command);
-      setDebugSession(snapshot);
+      setDebugCommandPending((current) => ({ ...current, [sessionId]: { sessionId, command } }));
+      const snapshot = await sendDebugCommand(targetAdapter, sessionId, command);
+      setDebugSessions((current) => {
+        const active = current[profileId];
+        if (!active || active.session.id !== sessionId) return current;
+        return { ...current, [profileId]: { ...active, session: snapshot } };
+      });
     })();
-    debugCommandPromiseRef.current = pending;
+    debugCommandPromiseRef.current.set(sessionId, pending);
     try {
       await pending;
     } finally {
-      if (debugCommandPromiseRef.current === pending) debugCommandPromiseRef.current = undefined;
-      setDebugCommandPending((current) => current?.sessionId === sessionId ? undefined : current);
+      if (debugCommandPromiseRef.current.get(sessionId) === pending) debugCommandPromiseRef.current.delete(sessionId);
+      setDebugCommandPending((current) => {
+        if (!current[sessionId]) return current;
+        const next = { ...current };
+        delete next[sessionId];
+        return next;
+      });
     }
   };
 
   const restartDebugSession = async (profileId: string) => {
-    if (debugRestartPromiseRef.current) return debugRestartPromiseRef.current;
+    const existingRestart = debugRestartPromiseRef.current.get(profileId);
+    if (existingRestart) return existingRestart;
     const restart = (async () => {
       const profile = profilesState.profiles.find((candidate) => candidate.id === profileId);
       if (!profile) throw new Error("O perfil desta sessão não está mais disponível.");
-      if (!debugSession || !debugAdapter || debugSession.profileId !== profileId) {
+      const previous = debugSessionsRef.current[profileId];
+      if (!previous) {
         throw new Error("Nenhuma sessão de debug correspondente está disponível para reiniciar.");
       }
-      const previousSession = debugSession;
-      const previousAdapter = debugAdapter;
-      setDebugRestartingProfileId(profileId);
+      const previousSession = previous.session;
+      const previousAdapter = previous.adapter;
+      setDebugRestartingProfileIds((current) => new Set(current).add(profileId));
       if (!["stopped", "completed", "failed"].includes(previousSession.status)) {
         const stopped = await sendDebugCommand(previousAdapter, previousSession.id, "stop");
-        setDebugSession((current) => current?.id === previousSession.id ? stopped : current);
+        setDebugSessions((current) => {
+          const active = current[profileId];
+          if (!active || active.session.id !== previousSession.id) return current;
+          return { ...current, [profileId]: { ...active, session: stopped } };
+        });
       }
       if (profile.saveBeforeRun && activeDocument && activeDocument.content !== activeDocument.savedContent) {
         await saveDocument();
@@ -5321,18 +5367,25 @@ export function App() {
         environments,
         breakpoints: debugBreakpoints,
       });
-      setDebugAdapter(started.adapter);
-      setDebugSession(started.session);
+      setDebugSessions((current) => ({
+        ...current,
+        [profileId]: { adapter: started.adapter, session: started.session },
+      }));
       const tabId = profileExecutionPanelTabId(profile.id, "debug");
       setOpenProfileTabIds((current) => openProfileExecutionTab(current, profile.id, "debug"));
       revealExecutionPanel(tabId);
     })();
-    debugRestartPromiseRef.current = restart;
+    debugRestartPromiseRef.current.set(profileId, restart);
     try {
       await restart;
     } finally {
-      if (debugRestartPromiseRef.current === restart) debugRestartPromiseRef.current = undefined;
-      setDebugRestartingProfileId((current) => current === profileId ? undefined : current);
+      if (debugRestartPromiseRef.current.get(profileId) === restart) debugRestartPromiseRef.current.delete(profileId);
+      setDebugRestartingProfileIds((current) => {
+        if (!current.has(profileId)) return current;
+        const next = new Set(current);
+        next.delete(profileId);
+        return next;
+      });
     }
   };
 
@@ -5842,12 +5895,17 @@ export function App() {
     if (!tab) return;
     setClosingProfileTabIds((current) => new Set(current).add(tabId));
     try {
-      if (tab.mode === "debug" && debugSession?.profileId === tab.profileId && debugAdapter) {
-        if (!["stopped", "completed", "failed"].includes(debugSession.status)) {
-          await sendDebugCommand(debugAdapter, debugSession.id, "stop");
+      if (tab.mode === "debug") {
+        const record = debugSessionsRef.current[tab.profileId];
+        if (record && !["stopped", "completed", "failed"].includes(record.session.status)) {
+          await sendDebugCommand(record.adapter, record.session.id, "stop");
         }
-        setDebugSession(undefined);
-        setDebugAdapter(undefined);
+        setDebugSessions((current) => {
+          if (!current[tab.profileId]) return current;
+          const next = { ...current };
+          delete next[tab.profileId];
+          return next;
+        });
       }
       if (tab.mode === "run" && profileExecutionsRef.current[tab.profileId]?.status === "running") {
         await stopProfileExecution(tab.profileId);
@@ -6211,7 +6269,7 @@ export function App() {
   const beginDebugInspectorResize = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    const layout = debugLayoutRef.current;
+    const layout = event.currentTarget.parentElement;
     if (!layout) return;
     const startX = event.clientX;
     const startWidth = debugInspectorWidth;
@@ -6939,6 +6997,100 @@ export function App() {
     );
   };
 
+  const editorFoldOverlayElement = foldControlLines.length ? (
+    <div
+      ref={editorFoldOverlayRef}
+      className={`editor-fold-overlay${editorInlineGutter ? " editor-fold-overlay--inline" : ""}`}
+      style={editorInlineGutter
+        ? undefined
+        : { "--editor-scroll-top": `${editorViewport.scrollTop}px` } as React.CSSProperties}
+    >
+      {foldControlLines.map(({ line, folded }) => (
+        <button
+          key={line}
+          className={`editor-fold-toggle${folded ? " is-folded" : ""}`}
+          type="button"
+          title={folded ? "Expandir bloco" : "Recolher bloco"}
+          aria-label={folded ? `Expandir bloco, linha ${line}` : `Recolher bloco, linha ${line}`}
+          style={{ "--fold-line-top": `${editorLineTop(line)}px` } as React.CSSProperties}
+          onMouseDown={(event) => event.preventDefault()}
+          onMouseEnter={() => { if (folded) openFoldPreview(line); else scheduleFoldPreviewClose(); }}
+          onFocus={() => { if (folded) openFoldPreview(line); else scheduleFoldPreviewClose(); }}
+          onMouseLeave={(event) => {
+            if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".editor-fold-preview")) return;
+            scheduleFoldPreviewClose();
+          }}
+          onBlur={(event) => {
+            if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".editor-fold-preview")) return;
+            scheduleFoldPreviewClose();
+          }}
+          onClick={() => toggleFold(line)}
+        >{folded ? "+" : "-"}</button>
+      ))}
+    </div>
+  ) : null;
+
+  const editorLineRulerElement = showEditorGutter ? (
+    <EditorLineRuler
+      viewportStore={editorViewportStore}
+      lineCount={editorMetrics.lineCount}
+      lineHeight={editorLayoutMetrics.lineHeight}
+      contentPadding={editorLayoutMetrics.contentPadding}
+      rulerRef={editorLineRulerRef}
+      showLineNumbers={editorSettings.lineNumbers}
+      debuggable={activeDocumentDebuggable}
+      documentPath={activeDocument?.path}
+      fileLineByVisibleLine={fileLineByVisibleLine}
+      breakpoints={debugBreakpoints}
+      activeDebugVisibleLine={activeDebugVisibleLine}
+      decorationsByLine={editorDecorationsByLine}
+      hoveredChangeKey={hoveredEditorChangeKey}
+      onToggleBreakpoint={(fileLine) => { if (activeDocumentDebuggable && activeDocument?.path) toggleBreakpoint(activeDocument.path, fileLine); }}
+      onChangeMarkerEnter={(decoration, changeKey) => { setHoveredEditorChangeKey(changeKey); openEditorDiffPeekOnHover(decoration); }}
+      onChangeMarkerLeave={() => { setHoveredEditorChangeKey(undefined); scheduleEditorDiffPeekClose(); }}
+      onLineEnter={() => { if (selectedEditorLineDecoration) scheduleEditorDiffPeekClose(); }}
+    >
+      {editorInlineGutter ? editorFoldOverlayElement : null}
+    </EditorLineRuler>
+  ) : null;
+
+  const editorBreakpointLinesElement = activeDocument && breakpointVisibleLines.length > 0 ? (
+    <div
+      ref={editorBreakpointLinesRef}
+      className={`editor-breakpoint-lines${editorUsesHighlightScroller ? " editor-breakpoint-lines--inline" : ""}`}
+      aria-hidden="true"
+      style={editorUsesHighlightScroller
+        ? undefined
+        : {
+          "--editor-scroll-top": `${(highlightedEditorScrollRef.current ?? editorRef.current)?.scrollTop ?? activeDocument.scrollTop}px`,
+        } as React.CSSProperties}
+    >
+      {breakpointVisibleLines.map((line) => (
+        <div
+          key={line}
+          className="editor-breakpoint-line"
+          style={{ "--breakpoint-line-top": `${editorLineTop(line)}px` } as React.CSSProperties}
+        />
+      ))}
+    </div>
+  ) : null;
+
+  const editorDebugCurrentLineElement = activeDocument && activeDebugLine && activeDebugVisibleLine ? (
+    <div
+      ref={editorDebugCurrentLineRef}
+      className={`editor-debug-current-line${editorUsesHighlightScroller ? " editor-debug-current-line--inline" : ""}`}
+      aria-hidden="true"
+      data-debug-line={activeDebugLine}
+      data-debug-visible-line={activeDebugVisibleLine}
+      style={{
+        "--debug-line-content-top": `${editorLineTop(activeDebugVisibleLine)}px`,
+        ...(editorUsesHighlightScroller ? {} : {
+          "--editor-scroll-top": `${(highlightedEditorScrollRef.current ?? editorRef.current)?.scrollTop ?? activeDocument.scrollTop}px`,
+        }),
+      } as React.CSSProperties}
+    />
+  ) : null;
+
   return (
     <Tooltip.Provider delayDuration={350}>
       <div className="ide-shell">
@@ -6950,7 +7102,7 @@ export function App() {
           selectedProfile={selectedProfile}
           selectedProfileRunning={selectedProfileRunning}
           selectedProfileDebuggable={Boolean(selectedProfileDebugAdapter)}
-          debugSessionActive={debugSessionActive}
+          selectedProfileDebugging={selectedProfileDebugging}
           busy={busy}
           pageReloading={pageReloading}
           contributions={workbenchTitlebarContributions}
@@ -7376,10 +7528,10 @@ export function App() {
                   ) : (
                     <>
                   <div
-                    className={`editor-canvas${showEditorGutter ? " has-editor-gutter" : ""}${editorSettings.lineNumbers ? " has-line-numbers" : ""}${editorNavigationLoading ? " is-symbol-navigation-loading" : ""}${activeEditorBusyOperation ? " is-editor-operation-busy" : ""}`}
+                    className={`editor-canvas${showEditorGutter ? " has-editor-gutter" : ""}${editorInlineGutter ? " has-inline-gutter" : ""}${editorSettings.lineNumbers ? " has-line-numbers" : ""}${editorNavigationLoading ? " is-symbol-navigation-loading" : ""}${activeEditorBusyOperation ? " is-editor-operation-busy" : ""}`}
                     aria-busy={editorNavigationLoading || Boolean(activeEditorBusyOperation)}
                     style={{
-                      "--editor-gutter-width": `${editorMetrics.gutterWidth}px`,
+                      "--editor-gutter-width": `${showEditorGutter && !editorSettings.lineNumbers ? 20 : editorMetrics.gutterWidth}px`,
                       "--editor-line-height": `${editorLayoutMetrics.lineHeight}px`,
                       "--editor-content-padding": `${editorLayoutMetrics.contentPadding}px`,
                     } as React.CSSProperties}
@@ -7392,62 +7544,13 @@ export function App() {
                         <span>{activeEditorBusyOperation.label}</span>
                       </div>
                     ) : null}
-                    {showEditorGutter ? (
-                      <EditorLineRuler
-                        viewportStore={editorViewportStore}
-                        lineCount={editorMetrics.lineCount}
-                        lineHeight={editorLayoutMetrics.lineHeight}
-                        contentPadding={editorLayoutMetrics.contentPadding}
-                        rulerRef={editorLineRulerRef}
-                        showLineNumbers={editorSettings.lineNumbers}
-                        debuggable={activeDocumentDebuggable}
-                        documentPath={activeDocument?.path}
-                        fileLineByVisibleLine={fileLineByVisibleLine}
-                        breakpoints={debugBreakpoints}
-                        activeDebugVisibleLine={activeDebugVisibleLine}
-                        decorationsByLine={editorDecorationsByLine}
-                        hoveredChangeKey={hoveredEditorChangeKey}
-                        onToggleBreakpoint={(fileLine) => { if (activeDocumentDebuggable && activeDocument?.path) toggleBreakpoint(activeDocument.path, fileLine); }}
-                        onChangeMarkerEnter={(decoration, changeKey) => { setHoveredEditorChangeKey(changeKey); openEditorDiffPeekOnHover(decoration); }}
-                        onChangeMarkerLeave={() => { setHoveredEditorChangeKey(undefined); scheduleEditorDiffPeekClose(); }}
-                        onLineEnter={() => { if (selectedEditorLineDecoration) scheduleEditorDiffPeekClose(); }}
-                      />
-                    ) : null}
-                    {activeDocument && breakpointVisibleLines.length > 0 ? (
-                      <div
-                        ref={editorBreakpointLinesRef}
-                        className="editor-breakpoint-lines"
-                        aria-hidden="true"
-                        style={{
-                          "--editor-scroll-top": `${(highlightedEditorScrollRef.current ?? editorRef.current)?.scrollTop ?? activeDocument.scrollTop}px`,
-                        } as React.CSSProperties}
-                      >
-                        {breakpointVisibleLines.map((line) => (
-                          <div
-                            key={line}
-                            className="editor-breakpoint-line"
-                            style={{ "--breakpoint-line-top": `${editorLineTop(line)}px` } as React.CSSProperties}
-                          />
-                        ))}
-                      </div>
-                    ) : null}
-                    {activeDocument && activeDebugLine && activeDebugVisibleLine ? (
-                      <div
-                        ref={editorDebugCurrentLineRef}
-                        className="editor-debug-current-line"
-                        aria-hidden="true"
-                        data-debug-line={activeDebugLine}
-                        data-debug-visible-line={activeDebugVisibleLine}
-                        style={{
-                          "--debug-line-content-top": `${editorLineTop(activeDebugVisibleLine)}px`,
-                          "--editor-scroll-top": `${(highlightedEditorScrollRef.current ?? editorRef.current)?.scrollTop ?? activeDocument.scrollTop}px`,
-                        } as React.CSSProperties}
-                      />
-                    ) : null}
-                    {(activeSyntaxHighlighter || activeEditorSearchMatch || activeFoldProjection || editorContextTargetHighlight) && activeDocument ? (
+                    {editorInlineGutter ? null : editorLineRulerElement}
+                    {editorUsesHighlightScroller ? null : editorBreakpointLinesElement}
+                    {editorUsesHighlightScroller ? null : editorDebugCurrentLineElement}
+                    {editorUsesHighlightScroller && activeDocument ? (
                       <div
                         ref={highlightedEditorScrollRef}
-                        className="highlight-editor"
+                        className={`highlight-editor${editorInlineGutter ? " has-inline-ruler" : ""}`}
                         onMouseMove={(event) => {
                           const bounds = event.currentTarget.getBoundingClientRect();
                           const contentY = event.clientY - bounds.top + event.currentTarget.scrollTop - editorLayoutMetrics.contentPadding;
@@ -7464,7 +7567,10 @@ export function App() {
                           if (editorRef.current) scheduleEditorStateCapture(editorRef.current, event.currentTarget);
                         }}
                       >
+                        {editorInlineGutter ? editorLineRulerElement : null}
                         <div className="highlight-editor__content">
+                          {editorBreakpointLinesElement}
+                          {editorDebugCurrentLineElement}
                           <pre
                             ref={syntaxLayerRef}
                             className="syntax-layer"
@@ -7611,36 +7717,7 @@ export function App() {
                         }}
                       />
                     )}
-                    {foldControlLines.length ? (
-                      <div
-                        ref={editorFoldOverlayRef}
-                        className="editor-fold-overlay"
-                        style={{ "--editor-scroll-top": `${editorViewport.scrollTop}px` } as React.CSSProperties}
-                      >
-                        {foldControlLines.map(({ line, folded }) => (
-                          <button
-                            key={line}
-                            className={`editor-fold-toggle${folded ? " is-folded" : ""}`}
-                            type="button"
-                            title={folded ? "Expandir bloco" : "Recolher bloco"}
-                            aria-label={folded ? `Expandir bloco, linha ${line}` : `Recolher bloco, linha ${line}`}
-                            style={{ "--fold-line-top": `${editorLineTop(line)}px` } as React.CSSProperties}
-                            onMouseDown={(event) => event.preventDefault()}
-                            onMouseEnter={() => { if (folded) openFoldPreview(line); else scheduleFoldPreviewClose(); }}
-                            onFocus={() => { if (folded) openFoldPreview(line); else scheduleFoldPreviewClose(); }}
-                            onMouseLeave={(event) => {
-                              if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".editor-fold-preview")) return;
-                              scheduleFoldPreviewClose();
-                            }}
-                            onBlur={(event) => {
-                              if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".editor-fold-preview")) return;
-                              scheduleFoldPreviewClose();
-                            }}
-                            onClick={() => toggleFold(line)}
-                          >{folded ? "+" : "-"}</button>
-                        ))}
-                      </div>
-                    ) : null}
+                    {editorInlineGutter ? null : editorFoldOverlayElement}
                     {foldPreview ? (
                       <div
                         className="editor-fold-preview"
@@ -7860,8 +7937,8 @@ export function App() {
                   const tabDebugSession = tab.debugSession;
                   const debugging = Boolean(tabDebugSession);
                   const debugEnded = Boolean(tabDebugSession && ["stopped", "completed", "failed"].includes(tabDebugSession.status));
-                  const debugRestarting = debugRestartingProfileId === tab.profileId;
-                  const debugCommandBusy = Boolean(tabDebugSession && debugCommandPending?.sessionId === tabDebugSession.id);
+                  const debugRestarting = debugRestartingProfileIds.has(tab.profileId);
+                  const debugCommandBusy = Boolean(tabDebugSession && debugCommandPending[tabDebugSession.id]);
                   const executionRunning = tab.execution?.status === "running";
                   const executionRestarting = restartingProfileId === tab.profileId;
                   const outputFollowing = profileOutputFollowing[tab.tabId] ?? true;
@@ -7904,7 +7981,7 @@ export function App() {
                                       await restartDebugSession(tab.profileId);
                                       return;
                                     }
-                                    await debugCommand(tabDebugSession.status === "paused" ? "resume" : "pause");
+                                    await debugCommand(tab.profileId, tabDebugSession.status === "paused" ? "resume" : "pause");
                                   })}
                                 >{
                                   debugEnded
@@ -7915,19 +7992,19 @@ export function App() {
                                 }</button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Step over" side="top">
-                                <button className="icon-button small" type="button" aria-label="Step over" disabled={debugRestarting || debugCommandBusy || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepOver"))}><StepForward size={14} /></button>
+                                <button className="icon-button small" type="button" aria-label="Step over" disabled={debugRestarting || debugCommandBusy || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand(tab.profileId, "stepOver"))}><StepForward size={14} /></button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Step into" side="top">
-                                <button className="icon-button small" type="button" aria-label="Step into" disabled={debugRestarting || debugCommandBusy || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepInto"))}><CornerDownRight size={14} /></button>
+                                <button className="icon-button small" type="button" aria-label="Step into" disabled={debugRestarting || debugCommandBusy || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand(tab.profileId, "stepInto"))}><CornerDownRight size={14} /></button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Step out" side="top">
-                                <button className="icon-button small" type="button" aria-label="Step out" disabled={debugRestarting || debugCommandBusy || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand("stepOut"))}><CornerUpRight size={14} /></button>
+                                <button className="icon-button small" type="button" aria-label="Step out" disabled={debugRestarting || debugCommandBusy || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand(tab.profileId, "stepOut"))}><CornerUpRight size={14} /></button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Reiniciar depuração" side="top">
                                 <button className="icon-button small" type="button" aria-label="Reiniciar depuração" disabled={debugRestarting || debugCommandBusy} onClick={() => invoke(() => restartDebugSession(tab.profileId))}><RotateCw className={debugRestarting ? "is-spinning" : undefined} size={13} /></button>
                               </ButtonTooltip>
                               <ButtonTooltip label="Parar depuração" side="top">
-                                <button className="icon-button small danger" type="button" aria-label="Parar depuração" disabled={debugRestarting || debugEnded} onClick={() => invoke(() => debugCommand("stop"))}><Square size={13} /></button>
+                                <button className="icon-button small danger" type="button" aria-label="Parar depuração" disabled={debugRestarting || debugEnded} onClick={() => invoke(() => debugCommand(tab.profileId, "stop"))}><Square size={13} /></button>
                               </ButtonTooltip>
                             </>
                           ) : tab.profile ? (
@@ -7995,7 +8072,6 @@ export function App() {
                       {tabDebugSession ? (
                         <div
                           className="execution-debug-layout"
-                          ref={debugLayoutRef}
                           style={{ gridTemplateColumns: `minmax(0, 1fr) 5px ${debugInspectorWidth}px` }}
                         >
                           <section className="execution-debug-output-pane" aria-label="Saída da depuração">
@@ -8038,7 +8114,13 @@ export function App() {
                                 <span>Seguir saída</span>
                               </label>
                             </div>
-                            <div ref={debugOutputRef} className={`execution-panel-output execution-panel-output--structured${debugOutputWrap ? " is-wrapped" : ""}`}>
+                            <div
+                              ref={(element) => {
+                                if (element) debugOutputRefs.current.set(tabDebugSession.id, element);
+                                else debugOutputRefs.current.delete(tabDebugSession.id);
+                              }}
+                              className={`execution-panel-output execution-panel-output--structured${debugOutputWrap ? " is-wrapped" : ""}`}
+                            >
                               {outputSegments.length ? outputSegments.map((segment, index) => (
                                 <div className={`debug-output-segment is-${segment.kind}`} key={`${segment.kind}-${index}`}>
                                   {segment.label ? <span className="debug-output-segment__label">{segment.label}</span> : null}

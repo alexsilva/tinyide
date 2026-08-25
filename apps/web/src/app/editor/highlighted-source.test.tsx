@@ -90,6 +90,7 @@ describe("HighlightedSource com renderWindow", () => {
     const match = container.querySelector("span.editor-search-match");
     expect(match?.textContent).toBe("palavra50");
   });
+
 });
 
 describe("HighlightedSource com virtualWindow (espaçadores)", () => {

@@ -3,7 +3,9 @@ import {
   readPersistedSession,
   readSession,
   normalizeSession,
+  resolveRestoredWorkspace,
   restoreWorkspaceDocuments,
+  writeReactSnapshot,
   writeSession,
   workspaceDocumentsForSnapshot,
 } from "./persistence";
@@ -277,7 +279,95 @@ describe("layout persistence", () => {
   });
 });
 
+describe("workspace pointer precedence on reload", () => {
+  function snapshot(workspaceName: string, workspaceRoot?: string) {
+    return {
+      version: 2 as const,
+      workspaceName,
+      ...(workspaceRoot ? { workspaceRoot } : {}),
+      workspaceEntries: [],
+      documents: [],
+      diagnostics: [],
+      output: [],
+    };
+  }
+
+  it("reopens the workspace named by the session pointer, not the stale global snapshot", () => {
+    const pointer = normalizeSession({ workspaceName: "precocerto", workspaceRoot: "/workspace/precocerto" });
+
+    expect(resolveRestoredWorkspace(pointer, snapshot("tinyIde", "/workspace/tinyIde"))).toEqual({
+      workspaceName: "precocerto",
+      workspaceRoot: "/workspace/precocerto",
+    });
+  });
+
+  it("keeps the global snapshot when it belongs to the pointed workspace", () => {
+    const pointer = normalizeSession({ workspaceName: "tinyIde", workspaceRoot: "/workspace/tinyIde" });
+    const owned = snapshot("tinyIde", "/workspace/tinyIde");
+
+    expect(resolveRestoredWorkspace(pointer, owned).snapshot).toBe(owned);
+  });
+
+  it("falls back to the global snapshot while no workspace pointer exists", () => {
+    const empty = normalizeSession({});
+    const orphan = snapshot("tinyIde", "/workspace/tinyIde");
+
+    expect(resolveRestoredWorkspace(empty, orphan)).toMatchObject({
+      workspaceName: "tinyIde",
+      workspaceRoot: "/workspace/tinyIde",
+    });
+    expect(resolveRestoredWorkspace(empty, undefined)).toEqual({ workspaceName: "Sem workspace" });
+  });
+});
+
 describe("workspace document persistence", () => {
+  it("discards the global snapshot once a workspace snapshot is written", async () => {
+    vi.resetModules();
+    const requests: Array<{ readonly method: string; readonly url: string }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      requests.push({ method: init?.method ?? "GET", url: String(url) });
+      return new Response(null, { status: 204 });
+    }));
+    const { writeReactSnapshot: write } = await import("./persistence");
+
+    await write({
+      workspaceName: "current",
+      workspaceRoot: "/workspace/current",
+      workspaceEntries: [],
+      documents: [],
+      diagnostics: [],
+      output: [],
+    });
+
+    expect(requests.filter((request) => request.method === "DELETE").map((request) => request.url)).toEqual([
+      "/core-api/user/state/application-snapshot",
+    ]);
+  });
+
+
+  it("does not duplicate a clean document body in savedContent", async () => {
+    let persisted: unknown;
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      persisted = JSON.parse(String(init?.body));
+      return Response.json(persisted);
+    }));
+    const clean = document({ content: "large clean body", savedContent: "large clean body" });
+
+    await writeReactSnapshot({
+      workspaceName: "current",
+      workspaceRoot: "/workspace/current",
+      workspaceEntries: [],
+      documents: [clean],
+      diagnostics: [],
+      output: [],
+    });
+
+    expect((persisted as { documents: Array<Record<string, unknown>> }).documents[0]).toMatchObject({
+      content: "large clean body",
+    });
+    expect((persisted as { documents: Array<Record<string, unknown>> }).documents[0]).not.toHaveProperty("savedContent");
+  });
+
   it("persists only documents explicitly owned by the current workspace", () => {
     const current = document();
     const other = document({ id: "other.py", path: "other.py", workspaceRoot: "/workspace/other" });

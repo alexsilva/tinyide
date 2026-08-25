@@ -17,8 +17,8 @@ contextBridge.exposeInMainWorld("tinyideDesktop", {
   notifyReady() {
     ipcRenderer.send("tinyide:renderer:ready");
   },
-  pickDirectory() {
-    return ipcRenderer.invoke("tinyide:workspace:pick");
+  pickDirectory(defaultPath) {
+    return ipcRenderer.invoke("tinyide:workspace:pick", defaultPath);
   },
   restoreDirectory(path) {
     return ipcRenderer.invoke("tinyide:workspace:restore", path);

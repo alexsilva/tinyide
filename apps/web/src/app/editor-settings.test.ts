@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  editorDocumentIndex,
   editorDocumentMetrics,
   editorGutterWidth,
   editorLineNumbers,
@@ -45,6 +46,14 @@ describe("editor settings", () => {
       lineCount: 10_000,
       lineNumberWidth: 5,
       gutterWidth: 70,
+    });
+  });
+
+  it("indexes line offsets and the visually widest line in the same pass", () => {
+    expect(editorDocumentIndex("a\n\twide\n界界\n", true)).toMatchObject({
+      lineCount: 4,
+      lineStarts: [0, 2, 8, 11],
+      widthGuard: "\twide",
     });
   });
 

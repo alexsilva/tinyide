@@ -49,6 +49,7 @@ export function useEditorViewportLineRange(
   lineHeight: number,
   contentPadding: number,
   step = 1,
+  sync = false,
 ): EditorVisibleLineRange {
   const compute = () => {
     const viewport = store.get();
@@ -82,9 +83,15 @@ export function useEditorViewportLineRange(
     // salto de scrollbar isso pinta um frame com a janela velha (área em branco). Enquanto a
     // faixa materializada ainda cobre o visível (rolagem de roda), o commit fica assíncrono e a
     // folga absorve; quando não cobre (salto grande), flushSync descarrega no próprio evento.
+    // Consumidores baratos (régua) passam `sync` e descarregam sempre no evento: sob rolagem
+    // contínua o commit assíncrono pode atravessar vários frames e o atraso fica visível.
     return store.subscribe(() => {
       const next = compute();
       if (rangeRef.current.start === next.start && rangeRef.current.end === next.end) return;
+      if (sync) {
+        flushSync(() => apply(next));
+        return;
+      }
       const viewport = store.get();
       const visible = editorVisibleLineRange(
         lineCount,
@@ -99,6 +106,6 @@ export function useEditorViewportLineRange(
       else flushSync(() => apply(next));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store, lineCount, overscan, lineHeight, contentPadding, step]);
+  }, [store, lineCount, overscan, lineHeight, contentPadding, step, sync]);
   return range;
 }

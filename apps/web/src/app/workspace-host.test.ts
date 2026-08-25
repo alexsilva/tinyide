@@ -5,7 +5,9 @@ import type {
 } from "../browser-filesystem";
 import {
   openInSystemFileManager,
+  pickWorkspaceDirectory,
   restoreLastDesktopWorkspaceHandle,
+  WORKSPACE_PICKER_ID,
   workspaceRootFromFilePath,
   workspaceRootHintForHandle,
 } from "./workspace-host";
@@ -85,6 +87,36 @@ describe("restoreLastDesktopWorkspaceHandle", () => {
     };
     const handle = await restoreLastDesktopWorkspaceHandle(desktop);
     expect(handle).toMatchObject({ name: "preco", desktopWorkspaceRoot: "/mnt/projects/preco" });
+  });
+});
+
+describe("pickWorkspaceDirectory", () => {
+  it("abre o diálogo nativo no último diretório conhecido", async () => {
+    const pickDirectory = vi.fn(async () => ({ token: "token", name: "preco", path: "/mnt/projects/preco" }));
+    vi.stubGlobal("window", {
+      tinyideDesktop: {
+        getPathForFile: () => "",
+        pickDirectory,
+        restoreDirectory: async () => undefined,
+        listDirectory: async () => [],
+        ensureFile: async () => true,
+        ensureDirectory: async () => true,
+        readFile: async () => ({ bytes: new Uint8Array(), lastModified: 0 }),
+        writeFile: async () => true,
+        removeEntry: async () => true,
+      },
+    });
+
+    await expect(pickWorkspaceDirectory("/mnt/projects/preco")).resolves.toMatchObject({ name: "preco" });
+    expect(pickDirectory).toHaveBeenCalledWith("/mnt/projects/preco");
+  });
+
+  it("identifica o seletor do navegador para que ele reabra no último diretório", async () => {
+    const showDirectoryPicker = vi.fn(async () => directoryHandle("preco", []));
+    vi.stubGlobal("window", { showDirectoryPicker });
+
+    await expect(pickWorkspaceDirectory("/mnt/projects/preco")).resolves.toMatchObject({ name: "preco" });
+    expect(showDirectoryPicker).toHaveBeenCalledWith({ id: WORKSPACE_PICKER_ID, mode: "readwrite" });
   });
 });
 

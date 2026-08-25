@@ -82,6 +82,23 @@ async function registerDesktopWorkspace(rootPath, { persist = true } = {}) {
   return { token, name: basename(root), path: root };
 }
 
+/**
+ * O diálogo nativo não guarda estado entre execuções: sem `defaultPath` ele cai
+ * sempre no diretório do usuário. Abrir no pai do último workspace deixa os
+ * projetos irmãos a um clique, que é o caminho comum de troca de projeto.
+ */
+async function workspacePickerStartDirectory(stateRoot, defaultPath) {
+  const requested = typeof defaultPath === "string" ? defaultPath.trim() : "";
+  const stored = requested
+    ? requested
+    : (await readDesktopState(stateRoot, LAST_WORKSPACE_STATE_KEY).catch(() => undefined))?.path;
+  const candidate = typeof stored === "string" && stored.trim() ? resolve(stored.trim()) : undefined;
+  if (!candidate) return undefined;
+  const parent = dirname(candidate);
+  if (parent !== candidate && existsSync(parent) && statSync(parent).isDirectory()) return parent;
+  return existsSync(candidate) && statSync(candidate).isDirectory() ? candidate : undefined;
+}
+
 function installDesktopFileSystemHandlers() {
   const stateRoot = desktopStateRoot();
 
@@ -99,12 +116,14 @@ function installDesktopFileSystemHandlers() {
     return true;
   });
 
-  ipcMain.handle("tinyide:workspace:pick", async () => {
+  ipcMain.handle("tinyide:workspace:pick", async (_event, defaultPath) => {
     const testWorkspace = process.env.TINYIDE_TEST_WORKSPACE_PICKER_PATH?.trim();
     if (testWorkspace) return await registerDesktopWorkspace(testWorkspace);
+    const startDirectory = await workspacePickerStartDirectory(stateRoot, defaultPath);
     const result = await dialog.showOpenDialog(mainWindow, {
       title: "Abrir workspace",
       properties: ["openDirectory"],
+      ...(startDirectory ? { defaultPath: startDirectory } : {}),
     });
     if (result.canceled || !result.filePaths[0]) return undefined;
     return await registerDesktopWorkspace(result.filePaths[0]);

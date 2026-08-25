@@ -1454,6 +1454,7 @@ export interface WorkbenchExecutionSnapshot {
   /** One independently selected execution environment per provider. */
   readonly selectedEnvironmentIds?: Readonly<Record<string, string>>;
   readonly executions: readonly WorkbenchProfileExecutionSnapshot[];
+  readonly debugSessions?: readonly DebugSessionSnapshot[];
   readonly debugSession?: DebugSessionSnapshot;
 }
 

@@ -2,8 +2,8 @@ import type { ComponentProps } from "react";
 import { HighlightedSource } from "./editor-components";
 import { useEditorViewportLineRange, type EditorViewportStore } from "./editor-viewport";
 
-const SYNTAX_WINDOW_OVERSCAN_LINES = 80;
-const SYNTAX_WINDOW_STEP_LINES = 40;
+const SYNTAX_WINDOW_OVERSCAN_LINES = 32;
+const SYNTAX_WINDOW_STEP_LINES = 16;
 
 export interface WindowedHighlightedSourceProps
   extends Omit<ComponentProps<typeof HighlightedSource>, "renderWindow" | "virtualWindow"> {
@@ -48,5 +48,11 @@ export function WindowedHighlightedSource({
     lineCount: range.end - range.start + 1,
     ...(widthGuard !== undefined ? { widthGuard } : {}),
   };
-  return <HighlightedSource {...highlightProps} renderWindow={renderWindow} virtualWindow={virtualWindow} />;
+  return (
+    <HighlightedSource
+      {...highlightProps}
+      renderWindow={renderWindow}
+      virtualWindow={virtualWindow}
+    />
+  );
 }

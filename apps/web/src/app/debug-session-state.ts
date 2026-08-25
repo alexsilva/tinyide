@@ -8,7 +8,7 @@ export interface RestoredDebugSession {
 }
 
 export interface DebugSessionRestoration {
-  readonly current?: RestoredDebugSession;
+  readonly sessions: readonly RestoredDebugSession[];
   readonly errors: readonly Error[];
 }
 
@@ -69,7 +69,7 @@ export function workspaceRelativeDebugPath(
   return normalized.replace(/^\.\//, "");
 }
 
-export async function restoreActiveDebugSession(
+export async function restoreActiveDebugSessions(
   adapters: readonly DebugAdapterProvider[],
 ): Promise<DebugSessionRestoration> {
   const errors: Error[] = [];
@@ -88,19 +88,28 @@ export async function restoreActiveDebugSession(
   }));
 
   discovered.sort((left, right) => left.session.startedAt - right.session.startedAt);
-  const current = discovered.at(-1);
-  const stale = current ? discovered.slice(0, -1) : discovered;
 
-  for (const candidate of stale) {
+  // Uma sessão ativa pertence ao perfil que a iniciou. Perfis diferentes podem
+  // permanecer em debug simultaneamente; somente duplicatas do mesmo perfil são
+  // consideradas obsoletas após uma restauração (por exemplo, um restart interrompido).
+  const newestByProfile = new Map<string, RestoredDebugSession>();
+  const stale: RestoredDebugSession[] = [];
+  for (const candidate of discovered) {
+    const previous = newestByProfile.get(candidate.session.profileId);
+    if (previous) stale.push(previous);
+    newestByProfile.set(candidate.session.profileId, candidate);
+  }
+
+  await Promise.all(stale.map(async (candidate) => {
     try {
       await candidate.adapter.command(candidate.session.id, "stop");
     } catch (cause) {
       errors.push(asError(cause));
     }
-  }
+  }));
 
   return {
-    ...(current ? { current } : {}),
+    sessions: [...newestByProfile.values()].sort((left, right) => left.session.startedAt - right.session.startedAt),
     errors,
   };
 }

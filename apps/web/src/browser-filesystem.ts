@@ -128,7 +128,11 @@ export async function inspectBrowserFile(file: File): Promise<{
 
 declare global {
   interface Window {
-    showDirectoryPicker?: () => Promise<BrowserDirectoryHandle>;
+    showDirectoryPicker?: (options?: {
+      /** Faz o navegador reabrir o seletor no último diretório escolhido com este id. */
+      readonly id?: string;
+      readonly mode?: "read" | "readwrite";
+    }) => Promise<BrowserDirectoryHandle>;
     showOpenFilePicker?: () => Promise<BrowserFileHandle[]>;
     showSaveFilePicker?: (options?: {
       readonly suggestedName?: string;

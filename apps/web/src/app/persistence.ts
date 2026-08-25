@@ -1,5 +1,6 @@
 import type { TextDiagnostic } from "@tinyide/plugin-api";
 import {
+  clearApplicationSnapshot,
   readApplicationSnapshot,
   readStoredState,
   writeStoredState,
@@ -81,7 +82,7 @@ interface StoredDocument {
   readonly mediaType?: string;
   readonly size?: number;
   readonly content: string;
-  readonly savedContent: string;
+  readonly savedContent?: string;
   readonly selectionStart: number;
   readonly selectionEnd: number;
   readonly scrollTop: number;
@@ -297,6 +298,34 @@ export async function readReactSnapshot(workspaceRoot?: string): Promise<Applica
   return snapshot?.version === 2 ? snapshot : undefined;
 }
 
+export interface RestoredWorkspaceLocator {
+  readonly workspaceName: string;
+  readonly workspaceRoot?: string;
+  readonly snapshot?: ApplicationSnapshot;
+}
+
+/**
+ * Decide qual workspace o reload deve reabrir. O ponteiro global de sessão é
+ * reescrito a cada troca de projeto e é a única fonte de verdade; o snapshot
+ * global descreve apenas o estado sem workspace. Quando o snapshot aponta para
+ * outro projeto ele é resíduo de versões anteriores ao escopo por workspace, e
+ * respeitá-lo reabriria o projeto anterior depois de uma troca.
+ */
+export function resolveRestoredWorkspace(
+  sessionLocator: SessionState,
+  snapshot: ApplicationSnapshot | undefined,
+): RestoredWorkspaceLocator {
+  const workspaceRoot = sessionLocator.workspaceRoot ?? snapshot?.workspaceRoot;
+  const workspaceName = sessionLocator.workspaceRoot
+    ? sessionLocator.workspaceName
+    : snapshot?.workspaceName ?? sessionLocator.workspaceName;
+  return {
+    workspaceName,
+    ...(workspaceRoot ? { workspaceRoot } : {}),
+    ...(snapshot && snapshot.workspaceRoot === workspaceRoot ? { snapshot } : {}),
+  };
+}
+
 export function workspaceDocumentsForSnapshot(
   documents: readonly OpenDocument[],
   workspaceRoot: string | undefined,
@@ -321,7 +350,7 @@ function restoreVirtualDocument(document: StoredDocument): OpenDocument {
     ...(document.origin ? { origin: document.origin } : {}),
     size: document.size ?? 0,
     content: document.content ?? "",
-    savedContent: document.savedContent ?? "",
+    savedContent: document.savedContent ?? document.content ?? "",
     selectionStart: document.selectionStart ?? 0,
     selectionEnd: document.selectionEnd ?? 0,
     scrollTop: document.scrollTop ?? 0,
@@ -349,7 +378,7 @@ export async function restoreWorkspaceDocuments(
           ? {
               ...reopened,
               content: document.content,
-              savedContent: document.savedContent,
+              savedContent: document.savedContent ?? document.content,
               selectionStart: document.selectionStart,
               selectionEnd: document.selectionEnd,
               scrollTop: document.scrollTop,
@@ -371,7 +400,7 @@ export async function restoreWorkspaceDocuments(
       mediaType: document.mediaType ?? "text/plain",
       size: document.size ?? new Blob([document.content]).size,
       content: document.content,
-      savedContent: document.savedContent,
+      savedContent: document.savedContent ?? document.content,
       selectionStart: document.selectionStart,
       selectionEnd: document.selectionEnd,
       scrollTop: document.scrollTop,
@@ -380,6 +409,8 @@ export async function restoreWorkspaceDocuments(
   }));
   return restored.filter((document): document is OpenDocument => Boolean(document));
 }
+
+let discardedGlobalSnapshot = false;
 
 export async function writeReactSnapshot(input: {
   readonly workspaceName: string;
@@ -406,7 +437,7 @@ export async function writeReactSnapshot(input: {
       mediaType: document.mediaType,
       size: document.size,
       content: document.content,
-      savedContent: document.savedContent,
+      ...(document.savedContent !== document.content ? { savedContent: document.savedContent } : {}),
       selectionStart: document.selectionStart,
       selectionEnd: document.selectionEnd,
       scrollTop: document.scrollTop,
@@ -423,4 +454,13 @@ export async function writeReactSnapshot(input: {
   // IDE agora é exclusivamente em arquivos do host, o snapshot deve ser JSON
   // serializável e nunca depender de browser storage.
   await writeApplicationSnapshot(base, input.workspaceRoot);
+  // O snapshot global descreve apenas o estado sem workspace. Com um projeto
+  // aberto ele vira resíduo — de versões anteriores ao escopo por workspace —
+  // e reabriria o projeto antigo. Descartar uma vez por sessão basta.
+  if (input.workspaceRoot && !discardedGlobalSnapshot) {
+    discardedGlobalSnapshot = true;
+    await clearApplicationSnapshot().catch(() => {
+      discardedGlobalSnapshot = false;
+    });
+  }
 }

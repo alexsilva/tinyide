@@ -337,13 +337,19 @@ export function ResourceEditorHost({
   document,
   topLine,
   onRevealLine,
+  hostRef,
 }: {
   readonly provider: WorkbenchResourceEditorProvider;
   readonly document: OpenDocument;
   readonly topLine?: number;
   readonly onRevealLine?: (line: number) => void;
+  readonly hostRef?: { current: HTMLDivElement | null };
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const setContainerRef = useCallback((container: HTMLDivElement | null) => {
+    containerRef.current = container;
+    if (hostRef) hostRef.current = container;
+  }, [hostRef]);
   const documentRef = useRef(document);
   documentRef.current = document;
   const topLineRef = useRef(topLine);
@@ -384,7 +390,7 @@ export function ResourceEditorHost({
   return (
     <div
       className="resource-editor resource-editor--plugin"
-      ref={containerRef}
+      ref={setContainerRef}
       data-resource-editor-provider={provider.id}
     />
   );

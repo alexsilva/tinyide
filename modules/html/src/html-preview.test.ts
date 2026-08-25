@@ -160,7 +160,7 @@ describe("native HTML preview", () => {
     expect(iframe.srcdoc).toContain("<h1");
     expect(iframe.srcdoc).not.toContain("<script");
     expect(iframe.srcdoc).not.toContain("onclick");
-    expect(iframe.getAttribute("sandbox")).toBe("allow-forms");
+    expect(iframe.getAttribute("sandbox")).toBe("allow-forms allow-same-origin");
     disposable.dispose();
     feature.dispose();
   });
@@ -176,7 +176,7 @@ describe("native HTML preview", () => {
     }]);
     const partialMount = await mountPreview(partial, "<p>source</p>");
     expect(partialMount.iframe.srcdoc).not.toContain("<script");
-    expect(partialMount.iframe.getAttribute("sandbox")).toBe("");
+    expect(partialMount.iframe.getAttribute("sandbox")).toBe("allow-same-origin");
     partialMount.disposable.dispose();
 
     const unsafe = createHtmlPreviewFeature(() => [{

@@ -362,7 +362,10 @@ export function createHtmlPreviewFeature(
       iframe.dataset.htmlPreview = "";
       iframe.title = `Prévia de ${resource.name}`;
       iframe.referrerPolicy = "no-referrer";
-      iframe.setAttribute("sandbox", [...sandbox, ...(unsafeExecution ? ["allow-scripts"] : [])].join(" "));
+      iframe.setAttribute(
+        "sandbox",
+        [...sandbox, ...(unsafeExecution ? ["allow-scripts"] : ["allow-same-origin"])].join(" "),
+      );
       iframe.style.width = "100%";
       iframe.style.height = "100%";
       iframe.style.border = "0";

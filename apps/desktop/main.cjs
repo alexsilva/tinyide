@@ -18,6 +18,7 @@ const {
 } = require("./startup.cjs");
 const { readDesktopState, removeDesktopState, writeDesktopState } = require("./state-store.cjs");
 const { createWorkspaceWatcher, DEFAULT_IGNORED_DIRECTORIES } = require("./workspace-watcher.cjs");
+const { DESKTOP_MAIN_SESSION_ID, desktopWindowUrl } = require("./window-session.cjs");
 
 let runtime;
 let mainWindow;
@@ -148,14 +149,13 @@ function installDesktopFileSystemHandlers() {
 
   ipcMain.handle("tinyide:workspace:open-window", async (_event, rootPath, sessionId) => {
     if (typeof rootPath !== "string" || !rootPath.trim()) throw new Error("O caminho do projeto é obrigatório.");
-    if (typeof sessionId !== "string" || !/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(sessionId)) {
-      throw new Error("Identificador de sessão inválido.");
+    if (sessionId === DESKTOP_MAIN_SESSION_ID) {
+      // A janela principal já ocupa esse id; reutilizá-lo faria a nova janela
+      // compartilhar o estado visual e o ponteiro de workspace dela.
+      throw new Error("Identificador de sessão reservado para a janela principal.");
     }
     const descriptor = await registerDesktopWorkspace(rootPath.trim());
-    const target = new URL(runtime.url);
-    target.searchParams.set("tinyideSession", sessionId);
-    target.searchParams.set("tinyideOpenProject", `path:${descriptor.path}`);
-    createWindow(target.href);
+    createWindow(desktopWindowUrl(runtime.url, { sessionId, projectPath: descriptor.path }));
     return true;
   });
 
@@ -280,7 +280,9 @@ async function startRuntime() {
     workspacePathAllowed(candidate) {
       return [...desktopWorkspaces.values()].some((root) => resolve(root) === resolve(candidate));
     },
-    ...(initialWorkspace ? { initialWorkspaceRoot: initialWorkspace } : {}),
+    ...(initialWorkspace
+      ? { initialWorkspaceRoot: initialWorkspace, initialSessionId: DESKTOP_MAIN_SESSION_ID }
+      : {}),
     bundledPlugins: true,
     host: "127.0.0.1",
     port: Number.isInteger(selectedPort) && selectedPort > 0 ? selectedPort : 0,
@@ -346,9 +348,9 @@ if (isPrimaryInstance) {
     browserExtensionGuard = disableBrowserExtensions(session.defaultSession);
     installDesktopFileSystemHandlers();
     runtime = await startRuntime();
-    mainWindow = createWindow(runtime.url);
+    mainWindow = createWindow(desktopWindowUrl(runtime.url, { sessionId: DESKTOP_MAIN_SESSION_ID }));
     app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow(runtime.url);
+      if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow(desktopWindowUrl(runtime.url, { sessionId: DESKTOP_MAIN_SESSION_ID }));
     });
   }).catch((error) => {
     console.error(error);

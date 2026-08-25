@@ -408,6 +408,13 @@ import {
   type EditorLocationHistory,
 } from "./editor/location-history";
 import { findTextMatches, replaceTextMatch, replaceTextMatches } from "./editor/text-search";
+import {
+  clearRenderedTextSearchHighlight,
+  createRenderedTextSearchSnapshot,
+  findRenderedTextMatches,
+  isRenderedTextSearchMatch,
+  revealRenderedTextMatch,
+} from "./editor/rendered-text-search";
 import { textOffsetAtPosition, textPositionAtOffset } from "./editor/text-position";
 import { foldSearchMatchVisible, foldSearchVisibleLine, foldsRevealingFileLine } from "./editor/fold-search";
 import { editorContextMenuTargetRange, editorWordRangeAtOffset } from "./editor/context-target";
@@ -760,6 +767,7 @@ export function App() {
   const [editorSearchMatchIndex, setEditorSearchMatchIndex] = useState(0);
   const [editorSearchCaseSensitive, setEditorSearchCaseSensitive] = useState(false);
   const [editorSearchRegex, setEditorSearchRegex] = useState(false);
+  const [renderedEditorSearchRevision, setRenderedEditorSearchRevision] = useState(0);
   const [editorNavigationLoading, setEditorNavigationLoading] = useState(false);
   const [completionSession, setCompletionSession] = useState<CompletionSession | undefined>(undefined);
   const [editorLocationHistory, setEditorLocationHistory] = useState(createEditorLocationHistory);
@@ -801,6 +809,7 @@ export function App() {
   const editorSearchInputRef = useRef<HTMLInputElement>(null);
   const goToLineInputRef = useRef<HTMLInputElement>(null);
   const editorSearchReplaceInputRef = useRef<HTMLInputElement>(null);
+  const resourceEditorHostRef = useRef<HTMLDivElement | null>(null);
   const syntaxLayerRef = useRef<HTMLPreElement>(null);
   const foldedEditorCaretRef = useRef<HTMLSpanElement>(null);
   const foldedEditorSelectionRef = useRef<HTMLDivElement>(null);
@@ -1010,7 +1019,7 @@ export function App() {
     await platform.commands.execute(TEXT_EDITOR_FORMAT_DOCUMENT_COMMAND, context);
   };
   const openEditorSearch = useCallback((selectedText = "") => {
-    if (activeDocument?.kind !== "text" || activeResourceEditorProvider) return false;
+    if (activeDocument?.kind !== "text") return false;
     if (selectedText) {
       setEditorSearchQuery(selectedText);
       setEditorSearchMatchIndex(0);
@@ -1024,32 +1033,84 @@ export function App() {
     return true;
   }, [activeDocument?.id, activeDocument?.kind, activeResourceEditorProvider]);
   const openEditorReplace = useCallback(() => {
+    if (activeResourceEditorProvider) return false;
     if (!openEditorSearch()) return false;
     setEditorSearchReplaceOpen(true);
     return true;
-  }, [openEditorSearch]);
+  }, [activeResourceEditorProvider, openEditorSearch]);
   const openGoToLine = useCallback(() => {
     if (activeDocument?.kind !== "text" || activeResourceEditorProvider) return false;
     setGoToLineOpen(true);
     window.requestAnimationFrame(() => goToLineInputRef.current?.focus({ preventScroll: true }));
     return true;
   }, [activeDocument?.id, activeDocument?.kind, activeResourceEditorProvider]);
+  const renderedEditorSearchSnapshot = useMemo(() => {
+    if (!editorSearchOpen || activeDocument?.kind !== "text" || !activeResourceEditorProvider) return undefined;
+    return createRenderedTextSearchSnapshot(resourceEditorHostRef.current);
+  }, [editorSearchOpen, activeDocument?.id, activeDocument?.kind, activeResourceEditorProvider, renderedEditorSearchRevision]);
   const editorSearchResult = useMemo(() => {
-    if (!editorSearchOpen || activeDocument?.kind !== "text" || activeResourceEditorProvider) return { matches: [] };
+    if (!editorSearchOpen || activeDocument?.kind !== "text") return { matches: [] };
     try {
       return {
-        matches: findTextMatches(activeEditorContent, editorSearchQuery, {
-          caseSensitive: editorSearchCaseSensitive,
-          regex: editorSearchRegex,
-        }),
+        matches: activeResourceEditorProvider
+          ? findRenderedTextMatches(renderedEditorSearchSnapshot, editorSearchQuery, {
+              caseSensitive: editorSearchCaseSensitive,
+              regex: editorSearchRegex,
+            })
+          : findTextMatches(activeEditorContent, editorSearchQuery, {
+              caseSensitive: editorSearchCaseSensitive,
+              regex: editorSearchRegex,
+            }),
       };
     } catch {
       return { matches: [], error: "Expressão regular inválida" };
     }
-  }, [editorSearchOpen, editorSearchQuery, editorSearchCaseSensitive, editorSearchRegex, activeDocument?.id, activeDocument?.kind, activeEditorContent, activeResourceEditorProvider]);
+  }, [editorSearchOpen, editorSearchQuery, editorSearchCaseSensitive, editorSearchRegex, activeDocument?.id, activeDocument?.kind, activeEditorContent, activeResourceEditorProvider, renderedEditorSearchSnapshot]);
   const editorSearchMatches = editorSearchResult.matches;
   const editorSearchError = "error" in editorSearchResult ? editorSearchResult.error : undefined;
   const activeEditorSearchMatch = editorSearchMatches[editorSearchMatchIndex];
+
+  useEffect(() => {
+    if (!editorSearchOpen || !activeResourceEditorProvider) return;
+    const host = resourceEditorHostRef.current;
+    if (!host) return;
+    let frame: number | undefined;
+    const refresh = () => {
+      if (frame !== undefined) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = undefined;
+        setRenderedEditorSearchRevision((current) => current + 1);
+      });
+    };
+    refresh();
+    const observer = new MutationObserver(refresh);
+    observer.observe(host, { subtree: true, childList: true, characterData: true });
+    host.addEventListener("load", refresh, true);
+    return () => {
+      observer.disconnect();
+      host.removeEventListener("load", refresh, true);
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+    };
+  }, [editorSearchOpen, activeDocument?.id, activeResourceEditorProvider]);
+
+  useEffect(() => {
+    if (!activeResourceEditorProvider) return;
+    setEditorSearchReplaceOpen(false);
+    setEditorSearchReplacement("");
+  }, [activeResourceEditorProvider]);
+
+  useEffect(() => {
+    if (!activeResourceEditorProvider || activeDocument?.kind !== "text") return;
+    const handleRenderedEditorShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || event.key.toLocaleLowerCase() !== "f") return;
+      const target = event.target;
+      if (target === editorSearchInputRef.current) return;
+      if (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (openEditorSearch()) event.preventDefault();
+    };
+    window.addEventListener("keydown", handleRenderedEditorShortcut, true);
+    return () => window.removeEventListener("keydown", handleRenderedEditorShortcut, true);
+  }, [activeDocument?.id, activeDocument?.kind, activeResourceEditorProvider, openEditorSearch]);
   const activeSyntaxHighlighter = useMemo(() => {
     if (activeResourceEditorProvider || !activeDocument || activeDocument.kind !== "text") return undefined;
     if (activeEditorContent.length > MAX_SYNTAX_HIGHLIGHT_SOURCE_LENGTH) return undefined;
@@ -2417,7 +2478,17 @@ export function App() {
         } else if (isDesktopHost()) {
           if (restoredWorkspaceRoot) {
             restoredWorkspaceHandle = await restoreDesktopWorkspaceHandle(restoredWorkspaceRoot).catch(() => undefined);
-          } else {
+            if (!restoredWorkspaceHandle) {
+              // O ponteiro de sessão aponta para um projeto que este host não
+              // registra mais — removido, sem permissão, ou gravado por outro
+              // host que compartilha o diretório de estado do usuário. Insistir
+              // nele abriria a janela em estado de erro em vez de cair no
+              // último workspace conhecido deste desktop.
+              restoredWorkspaceRoot = undefined;
+              snapshot = undefined;
+            }
+          }
+          if (!restoredWorkspaceHandle) {
             restoredWorkspaceHandle = await restoreLastDesktopWorkspaceHandle().catch(() => undefined);
             if (restoredWorkspaceHandle) {
               restoredWorkspaceName = restoredWorkspaceHandle.name;
@@ -3236,6 +3307,11 @@ export function App() {
     const match = editorSearchMatches[index];
     if (!match) return;
     setEditorSearchMatchIndex(index);
+    if (activeResourceEditorProvider) {
+      if (!isRenderedTextSearchMatch(match)) return;
+      revealRenderedTextMatch(resourceEditorHostRef.current, match);
+      return;
+    }
     setDocuments((current) => current.map((document) => document.id === activeDocument.id
       ? { ...document, selectionStart: match.start, selectionEnd: match.end }
       : document));
@@ -4715,6 +4791,19 @@ export function App() {
   }, [editorSearchOpen, activeDocument?.id, activeDocument?.kind]);
 
   useEffect(() => {
+    if (!activeResourceEditorProvider) return;
+    if (!editorSearchOpen || !editorSearchQuery || !editorSearchMatches.length) {
+      clearRenderedTextSearchHighlight(resourceEditorHostRef.current);
+    }
+  }, [activeResourceEditorProvider, editorSearchOpen, editorSearchQuery, editorSearchMatches.length]);
+
+  useEffect(() => {
+    if (!activeResourceEditorProvider) return;
+    const host = resourceEditorHostRef.current;
+    return () => clearRenderedTextSearchHighlight(host);
+  }, [activeDocument?.id, activeResourceEditorProvider]);
+
+  useEffect(() => {
     if (!editorSearchOpen) return;
     setEditorSearchMatchIndex((current) => Math.min(current, Math.max(0, editorSearchMatches.length - 1)));
   }, [editorSearchOpen, editorSearchMatches.length]);
@@ -4722,7 +4811,7 @@ export function App() {
   useEffect(() => {
     if (!editorSearchOpen || !editorSearchQuery || !editorSearchMatches.length) return;
     selectEditorSearchMatch(0);
-  }, [editorSearchOpen, editorSearchQuery, editorSearchCaseSensitive, editorSearchRegex, activeDocument?.id]);
+  }, [editorSearchOpen, editorSearchQuery, editorSearchCaseSensitive, editorSearchRegex, activeDocument?.id, activeResourceEditorProvider, editorSearchMatches.length]);
 
   useEffect(() => {
     if (explorerFilterProvider && workspaceHandle) return;
@@ -7204,7 +7293,7 @@ export function App() {
                             }
                             if ((event.ctrlKey || event.metaKey) && key === "h") {
                               event.preventDefault();
-                              setEditorSearchReplaceOpen(true);
+                              if (!activeResourceEditorProvider) setEditorSearchReplaceOpen(true);
                               return;
                             }
                             if (event.key === "Escape") {
@@ -7252,15 +7341,17 @@ export function App() {
                         <span className="editor-search__count" aria-live="polite">
                           {editorSearchError ? "!" : editorSearchMatches.length ? `${editorSearchMatchIndex + 1}/${editorSearchMatches.length}` : "0"}
                         </span>
-                        <button
-                          className="icon-button small"
-                          type="button"
-                          aria-label="Alternar substituição"
-                          aria-expanded={editorSearchReplaceOpen}
-                          title="Substituir (Ctrl+H)"
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={() => setEditorSearchReplaceOpen((current) => !current)}
-                        ><CornerDownRight size={12} /></button>
+                        {!activeResourceEditorProvider ? (
+                          <button
+                            className="icon-button small"
+                            type="button"
+                            aria-label="Alternar substituição"
+                            aria-expanded={editorSearchReplaceOpen}
+                            title="Substituir (Ctrl+H)"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => setEditorSearchReplaceOpen((current) => !current)}
+                          ><CornerDownRight size={12} /></button>
+                        ) : null}
                         {editorSearchMatches.length > 1 ? (
                           <>
                             <button
@@ -7293,7 +7384,7 @@ export function App() {
                           }}
                         ><X size={12} /></button>
                         </div>
-                        {editorSearchReplaceOpen ? (
+                        {editorSearchReplaceOpen && !activeResourceEditorProvider ? (
                           <div className="editor-search__replace-row">
                             <CornerDownRight className="editor-search__icon" size={13} />
                             <input
@@ -7340,8 +7431,8 @@ export function App() {
                         className="icon-button small"
                         type="button"
                         aria-label="Pesquisar no arquivo"
-                        title="Pesquisar no arquivo"
-                        disabled={!activeDocument || activeDocument.kind !== "text" || Boolean(activeResourceEditorProvider)}
+                        title="Pesquisar no arquivo (Ctrl+F)"
+                        disabled={!activeDocument || activeDocument.kind !== "text"}
                         onClick={() => openEditorSearch()}
                       ><WorkbenchIcon icon="search" size={14} /></button>
                     )}
@@ -7440,6 +7531,7 @@ export function App() {
                     <ResourceEditorHost
                       provider={activeResourceEditorProvider}
                       document={activeDocument}
+                      hostRef={resourceEditorHostRef}
                       topLine={editorTopLineForScrollTop(activeDocument.scrollTop)}
                       onRevealLine={(line) => setDocuments((current) => current.map((document) => document.id === activeDocument.id
                         ? { ...document, scrollTop: editorScrollTopForTopLine(line) }

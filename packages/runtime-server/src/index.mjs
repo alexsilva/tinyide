@@ -189,10 +189,14 @@ export function createTinyIdeRuntime(options) {
   }
 
   const sessionContexts = new Map();
+  // O workspace inicial pertence a uma sessão específica: o host que embute o
+  // runtime escolhe qual. O desktop nomeia a própria janela principal, então
+  // amarrar o bootstrap ao id "default" deixaria `TINYIDE_WORKSPACE` sem efeito.
+  const initialSessionId = options.initialSessionId ?? DEFAULT_SESSION_ID;
   function createSessionContext(sessionId) {
     const context = {
       sessionId,
-      workspaceRoot: sessionId === DEFAULT_SESSION_ID && options.initialWorkspaceRoot
+      workspaceRoot: sessionId === initialSessionId && options.initialWorkspaceRoot
         ? resolve(options.initialWorkspaceRoot)
         : undefined,
       backendHandlers: new Map(),
@@ -650,9 +654,12 @@ export function createTinyIdeRuntime(options) {
     userDataRoot,
     pluginsRoot,
     webRoot,
-    get workspaceRoot() { return sessionContext().workspaceRoot; },
+    // A API programática age sobre a sessão que o host embutiu (a janela
+    // principal do desktop, ou "default" no servidor de desenvolvimento) — não
+    // sobre a primeira sessão que aparecer numa requisição.
+    get workspaceRoot() { return sessionContext(initialSessionId).workspaceRoot; },
     setWorkspaceRoot(path) {
-      const context = sessionContext();
+      const context = sessionContext(initialSessionId);
       const nextWorkspaceRoot = path ? resolve(path) : undefined;
       if (nextWorkspaceRoot !== context.workspaceRoot) {
         void resetExecutionBackend(context);
@@ -661,7 +668,13 @@ export function createTinyIdeRuntime(options) {
       }
       return context.workspaceRoot;
     },
-    clearBackendCache() { return disposeCachedBackends(sessionContext()); },
+    // Recarregar código de plugin invalida o backend de todas as sessões: cada
+    // janela tem o próprio cache, e limpar só o da sessão do host deixaria as
+    // demais rodando a versão antiga.
+    clearBackendCache() {
+      return Promise.allSettled([...sessionContexts.values()]
+        .map((context) => disposeCachedBackends(context)));
+    },
     clearManifestCache() { manifestCache = { expiresAt: 0, descriptors: [] }; },
     async dispose() {
       await Promise.allSettled([...sessionContexts.values()].flatMap((context) => [

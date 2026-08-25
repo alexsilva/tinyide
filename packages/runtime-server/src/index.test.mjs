@@ -487,6 +487,27 @@ describe("runtime server hardening", () => {
     expect(() => runtime.clearBackendCache()).not.toThrow();
   });
 
+  it("isola o workspace por sessão e entrega o bootstrap à sessão do host", async () => {
+    const { runtime, workspaceRoot, root } = await fixture({ initialSessionId: "desktop" });
+    const outroWorkspace = join(root, "outro");
+    await mkdir(outroWorkspace);
+
+    // O workspace inicial pertence à sessão nomeada pelo host, não a "default".
+    expect(runtime.workspaceRoot).toBe(workspaceRoot);
+    const semSessao = await fetch(`${runtime.url}/core-api/workspace/resources?path=`);
+    expect(semSessao.status).toBe(409);
+
+    // Trocar o projeto numa sessão não move o da outra.
+    const trocou = await fetch(`${runtime.url}/core-api/workspace`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-tinyide-session-id": "outra-janela" },
+      body: JSON.stringify({ name: basename(outroWorkspace), path: outroWorkspace }),
+    });
+    expect(trocou.status).toBe(200);
+    expect(await trocou.json()).toEqual({ workspaceRoot: outroWorkspace });
+    expect(runtime.workspaceRoot).toBe(workspaceRoot);
+  });
+
   it("configures conservative HTTP server limits", async () => {
     const { runtime } = await fixture();
     expect(runtime.server.maxHeadersCount).toBe(100);

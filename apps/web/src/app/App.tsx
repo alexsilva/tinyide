@@ -2407,10 +2407,73 @@ export function App() {
     return settings;
   }, [replaceWorkspaceSettings]);
 
+  const applyPersistedVisualSession = useCallback((session: ReturnType<typeof readSession>) => {
+    setSidebarView(session.sidebarView);
+    setSidebarVisible(session.sidebarVisible);
+    setSidebarViewsBySide(session.sidebarViewsBySide);
+    setVerticalPanelWidths({
+      left: session.leftVerticalPanelWidth,
+      right: session.rightVerticalPanelWidth,
+    });
+    setPanelVisible(session.panelVisible);
+    setPanelHeight(session.panelHeight);
+    setPanelTab(session.panelTab);
+    setProblemsVisible(session.problemsVisible);
+    setToolWindowVisible(session.toolWindowVisible);
+    setToolWindowHeight(session.toolWindowHeight);
+    setActiveToolWindowId(session.activeToolWindowId);
+    setActivityButtonPlacements(session.activityButtonPlacements);
+    setExpanded(new Set(session.expandedDirectories));
+    setExplorerShowHidden(session.explorerShowHidden);
+    setExplorerShowIgnored(session.explorerShowIgnored);
+  }, []);
+
+  const restorePersistedWorkspaceUi = useCallback(async (
+    workspaceRoot: string,
+    handle: BrowserDirectoryHandle,
+    rootEntries: readonly WorkspaceEntry[],
+  ) => {
+    const [session, snapshot] = await Promise.all([
+      readPersistedSession(workspaceRoot),
+      readReactSnapshot(workspaceRoot),
+    ]);
+    applyPersistedVisualSession(session);
+    setEntries(await hydrateExpandedEntries(rootEntries, new Set(session.expandedDirectories)));
+    const restoredDocuments = await restoreWorkspaceDocuments(
+      snapshot?.documents ?? [],
+      workspaceRoot,
+      handle,
+    );
+    setDocuments(restoredDocuments);
+    setActiveDocumentId(
+      session.activeDocumentId
+        && restoredDocuments.some((document) => document.id === session.activeDocumentId)
+        ? session.activeDocumentId
+        : restoredDocuments[0]?.id,
+    );
+    const restoredDocumentIds = new Set(restoredDocuments.map((document) => document.id));
+    const restoredFolds = new Map<string, readonly DocumentFold[]>();
+    for (const document of snapshot?.documents ?? []) {
+      if (!restoredDocumentIds.has(document.id)) continue;
+      const folds = document.folds?.filter((fold): fold is DocumentFold => (
+        Number.isInteger(fold.startLine)
+        && Number.isInteger(fold.endLine)
+        && fold.startLine >= 1
+        && fold.endLine > fold.startLine
+      ));
+      if (folds?.length) restoredFolds.set(document.id, folds);
+    }
+    documentFoldsRef.current = restoredFolds;
+    setDocumentFolds(restoredFolds);
+    setDiagnostics(snapshot?.diagnostics ?? []);
+    setOutput(snapshot ? [...snapshot.output] : []);
+    return session;
+  }, [applyPersistedVisualSession]);
+
   useEffect(() => {
     platform.initialize()
       .then(async () => {
-        const [persistedSession, persistedUserSettings] = await Promise.all([
+        const [sessionLocator, persistedUserSettings] = await Promise.all([
           readPersistedSession(),
           readUserSettings(),
         ]);
@@ -2418,29 +2481,11 @@ export function App() {
         setPreferredThemeId(persistedUserSettings.appearance?.themeId ?? workbenchThemeDefaults.themeId);
         setPreferredIconPackId(persistedUserSettings.appearance?.iconPackId ?? workbenchIconDefaults.packId);
         setFontPreferences(defaultFontPreferences(persistedUserSettings.appearance?.fonts));
-        setSidebarView(persistedSession.sidebarView);
-        setSidebarVisible(persistedSession.sidebarVisible);
-        setSidebarViewsBySide(persistedSession.sidebarViewsBySide);
-        setVerticalPanelWidths({
-          left: persistedSession.leftVerticalPanelWidth,
-          right: persistedSession.rightVerticalPanelWidth,
-        });
-        setPanelVisible(persistedSession.panelVisible);
-        setPanelHeight(persistedSession.panelHeight);
-        setPanelTab(persistedSession.panelTab);
-        setProblemsVisible(persistedSession.problemsVisible);
-        setToolWindowVisible(persistedSession.toolWindowVisible);
-        setToolWindowHeight(persistedSession.toolWindowHeight);
-        setActiveToolWindowId(persistedSession.activeToolWindowId);
-        setActivityButtonPlacements(persistedSession.activityButtonPlacements);
-        setExpanded(new Set(persistedSession.expandedDirectories));
-        setExplorerShowHidden(persistedSession.explorerShowHidden);
-        setExplorerShowIgnored(persistedSession.explorerShowIgnored);
-
-        const snapshot = await readReactSnapshot();
+        let persistedSession = sessionLocator;
+        let snapshot = await readReactSnapshot();
         let restoredDocuments: readonly OpenDocument[] = [];
-        let restoredWorkspaceName = snapshot?.workspaceName ?? persistedSession.workspaceName;
-        let restoredWorkspaceRoot = snapshot?.workspaceRoot ?? persistedSession.workspaceRoot;
+        let restoredWorkspaceName = snapshot?.workspaceName ?? sessionLocator.workspaceName;
+        let restoredWorkspaceRoot = snapshot?.workspaceRoot ?? sessionLocator.workspaceRoot;
         // Handles vivos nunca são restaurados de JSON. Eles são reconstruídos
         // pelo host a partir do caminho persistido do workspace.
         let restoredWorkspaceHandle: BrowserDirectoryHandle | undefined;
@@ -2484,6 +2529,11 @@ export function App() {
             const hostWorkspace = await setHostWorkspace(restoredWorkspaceName, restoredWorkspaceRoot);
             restoredWorkspaceRoot = hostWorkspace.workspaceRoot;
             setWorkspaceRoot(hostWorkspace.workspaceRoot);
+            [persistedSession, snapshot] = await Promise.all([
+              readPersistedSession(hostWorkspace.workspaceRoot),
+              readReactSnapshot(hostWorkspace.workspaceRoot),
+            ]);
+            applyPersistedVisualSession(persistedSession);
             if (!isDesktopHost()) {
               restoredWorkspaceHandle = runtimeWorkspaceHandle(restoredWorkspaceName, hostWorkspace.workspaceRoot);
             }
@@ -2502,6 +2552,7 @@ export function App() {
         } else {
           await clearHostWorkspace();
           setWorkspaceRoot(undefined);
+          applyPersistedVisualSession(sessionLocator);
         }
         setWorkspaceName(restoredWorkspaceName);
         setWorkspaceHandle(restoredWorkspaceHandle);
@@ -2892,6 +2943,8 @@ export function App() {
     setDebugAdapter(undefined);
     setDebugCommandPending(undefined);
     setDebugBreakpoints([]);
+    documentFoldsRef.current = new Map();
+    setDocumentFolds(new Map());
     setPanelVisible(false);
     setToolWindowVisible(false);
     setActiveToolWindowId(undefined);
@@ -2920,9 +2973,12 @@ export function App() {
     setWorkspaceHandle(activeHandle);
     setWorkspaceName(handle.name);
     setWorkspaceRoot(hostWorkspace.workspaceRoot);
-    setEntries(rootEntries);
+    const projectSession = await restorePersistedWorkspaceUi(hostWorkspace.workspaceRoot, activeHandle, rootEntries);
     setWorkspaceAccess("ready");
-    await refreshEnvironments(localSettings.environment?.selectedId, hostWorkspace.workspaceRoot);
+    await refreshEnvironments(
+      localSettings.environment?.selectedId ?? projectSession.selectedEnvironmentId,
+      hostWorkspace.workspaceRoot,
+    );
     await rememberRecentProject({
       handle: activeHandle,
       path: hostWorkspace.workspaceRoot,
@@ -3027,9 +3083,12 @@ export function App() {
       setWorkspaceHandle(handle);
       setWorkspaceName(project.name);
       setWorkspaceRoot(hostWorkspace.workspaceRoot);
-      setEntries(rootEntries);
+      const projectSession = await restorePersistedWorkspaceUi(hostWorkspace.workspaceRoot, handle, rootEntries);
       setWorkspaceAccess("ready");
-      await refreshEnvironments(localSettings.environment?.selectedId, hostWorkspace.workspaceRoot);
+      await refreshEnvironments(
+        localSettings.environment?.selectedId ?? projectSession.selectedEnvironmentId,
+        hostWorkspace.workspaceRoot,
+      );
       await rememberRecentProject({
         handle,
         path: hostWorkspace.workspaceRoot,

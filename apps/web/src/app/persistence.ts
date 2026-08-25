@@ -20,10 +20,12 @@ import {
   isActivityButtonPlacement,
   type ActivityButtonPlacements,
 } from "./activity-layout";
-import { projectSessionStateKey } from "./project-session";
+import { projectSessionStateKey, projectWorkspaceStateKey } from "./project-session";
 import { isVirtualDocumentId } from "./virtual-documents";
 
-const SESSION_STATE_KEY = () => projectSessionStateKey("ui-session");
+const SESSION_STATE_KEY = (workspaceRoot?: string) => workspaceRoot
+  ? projectWorkspaceStateKey("ui-session", workspaceRoot)
+  : Promise.resolve(projectSessionStateKey("ui-session"));
 
 export type PersistedSidebarView = string;
 
@@ -241,9 +243,9 @@ export function readSession(): SessionState {
   return defaultSession();
 }
 
-export async function readPersistedSession(): Promise<SessionState> {
+export async function readPersistedSession(workspaceRoot?: string): Promise<SessionState> {
   try {
-    const stored = await readStoredState(SESSION_STATE_KEY());
+    const stored = await readStoredState(await SESSION_STATE_KEY(workspaceRoot));
     if (stored !== undefined) return normalizeSession(stored);
   } catch (error) {
     console.warn("Não foi possível restaurar a sessão visual persistente.", error);
@@ -252,7 +254,22 @@ export async function readPersistedSession(): Promise<SessionState> {
 }
 
 export function writeSession(session: SessionState): void {
-  void writeStoredState(SESSION_STATE_KEY(), session).catch((error) => {
+  void (async () => {
+    const workspaceRoot = session.workspaceRoot?.trim();
+    if (workspaceRoot) {
+      await writeStoredState(await SESSION_STATE_KEY(workspaceRoot), session);
+      // A chave da sessão mantém apenas o ponteiro necessário para restaurar o
+      // último workspace desta janela. O layout completo nunca é reutilizado
+      // como fallback de outro projeto.
+      await writeStoredState(await SESSION_STATE_KEY(), {
+        ...defaultSession(),
+        workspaceName: session.workspaceName,
+        workspaceRoot,
+      });
+      return;
+    }
+    await writeStoredState(await SESSION_STATE_KEY(), session);
+  })().catch((error) => {
     console.warn("Não foi possível persistir a sessão visual.", error);
   });
 }
@@ -275,8 +292,8 @@ export function deserializeEntries(entries: readonly StoredWorkspaceEntry[]): re
   }));
 }
 
-export async function readReactSnapshot(): Promise<ApplicationSnapshot | undefined> {
-  const snapshot = await readApplicationSnapshot<ApplicationSnapshot>();
+export async function readReactSnapshot(workspaceRoot?: string): Promise<ApplicationSnapshot | undefined> {
+  const snapshot = await readApplicationSnapshot<ApplicationSnapshot>(workspaceRoot);
   return snapshot?.version === 2 ? snapshot : undefined;
 }
 
@@ -405,5 +422,5 @@ export async function writeReactSnapshot(input: {
   // FileSystemHandle exige structured clone (IndexedDB). Como a persistência da
   // IDE agora é exclusivamente em arquivos do host, o snapshot deve ser JSON
   // serializável e nunca depender de browser storage.
-  await writeApplicationSnapshot(base);
+  await writeApplicationSnapshot(base, input.workspaceRoot);
 }

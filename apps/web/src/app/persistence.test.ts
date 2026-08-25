@@ -160,6 +160,25 @@ describe("layout persistence", () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 
+  it("isolates the visual session by workspace root", async () => {
+    const fetchMock = vi.fn(async (url: string) => new Response(JSON.stringify({
+      sidebarView: url.includes("workspace.") ? "git.changes" : "explorer",
+      sidebarViewsBySide: url.includes("workspace.") ? { right: "git.changes" } : { left: "explorer" },
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const alpha = await readPersistedSession("/workspaces/alpha");
+    const alphaUrl = String(fetchMock.mock.calls.at(-1)?.[0]);
+    const beta = await readPersistedSession("/workspaces/beta");
+    const betaUrl = String(fetchMock.mock.calls.at(-1)?.[0]);
+
+    expect(alpha.sidebarViewsBySide).toEqual({ right: "git.changes" });
+    expect(beta.sidebarViewsBySide).toEqual({ right: "git.changes" });
+    expect(alphaUrl).toMatch(/\/core-api\/user\/state\/ui-session\.workspace\.[a-f0-9]{64}$/);
+    expect(betaUrl).toMatch(/\/core-api\/user\/state\/ui-session\.workspace\.[a-f0-9]{64}$/);
+    expect(alphaUrl).not.toBe(betaUrl);
+  });
+
   it("writes the visual session only through host persistence", async () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => new Response(init?.body as string, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -175,6 +194,34 @@ describe("layout persistence", () => {
       "/core-api/user/state/ui-session",
       expect.objectContaining({ method: "PUT", body: JSON.stringify(session) }),
     ));
+  });
+
+  it("stores workspace layout separately and keeps the global session as a locator", async () => {
+    const writes = new Map<string, unknown>();
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") writes.set(url, JSON.parse(String(init.body)));
+      return new Response(init?.body as string, { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const session = {
+      ...readSession(),
+      workspaceName: "alpha",
+      workspaceRoot: "/workspaces/alpha",
+      activityButtonPlacements: {
+        "sidebar:git.changes": { side: "right" as const, order: 4 },
+      },
+      sidebarViewsBySide: { right: "git.changes" },
+    };
+
+    writeSession(session);
+    await vi.waitFor(() => expect(writes.size).toBe(2));
+    const scoped = [...writes.entries()].find(([url]) => url.includes("ui-session.workspace."));
+    const locator = writes.get("/core-api/user/state/ui-session") as ReturnType<typeof readSession>;
+
+    expect(scoped?.[1]).toEqual(session);
+    expect(locator.workspaceRoot).toBe("/workspaces/alpha");
+    expect(locator.sidebarViewsBySide).toEqual({ left: "explorer" });
+    expect(locator.activityButtonPlacements).toEqual({});
   });
 
   it("restores every open vertical panel", () => {

@@ -37,6 +37,26 @@ export function projectSessionStateKey(key: string): string {
   return sessionId === DEFAULT_PROJECT_SESSION_ID ? key : `${key}.${sessionId}`;
 }
 
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Estado visual é simultaneamente isolado pela janela/sessão do host e pelo
+ * workspace. O caminho não entra no nome do arquivo de estado: além de evitar
+ * limites de tamanho e caracteres do SO, o hash impede que dois workspaces
+ * compartilhem acidentalmente a mesma chave global de UI.
+ */
+export async function projectWorkspaceStateKey(key: string, workspaceRoot: string): Promise<string> {
+  const root = workspaceRoot.trim();
+  if (!root) throw new Error("Workspace obrigatório para estado escopado.");
+  const scope = `${projectSessionId()}\0${root}`;
+  return `${key}.workspace.${await sha256Hex(scope)}`;
+}
+
 export function projectSessionHeaders(headers?: HeadersInit): Headers {
   const next = new Headers(headers);
   next.set("X-TinyIde-Session-Id", projectSessionId());
@@ -72,4 +92,5 @@ export function requestedProjectReference(): string | undefined {
 
 export const projectSessionInternals = {
   validSessionId,
+  sha256Hex,
 };

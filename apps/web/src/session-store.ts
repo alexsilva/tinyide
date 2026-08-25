@@ -1,7 +1,9 @@
 import { projectRuntimeFetch } from "./app/project-session";
-import { projectSessionStateKey } from "./app/project-session";
+import { projectSessionStateKey, projectWorkspaceStateKey } from "./app/project-session";
 
-const SNAPSHOT_KEY = () => projectSessionStateKey("application-snapshot");
+const SNAPSHOT_KEY = (workspaceRoot?: string) => workspaceRoot
+  ? projectWorkspaceStateKey("application-snapshot", workspaceRoot)
+  : Promise.resolve(projectSessionStateKey("application-snapshot"));
 
 async function stateRequest<T>(key: string, init?: RequestInit): Promise<T | undefined> {
   const response = await projectRuntimeFetch(`/core-api/user/state/${encodeURIComponent(key)}`, {
@@ -17,16 +19,16 @@ async function stateRequest<T>(key: string, init?: RequestInit): Promise<T | und
   return await response.json() as T;
 }
 
-export async function readApplicationSnapshot<T>(): Promise<T | undefined> {
-  return await readStoredState<T>(SNAPSHOT_KEY());
+export async function readApplicationSnapshot<T>(workspaceRoot?: string): Promise<T | undefined> {
+  return await readStoredState<T>(await SNAPSHOT_KEY(workspaceRoot));
 }
 
-export async function writeApplicationSnapshot<T>(snapshot: T): Promise<void> {
-  await writeStoredState(SNAPSHOT_KEY(), snapshot);
+export async function writeApplicationSnapshot<T>(snapshot: T, workspaceRoot?: string): Promise<void> {
+  await writeStoredState(await SNAPSHOT_KEY(workspaceRoot), snapshot);
 }
 
-export async function clearApplicationSnapshot(): Promise<void> {
-  await removeStoredState(SNAPSHOT_KEY());
+export async function clearApplicationSnapshot(workspaceRoot?: string): Promise<void> {
+  await removeStoredState(await SNAPSHOT_KEY(workspaceRoot));
 }
 
 export async function readStoredState<T>(key: string): Promise<T | undefined> {

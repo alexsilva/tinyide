@@ -490,8 +490,17 @@ describe("runtime server hardening", () => {
   it("configures conservative HTTP server limits", async () => {
     const { runtime } = await fixture();
     expect(runtime.server.maxHeadersCount).toBe(100);
-    expect(runtime.server.headersTimeout).toBe(10_000);
-    expect(runtime.server.requestTimeout).toBe(30_000);
-    expect(runtime.server.keepAliveTimeout).toBe(5_000);
+    expect(runtime.server.headersTimeout).toBe(80_000);
+    expect(runtime.server.requestTimeout).toBe(120_000);
+    expect(runtime.server.keepAliveTimeout).toBe(75_000);
+  });
+
+  it("mantém keep-alive acima do pool do cliente para evitar reset de socket reusado", async () => {
+    const { runtime } = await fixture();
+    // O Chromium mantém sockets ociosos no pool por minutos; um keepAliveTimeout menor
+    // faz o servidor fechar a conexão que o navegador está prestes a reusar.
+    expect(runtime.server.keepAliveTimeout).toBeGreaterThanOrEqual(60_000);
+    expect(runtime.server.headersTimeout).toBeGreaterThan(runtime.server.keepAliveTimeout);
+    expect(runtime.server.requestTimeout).toBeGreaterThan(runtime.server.headersTimeout);
   });
 });

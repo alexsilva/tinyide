@@ -677,9 +677,13 @@ export async function startTinyIdeRuntime(options) {
   const runtime = createTinyIdeRuntime(options);
   const server = createServer((request, response) => runtime.middleware(request, response));
   server.maxHeadersCount = 100;
-  server.headersTimeout = 10_000;
-  server.requestTimeout = 30_000;
-  server.keepAliveTimeout = 5_000;
+  // O runtime só atende loopback e um único consumidor (o renderer). Manter o idle de
+  // keep-alive acima do pool do Chromium evita a race em que o Node envia FIN no exato
+  // instante em que o navegador reusa o socket — que chega ao cliente como
+  // "Failed to fetch"/ERR_CONNECTION_RESET indistinguível de servidor fora do ar.
+  server.keepAliveTimeout = 75_000;
+  server.headersTimeout = 80_000; // precisa ser > keepAliveTimeout, senão fecha a conexão ociosa
+  server.requestTimeout = 120_000; // precisa ser > headersTimeout; cobre git status/spawn lentos
   await new Promise((resolveListen, reject) => {
     server.once("error", reject);
     server.listen(options.port ?? 0, options.host ?? "127.0.0.1", resolveListen);

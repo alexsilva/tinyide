@@ -35,6 +35,14 @@ import { pluginLanguageProviderFor } from "./generic-syntax";
 import { platform } from "./platform";
 import { setActiveHostWorkspaceRoot } from "./host-workspace-state";
 import { projectRuntimeFetch } from "./project-session";
+import {
+  createTransientRetry,
+  delay,
+  HostRequestError,
+  RECONNECTED_NOTICE,
+  RECONNECTING_NOTICE,
+  TransientRuntimeError,
+} from "./transient-failure";
 
 export interface HostProcessSnapshot {
   readonly id: string;
@@ -304,10 +312,32 @@ export async function lintDocument(
   return provider.lint(document.content, document.name, settings);
 }
 
+/**
+ * Lê o corpo JSON de uma resposta do host classificando a falha na origem.
+ *
+ * O status é checado **antes** do `json()`: um proxy devolvendo 502 com corpo
+ * HTML fazia `json()` estourar `SyntaxError` e os monitores tratavam isso como
+ * erro definitivo, matando a execução justamente no caso de servidor reiniciando.
+ */
+async function readHostJson<T>(response: Response, fallbackMessage: string): Promise<T> {
+  if (!response.ok) {
+    const payload = await response.json().catch(() => undefined) as { readonly error?: string } | undefined;
+    throw new HostRequestError(payload?.error ?? fallbackMessage, response.status);
+  }
+  try {
+    return await response.json() as T;
+  } catch (cause) {
+    // Resposta 2xx com corpo ilegível também é sintoma de transporte/proxy.
+    throw new TransientRuntimeError(fallbackMessage, { cause });
+  }
+}
+
 export async function readHostContext(): Promise<{ readonly workspaceRoot: string }> {
   const response = await projectRuntimeFetch("/core-api/context", { cache: "no-store" });
-  if (!response.ok) throw new Error("Não foi possível obter o contexto de execução do host.");
-  const context = await response.json() as { readonly workspaceRoot: string };
+  const context = await readHostJson<{ readonly workspaceRoot: string }>(
+    response,
+    "Não foi possível obter o contexto de execução do host.",
+  );
   setActiveHostWorkspaceRoot(context.workspaceRoot);
   return context;
 }
@@ -327,8 +357,11 @@ export async function setHostWorkspace(
       ...(workspaceRootHint ? { path: workspaceRootHint } : {}),
     }),
   });
-  const payload = await response.json() as { readonly workspaceRoot?: string; readonly error?: string };
-  if (!response.ok || !payload.workspaceRoot) {
+  const payload = await readHostJson<{ readonly workspaceRoot?: string; readonly error?: string }>(
+    response,
+    "Não foi possível definir a raiz do workspace no host.",
+  );
+  if (!payload.workspaceRoot) {
     throw new Error(payload.error ?? "Não foi possível definir a raiz do workspace no host.");
   }
   setActiveHostWorkspaceRoot(payload.workspaceRoot);
@@ -350,32 +383,19 @@ export async function startHostProcess(request: HostProcessStartRequest): Promis
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
   });
-  const payload = await response.json() as HostProcessSnapshot | { readonly error?: string };
-  if (!response.ok) {
-    throw new Error("error" in payload && payload.error ? payload.error : "Falha ao iniciar processo.");
-  }
-  return payload as HostProcessSnapshot;
+  return readHostJson<HostProcessSnapshot>(response, "Falha ao iniciar processo.");
 }
 
 export async function listHostProcesses(): Promise<readonly HostProcessSnapshot[]> {
   const response = await projectRuntimeFetch("/core-api/execution/processes", { cache: "no-store" });
-  const payload = await response.json() as readonly HostProcessSnapshot[] | { readonly error?: string };
-  if (!response.ok) {
-    const errorPayload = payload as { readonly error?: string };
-    throw new Error(errorPayload.error ?? "Falha ao listar processos.");
-  }
-  return payload as readonly HostProcessSnapshot[];
+  return readHostJson<readonly HostProcessSnapshot[]>(response, "Falha ao listar processos.");
 }
 
 export async function readHostProcess(id: string): Promise<HostProcessSnapshot> {
   const response = await projectRuntimeFetch(`/core-api/execution/processes/${encodeURIComponent(id)}`, {
     cache: "no-store",
   });
-  const payload = await response.json() as HostProcessSnapshot | { readonly error?: string };
-  if (!response.ok) {
-    throw new Error("error" in payload && payload.error ? payload.error : "Falha ao consultar processo.");
-  }
-  return payload as HostProcessSnapshot;
+  return readHostJson<HostProcessSnapshot>(response, "Falha ao consultar processo.");
 }
 
 export async function updateHostProcessData(
@@ -388,11 +408,7 @@ export async function updateHostProcessData(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ providerId, data }),
   });
-  const payload = await response.json() as HostProcessSnapshot | { readonly error?: string };
-  if (!response.ok) {
-    throw new Error("error" in payload && payload.error ? payload.error : "Falha ao persistir dados da execução.");
-  }
-  return payload as HostProcessSnapshot;
+  return readHostJson<HostProcessSnapshot>(response, "Falha ao persistir dados da execução.");
 }
 
 export async function readHostProcessOutput(id: string, cursor: number): Promise<HostProcessOutputDelta> {
@@ -400,11 +416,7 @@ export async function readHostProcessOutput(id: string, cursor: number): Promise
     `/core-api/execution/processes/${encodeURIComponent(id)}/output?cursor=${Math.max(0, Math.trunc(cursor))}`,
     { cache: "no-store" },
   );
-  const payload = await response.json() as HostProcessOutputDelta | { readonly error?: string };
-  if (!response.ok) {
-    throw new Error("error" in payload && payload.error ? payload.error : "Falha ao ler a saída do processo.");
-  }
-  return payload as HostProcessOutputDelta;
+  return readHostJson<HostProcessOutputDelta>(response, "Falha ao ler a saída do processo.");
 }
 
 export async function stopHostProcess(id: string): Promise<void> {
@@ -438,14 +450,26 @@ async function followHostProcess(
   initial: HostProcessSnapshot,
   callbacks: RunProfileCallbacks,
   onDelta: (delta: HostProcessOutputDelta) => void,
+  /** Anexa linhas de aviso à saída acumulada (reconexão), sem substituí-la. */
+  publishNotice: (lines: readonly string[]) => void,
 ): Promise<HostProcessSnapshot> {
   let process = initial;
   let cursor = initial.outputStartCursor ?? 0;
   let hasMore = false;
+  const retry = createTransientRetry();
 
   do {
-    await new Promise((resolve) => setTimeout(resolve, hasMore ? 0 : 200));
-    const delta = await readHostProcessOutput(process.id, cursor);
+    await delay(hasMore ? 0 : 200);
+    let delta: HostProcessOutputDelta;
+    try {
+      delta = await readHostProcessOutput(process.id, cursor);
+      if (retry.reset()) publishNotice([RECONNECTED_NOTICE]);
+    } catch (cause) {
+      const decision = retry.schedule(cause);
+      if (decision.attempt === 1) publishNotice([RECONNECTING_NOTICE]);
+      await delay(decision.delayMs);
+      continue;
+    }
     cursor = delta.cursor;
     hasMore = delta.hasMore;
     onDelta(delta);
@@ -552,7 +576,7 @@ export async function runExecutionProfile(input: {
     }
     process = await followHostProcess(process, callbacks, (delta) => {
       publish(delta.chunks.map((chunk) => chunk.text), { truncated: delta.truncated });
-    });
+    }, publish);
     callbacks.onProcessFinished();
     if (process.stopRequested) {
       publish(["[interrompido pelo usuário]"]);
@@ -675,7 +699,7 @@ export async function runScript(input: {
   }
   process = await followHostProcess(process, callbacks, (delta) => {
     publish(delta.chunks.map((chunk) => chunk.text), { truncated: delta.truncated });
-  });
+  }, publish);
   callbacks.onProcessFinished();
   if (process.stopRequested) {
     publish(["[interrompido pelo usuário]"]);

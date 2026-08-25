@@ -1,12 +1,44 @@
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { useEffect, useState, type KeyboardEventHandler, type ReactElement, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type DragEvent as ReactDragEvent,
+  type KeyboardEventHandler,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import type {
   WorkbenchActivityBadgeProvider,
   WorkbenchActivityBadgeSnapshot,
   WorkbenchActivityIcon,
 } from "@tinyide/plugin-api";
 import { resolveWorkbenchIcon, subscribeWorkbenchIcons } from "./icon-manager";
-import type { ActivityBarSide, ActivityButtonDescriptor } from "../activity-layout";
+import { isActivityDragClick } from "../activity-layout";
+import type {
+  ActivityBarSide,
+  ActivityButtonDescriptor,
+  ActivityPointerPosition,
+} from "../activity-layout";
+
+/**
+ * Trata como clique o arrasto que não saiu do lugar: Chromium engole o `click`
+ * quando o gesto passa do limiar nativo de arrasto (3px), e sem isso o botão da
+ * activity bar só responde na segunda tentativa.
+ */
+function useActivityDragClickFallback(activate: () => void) {
+  const originRef = useRef<ActivityPointerPosition | undefined>(undefined);
+  return {
+    rememberOrigin(event: ReactDragEvent<HTMLElement>) {
+      originRef.current = { x: event.clientX, y: event.clientY };
+    },
+    activateIfClick(event: ReactDragEvent<HTMLElement>) {
+      const origin = originRef.current;
+      originRef.current = undefined;
+      if (isActivityDragClick(origin, { x: event.clientX, y: event.clientY })) activate();
+    },
+  };
+}
 
 export function IconButton({
   label,
@@ -113,17 +145,26 @@ export function FixedActivitySlot({
   ) => void;
   readonly onDragStateChange: (key?: string) => void;
 }) {
+  const slotRef = useRef<HTMLDivElement | null>(null);
+  const dragClick = useActivityDragClickFallback(() => {
+    slotRef.current?.querySelector<HTMLButtonElement>(".icon-button")?.click();
+  });
   return (
     <div
+      ref={slotRef}
       className={`activity-fixed-slot${spacer ? " activity-spacer" : " activity-button-slot"}${draggingKey ? " is-drag-active" : ""}${draggingKey === itemKey ? " is-dragging" : ""}`}
       data-activity-key={itemKey}
       draggable={!spacer}
       onDragStart={spacer ? undefined : (event) => {
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/x-tinyide-activity-button", itemKey);
+        dragClick.rememberOrigin(event);
         onDragStateChange(itemKey);
       }}
-      onDragEnd={spacer ? undefined : () => onDragStateChange()}
+      onDragEnd={spacer ? undefined : (event) => {
+        onDragStateChange();
+        dragClick.activateIfClick(event);
+      }}
       onDragOver={(event) => {
         if (!event.dataTransfer.types.includes("text/x-tinyide-activity-button")) return;
         event.preventDefault();
@@ -187,6 +228,9 @@ export function MovableActivityButton({
   readonly onDragStateChange: (key?: string) => void;
 }) {
   const badge = useActivityBadge(item.activityBadge);
+  const dragClick = useActivityDragClickFallback(() => {
+    if (!disabled) onActivate();
+  });
   const baseLabel = label ?? item.label;
   const accessibleLabel = badge ? `${baseLabel}: ${badge.label}` : baseLabel;
   return (
@@ -197,9 +241,13 @@ export function MovableActivityButton({
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/x-tinyide-activity-button", item.key);
+        dragClick.rememberOrigin(event);
         onDragStateChange(item.key);
       }}
-      onDragEnd={() => onDragStateChange()}
+      onDragEnd={(event) => {
+        onDragStateChange();
+        dragClick.activateIfClick(event);
+      }}
       onDragOver={(event) => {
         if (!event.dataTransfer.types.includes("text/x-tinyide-activity-button")) return;
         event.preventDefault();

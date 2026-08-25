@@ -332,7 +332,9 @@ export function pluginBackend(pluginId: string): PluginBackendApi {
         const message = payload && typeof payload === "object" && "error" in payload
           ? String(payload.error)
           : `Backend do plugin indisponível: HTTP ${response.status}`;
-        throw new Error(message);
+        // O status acompanha o erro para que o plugin distinga "servidor fora do ar"
+        // (reconectar) de "pedido inválido" (falha definitiva) sem ler a mensagem.
+        throw Object.assign(new Error(message), { statusCode: response.status });
       }
       return payload as Response;
     },

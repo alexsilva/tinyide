@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isActivityDragClick,
   moveActivityButton,
   orderedActivityButtons,
   type ActivityButtonDescriptor,
@@ -80,5 +81,30 @@ describe("activity button layout", () => {
       { key: "builtin:left-spacer", defaultOrder: 10_000 },
     ];
     expect(moveActivityButton(withSpacer, movedBuiltin, "builtin:left-spacer", "right")).toBe(movedBuiltin);
+  });
+});
+
+describe("activity drag treated as click", () => {
+  it("accepts a gesture that ends where it started", () => {
+    expect(isActivityDragClick({ x: 18, y: 120 }, { x: 22, y: 123 })).toBe(true);
+    expect(isActivityDragClick({ x: 18, y: 120 }, { x: 18, y: 120 })).toBe(true);
+  });
+
+  it("rejects a real reorder and a drop outside the window", () => {
+    expect(isActivityDragClick({ x: 18, y: 120 }, { x: 18, y: 156 })).toBe(false);
+    expect(isActivityDragClick({ x: 18, y: 120 }, { x: 0, y: 0 })).toBe(false);
+    expect(isActivityDragClick(undefined, { x: 18, y: 120 })).toBe(false);
+  });
+
+  it("keeps the layout untouched when the button is dropped on itself", () => {
+    const placements = moveActivityButton(items, {}, "sidebar:git", "left", "sidebar:git");
+    expect(placements).toEqual({});
+    expect(orderedActivityButtons(items, placements, "left").map((item) => item.key)).toEqual([
+      "builtin:explorer",
+      "sidebar:git",
+      "builtin:plugins",
+      "toolWindow:docker",
+      "toolWindow:terminal",
+    ]);
   });
 });

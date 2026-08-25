@@ -36,6 +36,33 @@ export function orderedActivityButtons<T extends ActivityButtonDescriptor>(
     });
 }
 
+export interface ActivityPointerPosition {
+  readonly x: number;
+  readonly y: number;
+}
+
+/** Folga em pixels para distinguir um clique trêmulo de um arrasto real. */
+export const ACTIVITY_DRAG_CLICK_TOLERANCE = 8;
+
+/**
+ * Chromium cancela o evento `click` assim que um gesto sobre um elemento
+ * `draggable` ultrapassa o limiar nativo de arrasto (3px). Nos botões da
+ * activity bar isso faz o clique "sumir": o drop cai no próprio slot, a
+ * reordenação é nula e o painel não abre — o usuário precisa clicar de novo.
+ * Um arrasto que termina praticamente onde começou é, na intenção do usuário,
+ * um clique.
+ */
+export function isActivityDragClick(
+  origin: ActivityPointerPosition | undefined,
+  end: ActivityPointerPosition,
+  tolerance = ACTIVITY_DRAG_CLICK_TOLERANCE,
+): boolean {
+  if (!origin) return false;
+  // Alguns ambientes reportam (0, 0) no `dragend` quando o drop acontece fora
+  // da janela; nesse caso a distância grande já descarta o gesto.
+  return Math.hypot(end.x - origin.x, end.y - origin.y) <= tolerance;
+}
+
 export function moveActivityButton(
   items: readonly ActivityButtonDescriptor[],
   placements: ActivityButtonPlacements,
@@ -46,6 +73,9 @@ export function moveActivityButton(
 ): ActivityButtonPlacements {
   const movingItem = items.find((item) => item.key === key);
   if (!movingItem?.movable) return placements;
+  // Soltar o botão sobre ele mesmo é um gesto nulo — sem isto o alvo some da
+  // lista de destino e o botão acaba jogado para o fim da barra.
+  if (targetKey === key) return placements;
 
   const targetItems = orderedActivityButtons(items, placements, side)
     .filter((item) => item.key !== key);

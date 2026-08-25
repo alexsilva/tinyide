@@ -417,6 +417,12 @@ import { EnvironmentBrowserDialog } from "./execution/EnvironmentBrowserDialog";
 import { FollowedExecutionOutput } from "./execution/FollowedExecutionOutput";
 import { appendExecutionOutput } from "./execution/execution-output-buffer";
 import {
+  createTransientRetry,
+  delay,
+  RECONNECTED_NOTICE,
+  RECONNECTING_NOTICE,
+} from "./transient-failure";
+import {
   TEXT_CONTEXT_MENU_EVENT,
   type TextContextMenuDetail,
 } from "./text-context-menu";
@@ -2628,6 +2634,7 @@ export function App() {
     if (!resumedProfileProcesses.length) return;
     let cancelled = false;
     const monitor = async (resumed: ResumedProfileProcess) => {
+      const retry = createTransientRetry();
       try {
         let process = await readHostProcess(resumed.processId);
         let cursor = process.outputEndCursor ?? process.outputStartCursor ?? 0;
@@ -2657,7 +2664,26 @@ export function App() {
           }));
           if (process.status !== "running") break;
           await new Promise((resolve) => window.setTimeout(resolve, 200));
-          const delta = await readHostProcessOutput(resumed.processId, cursor);
+          let delta;
+          try {
+            delta = await readHostProcessOutput(resumed.processId, cursor);
+            if (retry.reset()) {
+              processOutput = appendExecutionOutput(processOutput, [RECONNECTED_NOTICE]);
+            }
+          } catch (cause) {
+            // Falha de transporte não mata o monitor: o processo segue vivo no
+            // host. Retenta com backoff e avisa na saída em vez de sumir em silêncio.
+            const decision = retry.schedule(cause);
+            if (decision.attempt === 1) {
+              processOutput = appendExecutionOutput(processOutput, [RECONNECTING_NOTICE]);
+              setProfileExecutions((current) => {
+                const state = current[resumed.profileId];
+                return state ? { ...current, [resumed.profileId]: { ...state, output: processOutput } } : current;
+              });
+            }
+            await delay(decision.delayMs);
+            continue;
+          }
           cursor = delta.cursor;
           processOutput = appendExecutionOutput(
             processOutput,
@@ -2695,13 +2721,24 @@ export function App() {
     if (!resumedProcessId) return;
     let cancelled = false;
     const monitor = async () => {
+      const retry = createTransientRetry();
       try {
         let process = await readHostProcess(resumedProcessId);
         while (!cancelled) {
           setOutput([...hostProcessOutputLines(process)]);
           if (process.status !== "running") break;
           await new Promise((resolve) => window.setTimeout(resolve, 250));
-          process = await readHostProcess(resumedProcessId);
+          try {
+            process = await readHostProcess(resumedProcessId);
+            retry.reset();
+          } catch (cause) {
+            const decision = retry.schedule(cause);
+            if (decision.attempt === 1) {
+              setOutput([...hostProcessOutputLines(process), RECONNECTING_NOTICE]);
+            }
+            await delay(decision.delayMs);
+            continue;
+          }
         }
       } catch (cause) {
         if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));

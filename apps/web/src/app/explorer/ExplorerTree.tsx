@@ -366,7 +366,17 @@ export function EntryTree({
                 }}
                 onContextMenu={(event) => {
                   event.preventDefault();
-                  if (!selectedPaths.has(entry.path)) onSelect(entry, false);
+                  const needsSelection = !selectedPaths.has(entry.path);
+                  if (needsSelection) {
+                    // Abra o menu antes de atualizar a seleção: selecionar uma
+                    // linha pode rerenderizar uma árvore grande e atrasar
+                    // perceptivelmente o primeiro frame do popup. O host do menu
+                    // já resolve o item clicado sem depender da seleção nova.
+                    onContextMenu(entry, event.clientX, event.clientY);
+                    window.requestAnimationFrame(() => onSelect(entry, false));
+                    return;
+                  }
+                  if (needsSelection) onSelect(entry, false);
                   onContextMenu(entry, event.clientX, event.clientY);
                 }}
               >

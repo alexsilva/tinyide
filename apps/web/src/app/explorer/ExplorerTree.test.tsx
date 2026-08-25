@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceEntry } from "../../browser-filesystem";
 import { EntryTree } from "./ExplorerTree";
 
@@ -89,5 +89,68 @@ describe("Explorer large directory virtualization", () => {
     const container = renderTree(files(5_000), target);
     expect(container.querySelector(`[data-explorer-path="${target}"]`)).not.toBeNull();
     expect(container.querySelectorAll(".tree-entry-row").length).toBeLessThan(200);
+  });
+
+  it("opens an unselected file context menu before scheduling the selection rerender", () => {
+    const entry = files(1)[0]!;
+    const order: string[] = [];
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      order.push("scheduled-selection");
+      callback(0);
+      return 1;
+    });
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const noop = () => undefined;
+    act(() => root?.render(
+      <EntryTree
+        entries={[entry]}
+        parentPath="many"
+        expanded={new Set()}
+        showHidden
+        showIgnored
+        ignoredPaths={new Set()}
+        revealHidden
+        revealedHiddenPaths={new Set()}
+        filterVisiblePaths={undefined}
+        highlightedPath={undefined}
+        selectedPath={undefined}
+        selectedPaths={new Set()}
+        resourceDecorations={new Map()}
+        onToggle={noop}
+        onSelect={() => order.push("select")}
+        onOpen={noop}
+        onContextMenu={() => order.push("menu")}
+        onMove={noop}
+        draggingPaths={new Set()}
+        dropTargetPath={undefined}
+        onDraggingPathChange={noop}
+        onDropTargetPathChange={noop}
+        onShowHiddenDirectory={noop}
+        onShowIgnoredEntries={noop}
+        renamePath={undefined}
+        renameName=""
+        renameError={undefined}
+        onRenameNameChange={noop}
+        onRenameSubmit={noop}
+        onRenameCancel={noop}
+        creationKind={undefined}
+        creationParentPath=""
+        creationName=""
+        creationError={undefined}
+        onCreationNameChange={noop}
+        onCreationSubmit={noop}
+        onCreationCancel={noop}
+        workspaceName="perf"
+      />,
+    ));
+
+    const row = host.querySelector(`[data-explorer-path="${entry.path}"]`);
+    expect(row).not.toBeNull();
+    act(() => row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
+
+    expect(order).toEqual(["menu", "scheduled-selection", "select"]);
+    raf.mockRestore();
   });
 });

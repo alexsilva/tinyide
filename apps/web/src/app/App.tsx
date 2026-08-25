@@ -7,14 +7,12 @@ import {
   Bug,
   ArrowRight,
   ArrowUpCircle,
-  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   ChevronUp,
   CircleAlert,
   Code2,
-  Eye,
   EyeOff,
   File,
   FileWarning,
@@ -22,7 +20,6 @@ import {
   Files,
   Folder,
   FolderOpen,
-  FolderRoot,
   Hash,
   History,
   Image as ImageIcon,
@@ -30,7 +27,6 @@ import {
   MoreVertical,
   Package,
   PackageCheck,
-  Palette,
   Pause,
   Play,
   Plug,
@@ -40,14 +36,12 @@ import {
   Redo2,
   Save,
   Search,
-  Settings2,
   Square,
   StepForward,
   CornerDownRight,
   CornerUpRight,
   Terminal,
   Trash2,
-  Type,
   Undo2,
   UserRound,
   WrapText,
@@ -112,7 +106,6 @@ import type {
   TextEditorContextMenuContext,
   TextEditorContextMenuProvider,
   TextEditorDocumentChangedEvent,
-  TextEditorDocumentSnapshot,
   TextEditorDocumentSavedEvent,
   TextEditorFoldingRange,
   TextEditorCompletionProvider,
@@ -175,18 +168,6 @@ function explorerPasteLabel(entries: readonly ExplorerClipboardEntry[]): string 
   return `Colar ${entries.length} itens`;
 }
 
-export function editorToolbarDocumentSnapshot(document: OpenDocument): TextEditorDocumentSnapshot {
-  return {
-    id: document.id,
-    name: document.name,
-    ...(document.path ? { path: document.path } : {}),
-    ...(document.workspaceRoot ? { workspaceRoot: document.workspaceRoot } : {}),
-    mediaType: document.mediaType,
-    content: document.content,
-    isDirty: document.content !== document.savedContent,
-  };
-}
-
 import {
   collapseDeepestExplorerLevel,
   expandNextExplorerLevel,
@@ -217,6 +198,9 @@ import {
   nextUntitledFileName,
   TEXT_FILE_CREATION_OPTION,
 } from "./file-creation";
+import { decodeNewFileOption, newFileContextMenuItems } from "./explorer/new-file-menu";
+import { textEditorDocumentSnapshot } from "./editor/document-snapshot";
+import { createWorkbenchExecutionSnapshot } from "./execution/execution-snapshot";
 import {
   beginExplorerRedo,
   beginExplorerUndo,
@@ -324,7 +308,6 @@ import {
   requestedProjectReference,
 } from "./project-session";
 import {
-  resolvePluginBooleanSettingValue,
   resolvePluginSettingValues,
   resolvePluginStringArraySettingValue,
   updatePluginSettingValue,
@@ -442,10 +425,25 @@ import { WorkbenchActivityBar } from "./workbench/WorkbenchActivityBar";
 import { PluginManagerSidebar } from "./workbench/PluginManagerSidebar";
 import { ProblemsPanel } from "./workbench/ProblemsPanel";
 import { ConfirmationDialog } from "./workbench/ConfirmationDialog";
-import { ResourceContextMenu } from "./workbench/ResourceContextMenu";
 import { WorkbenchTitlebar } from "./workbench/WorkbenchTitlebar";
+import {
+  WorkbenchContextMenuHost,
+  type WorkbenchContextMenuHandle,
+} from "./workbench/WorkbenchContextMenuHost";
+import type { WorkbenchContextMenuTarget } from "./workbench/context-menu";
 import { CompletionPopup } from "./editor/CompletionPopup";
+import { LintSettingsDialog } from "./editor/LintSettingsDialog";
 import { useWorkbenchContributions } from "./workbench/useWorkbenchContributions";
+import { useDelayedPreview } from "./workbench/use-delayed-preview";
+import { AboutDialog } from "./workbench/AboutDialog";
+import { SettingsDialog } from "./workbench/SettingsDialog";
+import {
+  resourceContextForDocument,
+  resourceContextForEntry,
+  resourceContextForRoot,
+  resourceContextMenuContributions,
+  sortContextMenuItems,
+} from "./workbench/resource-context";
 import {
   applyWorkbenchTheme,
   resolveTheme,
@@ -457,7 +455,6 @@ import {
   clampEditorFontSize,
   defaultFontPreferences,
   resolveFont,
-  workbenchFontDefaults,
   workbenchFonts,
   workbenchFontsForTarget,
   type WorkbenchFontPreferences,
@@ -530,19 +527,7 @@ type SidebarView = PersistedSidebarView;
 
 type StoredProfiles = WorkspaceExecutionProfiles;
 
-type ContextMenuTarget =
-  | { readonly kind: "root" }
-  | { readonly kind: "entry"; readonly entry: WorkspaceEntry }
-  | { readonly kind: "document"; readonly document: OpenDocument }
-  | { readonly kind: "editor"; readonly context: TextEditorContextMenuContext }
-  | { readonly kind: "text"; readonly text: string };
-
-interface ContextMenuState {
-  readonly target: ContextMenuTarget;
-  readonly x: number;
-  readonly y: number;
-  readonly items: readonly ResourceContextMenuItem[];
-}
+type ContextMenuTarget = WorkbenchContextMenuTarget;
 
 const EXPLORER_FILTER_DEBOUNCE_MS = 40;
 const MAX_SYNTAX_HIGHLIGHT_SOURCE_LENGTH = 500_000;
@@ -571,47 +556,6 @@ interface ExplorerFilterResultState {
   readonly matchCount: number;
   readonly truncated: boolean;
   readonly error?: string;
-}
-
-function encodedNewFileCommand(option?: Pick<WorkspaceFileCreationOption, "extension" | "suggestedName">): string {
-  if (!option) return "core.resource.newFile";
-  return `core.resource.newFile:${encodeURIComponent(JSON.stringify(option))}`;
-}
-
-function decodedNewFileOption(command: string | undefined): Pick<WorkspaceFileCreationOption, "extension" | "suggestedName"> | undefined {
-  const prefix = "core.resource.newFile:";
-  if (!command?.startsWith(prefix)) return undefined;
-  try {
-    const value = JSON.parse(decodeURIComponent(command.slice(prefix.length))) as Partial<WorkspaceFileCreationOption>;
-    if (typeof value.extension !== "string" || !value.extension.startsWith(".")) return undefined;
-    return {
-      extension: value.extension as `.${string}`,
-      ...(typeof value.suggestedName === "string" ? { suggestedName: value.suggestedName } : {}),
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-function newFileContextMenuItems(options: readonly WorkspaceFileCreationOption[]): ResourceContextMenuItem[] {
-  if (!options.length) {
-    return [{
-      id: "core.newFile",
-      label: "Novo arquivo",
-      command: encodedNewFileCommand(TEXT_FILE_CREATION_OPTION),
-      group: "creation",
-      order: 0,
-      icon: "file",
-    }];
-  }
-  return fileCreationOptions(options).map((option, index) => ({
-    id: `core.newFile.${option.id}`,
-    label: `${option.label} (${option.extension})`,
-    command: encodedNewFileCommand(option),
-    group: "creation",
-    order: index,
-    icon: "file",
-  }));
 }
 
 interface ActiveWorkbenchDialog {
@@ -735,21 +679,15 @@ export function App() {
   const [rememberProjectOpenTarget, setRememberProjectOpenTarget] = useState(false);
   const [projectOpenBusy, setProjectOpenBusy] = useState(false);
   const [editorLineDecorations, setEditorLineDecorations] = useState<readonly TextEditorLineDecoration[]>([]);
-  const [selectedEditorLineDecoration, setSelectedEditorLineDecoration] = useState<TextEditorLineDecoration>();
+  const editorDiffPreview = useDelayedPreview<TextEditorLineDecoration>();
+  const selectedEditorLineDecoration = editorDiffPreview.value;
   const [hoveredEditorChangeKey, setHoveredEditorChangeKey] = useState<string>();
-  const editorDiffPeekHoverTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const cancelEditorDiffPeekHoverTimer = () => {
-    if (editorDiffPeekHoverTimerRef.current === undefined) return;
-    clearTimeout(editorDiffPeekHoverTimerRef.current);
-    editorDiffPeekHoverTimerRef.current = undefined;
-  };
+  const cancelEditorDiffPeekHoverTimer = editorDiffPreview.cancelPending;
   const openEditorDiffPeekOnHover = (decoration: TextEditorLineDecoration) => {
-    cancelEditorDiffPeekHoverTimer();
-    editorDiffPeekHoverTimerRef.current = setTimeout(() => setSelectedEditorLineDecoration(decoration), 140);
+    editorDiffPreview.openAfter(decoration, 140);
   };
   const scheduleEditorDiffPeekClose = () => {
-    cancelEditorDiffPeekHoverTimer();
-    editorDiffPeekHoverTimerRef.current = setTimeout(() => setSelectedEditorLineDecoration(undefined), 260);
+    editorDiffPreview.closeAfter(260);
   };
   const [editorDecorationRevision, setEditorDecorationRevision] = useState(0);
   const [resourceDecorations, setResourceDecorations] = useState<ReadonlyMap<string, ResourceDecoration>>(new Map());
@@ -773,22 +711,17 @@ export function App() {
   const [highlightedExplorerPath, setHighlightedExplorerPath] = useState<string>();
   const [selectedExplorerPath, setSelectedExplorerPath] = useState<string>();
   const [selectedExplorerPaths, setSelectedExplorerPaths] = useState<ReadonlySet<string>>(new Set());
-  const [contextMenu, setContextMenu] = useState<ContextMenuState>();
-  useEffect(() => {
-    if (!contextMenu) return undefined;
-    const closeContextMenuOnOutsidePointer = (event: PointerEvent) => {
-      const target = event.target;
-      if (target instanceof Element && target.closest(".resource-context-menu")) return;
-      setContextMenu(undefined);
-    };
-    document.addEventListener("pointerdown", closeContextMenuOnOutsidePointer, true);
-    return () => document.removeEventListener("pointerdown", closeContextMenuOnOutsidePointer, true);
-  }, [contextMenu]);
+  const [editorContextMenuContext, setEditorContextMenuContext] = useState<TextEditorContextMenuContext>();
+  const contextMenuRef = useRef<WorkbenchContextMenuHandle>(null);
+  const contextMenuRequestIdRef = useRef(0);
   useEffect(() => {
     const openTextContextMenu = (event: Event) => {
       const { text, x, y } = (event as CustomEvent<TextContextMenuDetail>).detail;
       if (!text) return;
-      setContextMenu({
+      setEditorContextMenuContext(undefined);
+      const token = ++contextMenuRequestIdRef.current;
+      contextMenuRef.current?.open({
+        token,
         target: { kind: "text", text },
         x,
         y,
@@ -845,20 +778,14 @@ export function App() {
   const [documentFolds, setDocumentFolds] = useState<ReadonlyMap<string, readonly DocumentFold[]>>(new Map());
   const [activeFoldRangeState, setActiveFoldRangeState] = useState<ActiveFoldRangeState>();
   const [hoveredFoldLine, setHoveredFoldLine] = useState<number | undefined>(undefined);
-  const [foldPreviewLine, setFoldPreviewLine] = useState<number | undefined>(undefined);
-  const foldPreviewCloseTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const cancelFoldPreviewClose = () => {
-    if (foldPreviewCloseTimerRef.current === undefined) return;
-    clearTimeout(foldPreviewCloseTimerRef.current);
-    foldPreviewCloseTimerRef.current = undefined;
-  };
+  const foldPreviewController = useDelayedPreview<number>();
+  const foldPreviewLine = foldPreviewController.value;
+  const cancelFoldPreviewClose = foldPreviewController.cancelPending;
   const openFoldPreview = (line: number) => {
-    cancelFoldPreviewClose();
-    setFoldPreviewLine(line);
+    foldPreviewController.open(line);
   };
   const scheduleFoldPreviewClose = () => {
-    cancelFoldPreviewClose();
-    foldPreviewCloseTimerRef.current = setTimeout(() => setFoldPreviewLine(undefined), 600);
+    foldPreviewController.closeAfter(600);
   };
   const documentFoldsRef = useRef<ReadonlyMap<string, readonly DocumentFold[]>>(documentFolds);
   documentFoldsRef.current = documentFolds;
@@ -998,54 +925,14 @@ export function App() {
   });
 
   const executionSnapshot = (): WorkbenchExecutionSnapshot => {
-    const activeDebugSessions = Object.values(debugSessionsRef.current)
-      .map((record) => record.session)
-      .sort((left, right) => left.startedAt - right.startedAt);
-    const selectedDebugSession = profilesStateRef.current.selectedId
-      ? debugSessionsRef.current[profilesStateRef.current.selectedId]?.session
-      : undefined;
-    const focusedDebugSession = selectedDebugSession ?? activeDebugSessions.at(-1);
-    return ({
-    profiles: profilesStateRef.current.profiles.map((profile) => ({
-      ...profile,
-      environment: { ...profile.environment },
-      steps: profile.steps.map((step) => ({
-        ...step,
-        ...(step.arguments ? { arguments: [...step.arguments] } : {}),
-        parameters: [...step.parameters],
-        ...(step.target ? { target: { ...step.target } } : {}),
-        ...(step.environmentVariables
-          ? { environmentVariables: { ...step.environmentVariables } }
-          : {}),
-      })),
-    })),
-    ...(profilesStateRef.current.selectedId
-      ? { selectedProfileId: profilesStateRef.current.selectedId }
-      : {}),
-    environments: environmentsRef.current.map((environment) => ({ ...environment })),
-    ...(selectedEnvironmentIdRef.current
-      ? { selectedEnvironmentId: selectedEnvironmentIdRef.current }
-      : {}),
-    executions: Object.values(profileExecutionsRef.current).map((execution) => ({
-      ...execution,
-      ...(execution.profile ? { profile: {
-        ...execution.profile,
-        environment: { ...execution.profile.environment },
-        steps: execution.profile.steps.map((step) => ({
-          ...step,
-          ...(step.arguments ? { arguments: [...step.arguments] } : {}),
-          parameters: [...step.parameters],
-          ...(step.target ? { target: { ...step.target } } : {}),
-          ...(step.environmentVariables
-            ? { environmentVariables: { ...step.environmentVariables } }
-            : {}),
-        })),
-      } } : {}),
-      output: [...execution.output],
-      ...(execution.data ? { data: { ...execution.data } } : {}),
-    })),
-    ...(activeDebugSessions.length ? { debugSessions: activeDebugSessions } : {}),
-    ...(focusedDebugSession ? { debugSession: focusedDebugSession } : {}),
+    return createWorkbenchExecutionSnapshot({
+      profiles: profilesStateRef.current.profiles,
+      ...(profilesStateRef.current.selectedId ? { selectedProfileId: profilesStateRef.current.selectedId } : {}),
+      environments: environmentsRef.current,
+      ...(selectedEnvironmentIdRef.current ? { selectedEnvironmentId: selectedEnvironmentIdRef.current } : {}),
+      selectedEnvironmentIds,
+      executions: profileExecutionsRef.current,
+      debugSessions: debugSessionsRef.current,
     });
   };
   const workbenchStateListenersRef = useRef(new Set<(snapshot: WorkbenchStateSnapshot) => void>());
@@ -1105,7 +992,7 @@ export function App() {
     const environmentExecutable = languageEnvironmentExecutable(activeLanguageProvider);
     const context: TextEditorContextMenuContext = {
       document: {
-        ...editorToolbarDocumentSnapshot(activeDocument),
+        ...textEditorDocumentSnapshot(activeDocument),
         content,
       },
       selectionStart,
@@ -1182,7 +1069,7 @@ export function App() {
     let cancelled = false;
     const source = activeEditorContent;
     const lineCount = source.split("\n").length;
-    const document = editorToolbarDocumentSnapshot(activeDocument);
+    const document = textEditorDocumentSnapshot(activeDocument);
 
     void Promise.resolve(provider.provideFoldingRanges({ document, source }))
       .then((ranges: readonly TextEditorFoldingRange[]) => {
@@ -1232,7 +1119,7 @@ export function App() {
       setEditorToolbarItems([]);
       return;
     }
-    const snapshot = editorToolbarDocumentSnapshot(activeDocument);
+    const snapshot = textEditorDocumentSnapshot(activeDocument);
     const providers = platform.capabilities.getAll<WorkbenchEditorToolbarProvider>("workbench.editorToolbar");
     void Promise.all(providers.map((provider) => provider.provideItems(snapshot))).then((items) => {
       if (cancelled) return;
@@ -1495,8 +1382,8 @@ export function App() {
    * palavra sob o ponteiro) fica realçado para deixar claro sobre o que as ações vão agir.
    */
   const editorContextTargetHighlight = useMemo<{ start: number; end: number } | undefined>(() => {
-    if (contextMenu?.target.kind !== "editor") return undefined;
-    const { context } = contextMenu.target;
+    const context = editorContextMenuContext;
+    if (!context) return undefined;
     if (context.document.id !== activeDocument?.id) return undefined;
     const range = editorContextMenuTargetRange(activeEditorContent, context.selectionStart, context.selectionEnd);
     if (!range) return undefined;
@@ -1506,7 +1393,7 @@ export function App() {
       start: editorProjectedOffsetFromSourceOffset(activeEditorContent, activeFoldProjection, range.start),
       end: editorProjectedOffsetFromSourceOffset(activeEditorContent, activeFoldProjection, range.end),
     };
-  }, [contextMenu, activeDocument?.id, activeEditorContent, activeFoldProjection]);
+  }, [editorContextMenuContext, activeDocument?.id, activeEditorContent, activeFoldProjection]);
   useLayoutEffect(() => {
     const caret = foldedEditorCaretRef.current;
     const selection = foldedEditorSelectionRef.current;
@@ -1811,7 +1698,7 @@ export function App() {
     else nextFolds.delete(documentId);
     documentFoldsRef.current = nextFolds;
     setDocumentFolds(nextFolds);
-    setFoldPreviewLine(undefined);
+    foldPreviewController.close();
     return remainingFolds.length ? collapseFolds(activeEditorContent, remainingFolds) : undefined;
   };
   const toggleFold = (line: number) => {
@@ -1824,7 +1711,7 @@ export function App() {
       if (!nextFolds.get(documentId)?.length) nextFolds.delete(documentId);
       documentFoldsRef.current = nextFolds;
       setDocumentFolds(nextFolds);
-      setFoldPreviewLine(undefined);
+      foldPreviewController.close();
       return;
     }
     const fileLine = fileLineOf(line);
@@ -2232,7 +2119,7 @@ export function App() {
   }, [activeDocument?.id, activeDocument?.kind, activeDocument?.path, activeDocument?.content, activeDocument?.workspaceRoot, activeResourceEditorProvider, workspaceRoot, editorDecorationRevision, platformSnapshot.plugins]);
 
   useEffect(() => {
-    setSelectedEditorLineDecoration(undefined);
+    editorDiffPreview.close();
   }, [activeDocument?.id]);
 
   useEffect(() => {
@@ -2934,7 +2821,7 @@ export function App() {
     setDiagnostics([]);
     setHoveredDiagnosticLine(undefined);
     setEditorLineDecorations([]);
-    setSelectedEditorLineDecoration(undefined);
+    editorDiffPreview.close();
     setResourceDecorations(new Map());
     setOutput([]);
     setExpanded(new Set());
@@ -3436,32 +3323,46 @@ export function App() {
     return () => { cancelled = true; };
   }, [activeDebugPath, activeDebugLine, activeFoldProjection, debugSession?.status, editorLayoutMetrics]);
 
-  const resourceContext = (entry: WorkspaceEntry): ResourceContext => {
-    const document = entry.kind === "file"
-      ? documents.find((candidate) => candidate.path === entry.path)
-      : undefined;
-    return {
-      kind: entry.kind,
-      name: entry.name,
-      path: entry.path,
-      ...(document ? { documentId: document.id } : {}),
-      ...(workspaceName !== "Sem workspace" ? { workspaceName } : {}),
-      ...(workspaceRoot ? { workspaceRoot } : {}),
-      ...(document?.kind === "text" ? { isDirty: document.content !== document.savedContent } : {}),
-    };
-  };
+  const openProgressiveResourceContextMenu = (
+    requestId: number,
+    target: ContextMenuTarget,
+    x: number,
+    y: number,
+    baseItems: readonly ResourceContextMenuItem[],
+    resource: ResourceContext,
+    groupOrder: Readonly<Record<string, number>>,
+  ) => {
+    if (contextMenuRequestIdRef.current !== requestId) return;
+    setEditorContextMenuContext(undefined);
+    contextMenuRef.current?.open({
+      token: requestId,
+      target,
+      x,
+      y,
+      items: sortContextMenuItems(baseItems, groupOrder),
+    });
 
-  const rootResourceContext = (): ResourceContext => ({
-    kind: "directory",
-    name: workspaceName,
-    path: "",
-    ...(workspaceName !== "Sem workspace" ? { workspaceName } : {}),
-    ...(workspaceRoot ? { workspaceRoot } : {}),
-  });
+    // Não faça a abertura do menu depender de I/O dos plugins. O próximo
+    // macrotask permite ao React materializar primeiro as ações nativas.
+    window.setTimeout(() => {
+      if (contextMenuRequestIdRef.current !== requestId) return;
+      const providers = platform.capabilities.getAll<ResourceContextMenuProvider>("resource.contextMenu");
+      if (!providers.length) return;
+      void resourceContextMenuContributions(providers, resource).then((contributed) => {
+        if (contextMenuRequestIdRef.current !== requestId || !contributed.length) return;
+        contextMenuRef.current?.update(
+          requestId,
+          sortContextMenuItems([...baseItems, ...contributed], groupOrder),
+        );
+      });
+    }, 0);
+  };
 
   const openRootMenu = async (x: number, y: number) => {
     if (!workspaceHandle) return;
+    const requestId = ++contextMenuRequestIdRef.current;
     const fileCreationOptions = await resolveWorkspaceFileCreationOptions("");
+    if (contextMenuRequestIdRef.current !== requestId) return;
     const baseItems: ResourceContextMenuItem[] = [
       ...newFileContextMenuItems(fileCreationOptions),
       {
@@ -3498,25 +3399,22 @@ export function App() {
         icon: "folder" as const,
       }] : []),
     ];
-    const resource = rootResourceContext();
-    const providers = platform.capabilities.getAll<ResourceContextMenuProvider>("resource.contextMenu");
-    const contributed = (await Promise.all(providers.map((provider) => provider.provideItems(resource)))).flat();
-    const items = [...baseItems, ...contributed]
-      .filter((item) => item.enabled !== false)
-      .sort((left, right) => (left.group === "creation" ? 0 : 100)
-        - (right.group === "creation" ? 0 : 100)
-        || (left.order ?? 0) - (right.order ?? 0));
-    setContextMenu({ target: { kind: "root" }, x, y, items });
+    const resource = resourceContextForRoot({ workspaceName, ...(workspaceRoot ? { workspaceRoot } : {}) });
+    openProgressiveResourceContextMenu(requestId, { kind: "root" }, x, y, baseItems, resource, { creation: 0 });
   };
 
   const openResourceMenu = async (entry: WorkspaceEntry, x: number, y: number) => {
-    const selectedEntries = topLevelWorkspacePaths(
-      selectedExplorerPaths.has(entry.path) ? selectedExplorerPaths : [entry.path],
-    ).map((path) => findWorkspaceEntry(entries, path)).filter((candidate): candidate is WorkspaceEntry => Boolean(candidate));
+    const requestId = ++contextMenuRequestIdRef.current;
+    const selectedEntries = selectedExplorerPaths.has(entry.path) && selectedExplorerPaths.size > 1
+      ? topLevelWorkspacePaths(selectedExplorerPaths)
+          .map((path) => findWorkspaceEntry(entries, path))
+          .filter((candidate): candidate is WorkspaceEntry => Boolean(candidate))
+      : [entry];
     const isBulkSelection = selectedEntries.length > 1;
     const fileCreationOptions = entry.kind === "directory"
       ? await resolveWorkspaceFileCreationOptions(entry.path)
       : [];
+    if (contextMenuRequestIdRef.current !== requestId) return;
     const baseItems: ResourceContextMenuItem[] = [
       {
         id: "core.open",
@@ -3599,36 +3497,20 @@ export function App() {
         icon: "close" as const,
       },
     ];
-    const resource = resourceContext(entry);
-    const providers = platform.capabilities.getAll<ResourceContextMenuProvider>("resource.contextMenu");
-    const contributed = (await Promise.all(providers.map((provider) => provider.provideItems(resource)))).flat();
-    const groupOrder = new Map([
-      ["navigation", 0],
-      ["creation", 50],
-      ["file", 100],
-      ["execution", 100],
-      ["clipboard", 200],
-      ["git", 250],
-      ["destructive", 300],
-    ]);
-    const items = [...baseItems, ...contributed]
-      .filter((item) => item.enabled !== false)
-      .sort((left, right) => (groupOrder.get(left.group ?? "") ?? 1000) - (groupOrder.get(right.group ?? "") ?? 1000)
-        || (left.order ?? 0) - (right.order ?? 0));
-    setContextMenu({ target: { kind: "entry", entry }, x, y, items });
+    const resource = resourceContextForEntry(entry, documents, { workspaceName, ...(workspaceRoot ? { workspaceRoot } : {}) });
+    openProgressiveResourceContextMenu(requestId, { kind: "entry", entry }, x, y, baseItems, resource, {
+      navigation: 0,
+      creation: 50,
+      file: 100,
+      execution: 100,
+      clipboard: 200,
+      git: 250,
+      destructive: 300,
+    });
   };
 
-  const documentResourceContext = (document: OpenDocument): ResourceContext => ({
-    kind: "file",
-    name: document.name,
-    path: document.path ?? document.name,
-    documentId: document.id,
-    ...(workspaceName !== "Sem workspace" ? { workspaceName } : {}),
-    ...(workspaceRoot ? { workspaceRoot } : {}),
-    ...(document.kind === "text" ? { isDirty: document.content !== document.savedContent } : {}),
-  });
-
   const openDocumentMenu = async (document: OpenDocument, x: number, y: number) => {
+    const requestId = ++contextMenuRequestIdRef.current;
     const documentIndex = documents.findIndex((candidate) => candidate.id === document.id);
     const baseItems: ResourceContextMenuItem[] = [
       {
@@ -3685,22 +3567,15 @@ export function App() {
         enabled: Boolean(document.path),
       },
     ];
-    const resource = documentResourceContext(document);
-    const providers = platform.capabilities.getAll<ResourceContextMenuProvider>("resource.contextMenu");
-    const contributed = (await Promise.all(providers.map((provider) => provider.provideItems(resource)))).flat();
-    const groupOrder = new Map([
-      ["navigation", 0],
-      ["file", 50],
-      ["execution", 100],
-      ["close", 150],
-      ["clipboard", 200],
-      ["git", 250],
-    ]);
-    const items = [...baseItems, ...contributed]
-      .filter((item) => item.enabled !== false)
-      .sort((left, right) => (groupOrder.get(left.group ?? "") ?? 1000) - (groupOrder.get(right.group ?? "") ?? 1000)
-        || (left.order ?? 0) - (right.order ?? 0));
-    setContextMenu({ target: { kind: "document", document }, x, y, items });
+    const resource = resourceContextForDocument(document, { workspaceName, ...(workspaceRoot ? { workspaceRoot } : {}) });
+    openProgressiveResourceContextMenu(requestId, { kind: "document", document }, x, y, baseItems, resource, {
+      navigation: 0,
+      file: 50,
+      execution: 100,
+      close: 150,
+      clipboard: 200,
+      git: 250,
+    });
   };
 
   const openEditorMenu = async (
@@ -3710,6 +3585,7 @@ export function App() {
     y: number,
     preparedSelection?: { selectionStart: number; selectionEnd: number },
   ) => {
+    const requestId = ++contextMenuRequestIdRef.current;
     const selectionStart = preparedSelection?.selectionStart ?? textarea.selectionStart;
     const selectionEnd = preparedSelection?.selectionEnd ?? textarea.selectionEnd;
     const beforeCursor = textarea.value.slice(0, selectionStart);
@@ -3717,7 +3593,7 @@ export function App() {
     const environmentExecutable = languageEnvironmentExecutable(languageProviderFor(document));
     const context: TextEditorContextMenuContext = {
       document: {
-        ...editorToolbarDocumentSnapshot(document),
+        ...textEditorDocumentSnapshot(document),
         content: textarea.value,
       },
       selectionStart,
@@ -3746,7 +3622,16 @@ export function App() {
     const items = [...copyItems, ...contributed]
       .filter((item) => item.enabled !== false)
       .sort((left, right) => (left.order ?? 0) - (right.order ?? 0));
-    if (items.length) setContextMenu({ target: { kind: "editor", context }, x, y, items });
+    if (items.length && contextMenuRequestIdRef.current === requestId) {
+      setEditorContextMenuContext(context);
+      contextMenuRef.current?.open({
+        token: requestId,
+        target: { kind: "editor", context },
+        x,
+        y,
+        items,
+      });
+    }
   };
 
   const captureEditorLocation = (
@@ -3863,7 +3748,7 @@ export function App() {
       )?.executable;
       const context = {
         document: {
-          ...editorToolbarDocumentSnapshot(document),
+          ...textEditorDocumentSnapshot(document),
           content: textarea.value,
         },
         position: textPositionAtOffset(textarea.value, offset),
@@ -4037,7 +3922,7 @@ export function App() {
     void buildCompletionSession(textarea, {
       providers,
       documentSnapshot: {
-        ...editorToolbarDocumentSnapshot(document),
+        ...textEditorDocumentSnapshot(document),
         content: textarea.value,
       },
       ...(environmentExecutable ? { environmentExecutable } : {}),
@@ -5697,7 +5582,9 @@ export function App() {
   };
 
   const executeContextMenuItem = async (item: ResourceContextMenuItem, target: ContextMenuTarget) => {
-    setContextMenu(undefined);
+    contextMenuRequestIdRef.current += 1;
+    setEditorContextMenuContext(undefined);
+    contextMenuRef.current?.close();
     if (target.kind === "text") {
       if (item.command !== "core.text.copy") throw new Error(`A ação '${item.id}' não possui executor.`);
       if (!navigator.clipboard?.writeText) throw new Error("A área de transferência não está disponível.");
@@ -5718,7 +5605,7 @@ export function App() {
     }
     if (target.kind === "root") {
       if (item.command?.startsWith("core.resource.newFile")) {
-        await startExplorerCreation("file", "", decodedNewFileOption(item.command));
+        await startExplorerCreation("file", "", decodeNewFileOption(item.command));
         return;
       }
       if (item.command === "core.resource.newDirectory") {
@@ -5739,7 +5626,7 @@ export function App() {
         return;
       }
       if (!item.command) throw new Error(`A ação '${item.id}' não possui executor.`);
-      await platform.commands.execute(item.command, rootResourceContext());
+      await platform.commands.execute(item.command, resourceContextForRoot({ workspaceName, ...(workspaceRoot ? { workspaceRoot } : {}) }));
       return;
     }
     if (target.kind === "entry") {
@@ -5799,7 +5686,7 @@ export function App() {
         return;
       }
       if (item.command?.startsWith("core.resource.newFile")) {
-        await startExplorerCreation("file", entry.path, decodedNewFileOption(item.command));
+        await startExplorerCreation("file", entry.path, decodeNewFileOption(item.command));
         return;
       }
       if (item.command === "core.resource.newDirectory") {
@@ -5819,7 +5706,7 @@ export function App() {
         return;
       }
       if (!item.command) throw new Error(`A ação '${item.id}' não possui executor.`);
-      await platform.commands.execute(item.command, resourceContext(entry));
+      await platform.commands.execute(item.command, resourceContextForEntry(entry, documents, { workspaceName, ...(workspaceRoot ? { workspaceRoot } : {}) }));
       return;
     }
 
@@ -5859,7 +5746,7 @@ export function App() {
       return;
     }
     if (!item.command) throw new Error(`A ação '${item.id}' não possui executor.`);
-    await platform.commands.execute(item.command, documentResourceContext(document));
+    await platform.commands.execute(item.command, resourceContextForDocument(document, { workspaceName, ...(workspaceRoot ? { workspaceRoot } : {}) }));
   };
 
   const stopProfileExecution = async (profileId: string) => {
@@ -7485,7 +7372,7 @@ export function App() {
                           disabled={item.enabled === false}
                           onClick={() => invoke(() => {
                             if (!activeDocument) return Promise.resolve();
-                            return platform.commands.execute(item.command, editorToolbarDocumentSnapshot(activeDocument));
+                            return platform.commands.execute(item.command, textEditorDocumentSnapshot(activeDocument));
                           })}
                         >{icon}</button>
                       );
@@ -7757,7 +7644,7 @@ export function App() {
                         provider={activeSyntaxHighlighter}
                         // 30 = altura do cabeçalho do peek (features.css); centraliza o cabeçalho na linha da régua
                         top={editorLineTop(editorDiffPeekAnchorLine(selectedEditorLineDecoration)) - activeDocument.scrollTop + (editorLayoutMetrics.lineHeight - 30) / 2}
-                        onClose={() => { cancelEditorDiffPeekHoverTimer(); setSelectedEditorLineDecoration(undefined); }}
+                        onClose={editorDiffPreview.close}
                         onMouseEnter={cancelEditorDiffPeekHoverTimer}
                         onMouseLeave={scheduleEditorDiffPeekClose}
                         onAction={(action) => {
@@ -7774,7 +7661,7 @@ export function App() {
                               decoration: selectedEditorLineDecoration,
                               action,
                             });
-                            if (action.closeOnRun) setSelectedEditorLineDecoration(undefined);
+                            if (action.closeOnRun) editorDiffPreview.close();
                           });
                         }}
                       />
@@ -8255,27 +8142,11 @@ export function App() {
           onChange={updateProfiles}
         />
 
-        <Dialog.Root open={aboutOpen} onOpenChange={setAboutOpen}>
-          <Dialog.Portal>
-            <Dialog.Overlay className="dialog-overlay" />
-            <Dialog.Content className="dialog-content dialog-content--small">
-              <div className="dialog-heading">
-                <div>
-                  <Dialog.Title>Sobre</Dialog.Title>
-                  <Dialog.Description>Editor web extensível orientado a plugins.</Dialog.Description>
-                </div>
-                <Dialog.Close asChild>
-                  <button className="icon-button" type="button" aria-label="Fechar"><X size={16} /></button>
-                </Dialog.Close>
-              </div>
-              <div className="about-content">
-                <img className="about-logo" src="/icon.png" alt="Ícone do tinyIde" />
-                <span>Versão {import.meta.env.VITE_TINYIDE_APP_VERSION}</span>
-                <p>O núcleo permanece um editor de texto básico. Recursos de IDE são fornecidos por plugins independentes.</p>
-              </div>
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
+        <AboutDialog
+          open={aboutOpen}
+          onOpenChange={setAboutOpen}
+          version={import.meta.env.VITE_TINYIDE_APP_VERSION}
+        />
 
         <Dialog.Root open={Boolean(workbenchDialog)} onOpenChange={(open) => {
           if (!open) {
@@ -8309,553 +8180,70 @@ export function App() {
           </Dialog.Portal>
         </Dialog.Root>
 
-        <Dialog.Root
+        <SettingsDialog
           open={settingsOpen}
+          sectionId={settingsSectionId}
+          workspaceName={workspaceName}
+          {...(workspaceRoot ? { workspaceRoot } : {})}
+          settingsProviders={settingsProviders}
+          {...(activePluginSettingsProvider ? { activePluginSettingsProvider } : {})}
+          lineNumbers={userSettings.editor?.lineNumbers !== false}
+          availableThemes={availableThemes}
+          {...(activeTheme ? { activeThemeId: activeTheme.id } : {})}
+          availableIconPacks={availableIconPacks}
+          {...(activeIconPack ? { activeIconPackId: activeIconPack.id } : {})}
+          availableEditorFonts={availableEditorFonts}
+          {...(activeEditorFont ? { activeEditorFontId: activeEditorFont.id } : {})}
+          availableInterfaceFonts={availableInterfaceFonts}
+          {...(activeInterfaceFont ? { activeInterfaceFontId: activeInterfaceFont.id } : {})}
+          fontPreferences={fontPreferences}
+          defaultWatcherIgnoredDirectories={desktopWatcherDefaultIgnoredDirectories()}
+          watcherDraftDirectories={watcherDraftDirectories}
+          watcherIgnoredDraft={watcherIgnoredDraft}
+          pluginSettingsDraft={pluginSettingsDraft}
+          pluginStringArrayDrafts={pluginStringArrayDrafts}
           onOpenChange={(open) => {
             if (!open) setWatcherDraftDirectories(workspaceSettings.watcher?.extraIgnoredDirectories ?? []);
             setSettingsOpen(open);
           }}
-        >
-          <Dialog.Portal>
-            <Dialog.Overlay className="dialog-overlay" />
-            <Dialog.Content className="settings-dialog">
-              <div className="dialog-heading settings-dialog__heading">
-                <div className="settings-dialog__identity">
-                  <span className="settings-dialog__icon"><Settings2 size={20} /></span>
-                  <div>
-                    <span className="eyebrow">CONFIGURAÇÕES</span>
-                    <Dialog.Title>Configurações</Dialog.Title>
-                    <Dialog.Description>
-                      Preferências e comportamento da IDE.
-                    </Dialog.Description>
-                  </div>
-                </div>
-                <div className="settings-dialog__heading-actions">
-                  <span className="settings-workspace-badge" title={workspaceRoot ?? "Nenhum workspace aberto"}>
-                    <FolderRoot size={13} /> {workspaceName}
-                  </span>
-                  <Dialog.Close asChild><button className="icon-button" type="button" aria-label="Fechar"><X size={16} /></button></Dialog.Close>
-                </div>
-              </div>
-              <div className="settings-layout">
-                <nav className="settings-navigation" aria-label="Seções de configuração">
-                  <span className="settings-navigation__label">Geral</span>
-                  <button
-                    className={settingsSectionId === "editor" ? "is-active" : ""}
-                    type="button"
-                    onClick={() => selectSettingsSection("editor")}
-                  >
-                    <Code2 size={15} />
-                    <span>Editor</span>
-                  </button>
-                  <button
-                    className={settingsSectionId === "appearance" ? "is-active" : ""}
-                    type="button"
-                    onClick={() => selectSettingsSection("appearance")}
-                  >
-                    <Palette size={15} />
-                    <span>Aparência</span>
-                  </button>
-                  <button
-                    className={settingsSectionId === "fonts" ? "is-active" : ""}
-                    type="button"
-                    onClick={() => selectSettingsSection("fonts")}
-                  >
-                    <Type size={15} />
-                    <span>Fontes</span>
-                  </button>
-                  <button
-                    className={settingsSectionId === "watcher" ? "is-active" : ""}
-                    type="button"
-                    onClick={() => selectSettingsSection("watcher")}
-                  >
-                    <WorkbenchIcon icon="preview" size={15} />
-                    <span>Vigia de arquivos</span>
-                  </button>
-                  {settingsProviders.length ? <span className="settings-navigation__label">Plugins</span> : null}
-                  {settingsProviders.map((provider) => (
-                    <button
-                      className={settingsSectionId === provider.pluginId ? "is-active" : ""}
-                      key={provider.pluginId}
-                      type="button"
-                      onClick={() => selectSettingsSection(provider.pluginId)}
-                    >
-                      <WorkbenchIcon icon="plugins" size={15} />
-                      <span>{provider.title}</span>
-                    </button>
-                  ))}
-                </nav>
-                <section className="settings-content">
-                  {settingsSectionId === "editor" ? (
-                    <>
-                      <div className="settings-section-heading">
-                        <span className="settings-section-heading__icon"><Code2 size={18} /></span>
-                        <div>
-                          <span className="eyebrow">NATIVO</span>
-                          <h3>Editor</h3>
-                          <p>Comportamento e apresentação do editor de texto.</p>
-                        </div>
-                      </div>
-                      <div className="plugin-setting-list">
-                        <label className="plugin-setting">
-                          <span className="plugin-setting__copy">
-                            <strong>Régua numérica</strong>
-                            <small>Exibe os números das linhas no editor de texto.</small>
-                          </span>
-                          <span className="settings-switch">
-                            <input
-                              type="checkbox"
-                              checked={userSettings.editor?.lineNumbers !== false}
-                              onChange={(event) => invoke(() => applyEditorLineNumbers(event.target.checked))}
-                            />
-                            <i aria-hidden="true" />
-                          </span>
-                        </label>
-                      </div>
-                    </>
-                  ) : settingsSectionId === "appearance" ? (
-                    <>
-                      <div className="settings-section-heading">
-                        <span className="settings-section-heading__icon"><Palette size={18} /></span>
-                        <div>
-                          <span className="eyebrow">NATIVO</span>
-                          <h3>Aparência</h3>
-                          <p>Escolha o tema visual da aplicação. A preferência vale para todos os projetos.</p>
-                        </div>
-                      </div>
-                      <div className="theme-setting-grid" role="radiogroup" aria-label="Tema da aplicação">
-                        {availableThemes.map((theme) => {
-                          const selected = activeTheme?.id === theme.id;
-                          return (
-                            <button
-                              className={`theme-setting-card${selected ? " is-active" : ""}`}
-                              type="button"
-                              role="radio"
-                              aria-checked={selected}
-                              key={theme.id}
-                              onClick={() => selectTheme(theme.id)}
-                            >
-                              <span
-                                className="theme-setting-card__preview"
-                                aria-hidden="true"
-                                style={{
-                                  background: theme.tokens.background,
-                                  borderColor: theme.tokens.borderStrong,
-                                  color: theme.tokens.text,
-                                }}
-                              >
-                                <i style={{ background: theme.tokens.surfaceActivityBar }} />
-                                <b style={{ background: theme.tokens.surfaceSidebar }} />
-                                <em style={{ background: theme.tokens.surfaceEditor }} />
-                                <strong style={{ background: theme.tokens.accent }} />
-                              </span>
-                              <span className="theme-setting-card__copy">
-                                <strong>{theme.label}</strong>
-                                <small>{theme.description}</small>
-                              </span>
-                              <span className="theme-setting-card__check" aria-hidden="true">
-                                {selected ? <Check size={14} /> : null}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    
-                      <div className="settings-section-heading settings-section-heading--nested">
-                        <div>
-                          <h4>Pacote de ícones</h4>
-                          <p>Ícones semânticos da barra de atividades e painéis. Plugins podem oferecer packs adicionais.</p>
-                        </div>
-                      </div>
-                      <div className="theme-setting-grid" role="radiogroup" aria-label="Pacote de ícones">
-                        {availableIconPacks.map((pack) => {
-                          const selected = activeIconPack?.id === pack.id;
-                          return (
-                            <button
-                              className={`theme-setting-card${selected ? " is-active" : ""}`}
-                              type="button"
-                              role="radio"
-                              aria-checked={selected}
-                              key={pack.id}
-                              onClick={() => selectIconPack(pack.id)}
-                            >
-                              <span className="icon-pack-preview" aria-hidden="true">
-                                {(pack.id === "tinyide.brand"
-                                  ? pack.icons.filter((icon) => ["git", "docker", "nodejs", "python", "terminal", "files"].includes(icon.id))
-                                  : pack.icons
-                                ).slice(0, 6).map((icon) => (
-                                  <span
-                                    key={icon.id}
-                                    className="workbench-icon"
-                                    data-workbench-icon={icon.id}
-                                    dangerouslySetInnerHTML={{ __html: icon.svg }}
-                                  />
-                                ))}
-                              </span>
-                              <span className="theme-setting-card__copy">
-                                <strong>{pack.label}</strong>
-                                <small>{pack.description ?? `${pack.icons.length} ícones`}</small>
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-</>
-                  ) : settingsSectionId === "fonts" ? (
-                    <>
-                      <div className="settings-section-heading">
-                        <span className="settings-section-heading__icon"><Type size={18} /></span>
-                        <div>
-                          <span className="eyebrow">NATIVO</span>
-                          <h3>Fontes</h3>
-                          <p>Tipografia do editor de código e da interface. A preferência vale para todos os projetos.</p>
-                        </div>
-                      </div>
-                      <div className="plugin-setting-list">
-                        <div className="plugin-setting-note">
-                          <strong>Editor</strong>
-                          <small>Fonte monoespaçada usada no código, na régua e nas camadas do editor.</small>
-                        </div>
-                        <div className="font-setting-grid" role="radiogroup" aria-label="Fonte do editor">
-                          {availableEditorFonts.map((font) => {
-                            const selected = activeEditorFont?.id === font.id;
-                            return (
-                              <button
-                                className={`font-setting-card${selected ? " is-active" : ""}`}
-                                type="button"
-                                role="radio"
-                                aria-checked={selected}
-                                key={font.id}
-                                onClick={() => updateFontPreferences({ editorFontId: font.id })}
-                              >
-                                <span
-                                  className="font-setting-card__preview"
-                                  aria-hidden="true"
-                                  style={{ fontFamily: font.family }}
-                                >
-                                  {"if (ready) launch(42);"}
-                                </span>
-                                <span className="font-setting-card__copy">
-                                  <strong>{font.label}</strong>
-                                  {font.description ? <small>{font.description}</small> : null}
-                                </span>
-                                <span className="font-setting-card__check" aria-hidden="true">
-                                  {selected ? <Check size={14} /> : null}
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                        <label className="plugin-setting">
-                          <span className="plugin-setting__copy">
-                            <strong>Tamanho da fonte do editor</strong>
-                            <small>
-                              Entre {workbenchFontDefaults.minEditorFontSize} e {workbenchFontDefaults.maxEditorFontSize} pixels.
-                            </small>
-                          </span>
-                          <input
-                            className="plugin-setting__control plugin-setting__control--number"
-                            type="number"
-                            min={workbenchFontDefaults.minEditorFontSize}
-                            max={workbenchFontDefaults.maxEditorFontSize}
-                            value={fontPreferences.editorFontSize}
-                            onChange={(event) => updateFontPreferences({ editorFontSize: Number(event.target.value) })}
-                          />
-                        </label>
-                        <div className="plugin-setting-note">
-                          <strong>Interface</strong>
-                          <small>Fonte usada em menus, painéis e demais superfícies da IDE.</small>
-                        </div>
-                        <div className="font-setting-grid" role="radiogroup" aria-label="Fonte da interface">
-                          {availableInterfaceFonts.map((font) => {
-                            const selected = activeInterfaceFont?.id === font.id;
-                            return (
-                              <button
-                                className={`font-setting-card${selected ? " is-active" : ""}`}
-                                type="button"
-                                role="radio"
-                                aria-checked={selected}
-                                key={font.id}
-                                onClick={() => updateFontPreferences({ interfaceFontId: font.id })}
-                              >
-                                <span
-                                  className="font-setting-card__preview"
-                                  aria-hidden="true"
-                                  style={{ fontFamily: font.family }}
-                                >
-                                  Explorar, Executar e Depurar
-                                </span>
-                                <span className="font-setting-card__copy">
-                                  <strong>{font.label}</strong>
-                                  {font.description ? <small>{font.description}</small> : null}
-                                </span>
-                                <span className="font-setting-card__check" aria-hidden="true">
-                                  {selected ? <Check size={14} /> : null}
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </>
-                  ) : settingsSectionId === "watcher" ? (
-                    <>
-                      <div className="settings-section-heading">
-                        <span className="settings-section-heading__icon"><Eye size={18} /></span>
-                        <div>
-                          <span className="eyebrow">NATIVO</span>
-                          <h3>Vigia de arquivos</h3>
-                          <p>Diretórios ignorados ao observar mudanças no workspace no app desktop.</p>
-                        </div>
-                      </div>
-                      <div className="plugin-setting-list">
-                        <div className="plugin-setting-note">
-                          <strong>Padrões</strong>
-                          <small>Sempre ignorados, para evitar travamentos com diretórios pesados.</small>
-                        </div>
-                        <div className="watcher-ignored-chips">
-                          {desktopWatcherDefaultIgnoredDirectories().map((name) => (
-                            <span className="watcher-ignored-chip watcher-ignored-chip--default" key={name}>{name}</span>
-                          ))}
-                        </div>
-                        <div className="plugin-setting-note">
-                          <strong>Personalizados</strong>
-                          <small>Adicione outros nomes de diretório para ignorar neste projeto. Use * como coringa, ex.: .* para ignorar tudo que começa com ponto.</small>
-                        </div>
-                        {watcherDraftDirectories.length ? (
-                          <div className="watcher-ignored-chips">
-                            {watcherDraftDirectories.map((name) => (
-                              <span className="watcher-ignored-chip" key={name}>
-                                {name}
-                                <button
-                                  type="button"
-                                  aria-label={`Remover ${name}`}
-                                  disabled={!workspaceRoot}
-                                  onClick={() => removeWatcherDraftDirectory(name)}
-                                >
-                                  <X size={12} />
-                                </button>
-                              </span>
-                            ))}
-                          </div>
-                        ) : null}
-                        <div className="watcher-ignored-add">
-                          <input
-                            type="text"
-                            placeholder="ex.: .cache-local ou .*"
-                            value={watcherIgnoredDraft}
-                            disabled={!workspaceRoot}
-                            onChange={(event) => setWatcherIgnoredDraft(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") {
-                                event.preventDefault();
-                                invoke(() => addWatcherIgnoredDirectory());
-                              }
-                            }}
-                          />
-                          <button
-                            className="button"
-                            type="button"
-                            disabled={!workspaceRoot || !watcherIgnoredDraft.trim()}
-                            onClick={() => invoke(() => addWatcherIgnoredDirectory())}
-                          >
-                            <WorkbenchIcon icon="plus" size={14} /> Adicionar
-                          </button>
-                        </div>
-                      </div>
-                    </>
-                  ) : activePluginSettingsProvider ? (
-                    <>
-                      <div className="settings-section-heading">
-                        <span className="settings-section-heading__icon"><WorkbenchIcon icon="plugins" size={18} /></span>
-                        <div>
-                          <span className="eyebrow">PLUGIN</span>
-                          <h3>{activePluginSettingsProvider.title}</h3>
-                          <p>{activePluginSettingsProvider.description ?? "Configurações do plugin."}</p>
-                        </div>
-                      </div>
-                      <div className="plugin-setting-list">
-                        {activePluginSettingsProvider.settings.map((setting) => setting.type === "stringArray" ? (
-                          <div className={`plugin-setting plugin-setting--${setting.type}`} key={setting.id}>
-                            <span className="plugin-setting__copy">
-                              <strong>{setting.label}</strong>
-                              {setting.description ? <small>{setting.description}</small> : null}
-                            </span>
-                            <div className="plugin-setting__string-array">
-                              <div className="watcher-ignored-chips">
-                                {resolvePluginStringArraySettingValue(setting, pluginSettingsDraft).map((entry) => (
-                                  <span className="watcher-ignored-chip" key={entry}>
-                                    {entry}
-                                    <button
-                                      type="button"
-                                      aria-label={`Remover ${entry}`}
-                                      disabled={activePluginSettingsProvider.scope === "project" && !workspaceRoot}
-                                      onClick={() => invoke(() => removePluginStringArraySetting(setting.id, entry))}
-                                    >
-                                      <X size={12} />
-                                    </button>
-                                  </span>
-                                ))}
-                              </div>
-                              <div className="watcher-ignored-add">
-                                <input
-                                  type="text"
-                                  placeholder={setting.inputPlaceholder}
-                                  value={pluginStringArrayDrafts[setting.id] ?? ""}
-                                  disabled={activePluginSettingsProvider.scope === "project" && !workspaceRoot}
-                                  onChange={(event) => setPluginStringArrayDrafts((drafts) => ({
-                                    ...drafts,
-                                    [setting.id]: event.target.value,
-                                  }))}
-                                  onKeyDown={(event) => {
-                                    if (event.key === "Enter") {
-                                      event.preventDefault();
-                                      invoke(() => addPluginStringArraySetting(setting.id));
-                                    }
-                                  }}
-                                />
-                                <button
-                                  className="button"
-                                  type="button"
-                                  disabled={(activePluginSettingsProvider.scope === "project" && !workspaceRoot) || !(pluginStringArrayDrafts[setting.id] ?? "").trim()}
-                                  onClick={() => invoke(() => addPluginStringArraySetting(setting.id))}
-                                >
-                                  <WorkbenchIcon icon="plus" size={14} /> {setting.addLabel ?? "Adicionar"}
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        ) : (
-                          <label className={`plugin-setting plugin-setting--${setting.type}`} key={setting.id}>
-                            <span className="plugin-setting__copy">
-                              <strong>{setting.label}</strong>
-                              {setting.description ? <small>{setting.description}</small> : null}
-                            </span>
-                            {setting.type === "boolean" ? (
-                              <span className="settings-switch">
-                                <input
-                                  type="checkbox"
-                                  checked={resolvePluginBooleanSettingValue(setting, pluginSettingsDraft)}
-                                  disabled={activePluginSettingsProvider.scope === "project" && !workspaceRoot}
-                                  onChange={(event) => invoke(() => applyPluginSetting(setting.id, event.target.checked))}
-                                />
-                                <i aria-hidden="true" />
-                              </span>
-                            ) : setting.type === "select" ? (
-                              <select
-                                className="plugin-setting__control"
-                                value={String(pluginSettingsDraft[setting.id] ?? setting.defaultValue)}
-                                disabled={activePluginSettingsProvider.scope === "project" && !workspaceRoot}
-                                onChange={(event) => invoke(() => applyPluginSetting(setting.id, event.target.value))}
-                              >
-                                {setting.options.map((option) => (
-                                  <option key={option.value} value={option.value}>{option.label}</option>
-                                ))}
-                              </select>
-                            ) : setting.type === "string" ? (
-                              <input
-                                className="plugin-setting__control plugin-setting__control--string"
-                                type="text"
-                                value={String(pluginSettingsDraft[setting.id] ?? setting.defaultValue)}
-                                placeholder={setting.placeholder}
-                                disabled={activePluginSettingsProvider.scope === "project" && !workspaceRoot}
-                                onChange={(event) => invoke(() => applyPluginSetting(setting.id, event.target.value))}
-                              />
-                            ) : (
-                              <input
-                                className="plugin-setting__control plugin-setting__control--number"
-                                type="number"
-                                value={Number(pluginSettingsDraft[setting.id] ?? setting.defaultValue)}
-                                min={setting.min}
-                                max={setting.max}
-                                step={setting.step}
-                                disabled={activePluginSettingsProvider.scope === "project" && !workspaceRoot}
-                                onChange={(event) => {
-                                  const value = event.target.valueAsNumber;
-                                  if (Number.isFinite(value)) invoke(() => applyPluginSetting(setting.id, value));
-                                }}
-                              />
-                            )}
-                          </label>
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <p className="settings-empty-state">Esta seção não está mais disponível.</p>
-                  )}
-                </section>
-              </div>
-              <div className="settings-dialog__footer">
-                {settingsSectionId === "watcher" && !workspaceRoot ? (
-                  <p className="settings-scope-note"><WorkbenchIcon icon="problems" size={14} /> Abra um workspace para alterar esta configuração.</p>
-                ) : activePluginSettingsProvider?.scope === "project" && !workspaceRoot ? (
-                  <p className="settings-scope-note"><WorkbenchIcon icon="problems" size={14} /> Abra um workspace para alterar esta configuração.</p>
-                ) : settingsSectionId === "watcher" ? (
-                  <p className="settings-scope-note"><Check size={14} /> Alterações só são aplicadas ao clicar em "Concluir".</p>
-                ) : (
-                  <p className="settings-scope-note"><Check size={14} /> Alterações salvas automaticamente.</p>
-                )}
-                <button
-                  className="button primary"
-                  type="button"
-                  onClick={() => invoke(async () => {
-                    await commitWatcherDraftDirectories();
-                    setSettingsOpen(false);
-                  })}
-                >
-                  Concluir
-                </button>
-              </div>
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
+          onSelectSection={selectSettingsSection}
+          onLineNumbersChange={(enabled) => invoke(() => applyEditorLineNumbers(enabled))}
+          onSelectTheme={selectTheme}
+          onSelectIconPack={selectIconPack}
+          onFontPreferencesChange={updateFontPreferences}
+          onWatcherIgnoredDraftChange={setWatcherIgnoredDraft}
+          onAddWatcherIgnoredDirectory={addWatcherIgnoredDirectory}
+          onRemoveWatcherIgnoredDirectory={removeWatcherDraftDirectory}
+          onPluginStringArrayDraftChange={(settingId, value) => setPluginStringArrayDrafts((drafts) => ({
+            ...drafts,
+            [settingId]: value,
+          }))}
+          onAddPluginStringArraySetting={(settingId) => invoke(() => addPluginStringArraySetting(settingId))}
+          onRemovePluginStringArraySetting={(settingId, entry) => invoke(() => removePluginStringArraySetting(settingId, entry))}
+          onApplyPluginSetting={(settingId, value) => invoke(() => applyPluginSetting(settingId, value))}
+          onComplete={() => invoke(async () => {
+            await commitWatcherDraftDirectories();
+            setSettingsOpen(false);
+          })}
+        />
 
-        <Dialog.Root open={lintSettingsOpen} onOpenChange={setLintSettingsOpen}>
-          <Dialog.Portal>
-            <Dialog.Overlay className="dialog-overlay" />
-            <Dialog.Content className="lint-settings-dialog">
-              <div className="dialog-heading">
-                <div>
-                  <span className="eyebrow">ANÁLISE</span>
-                  <Dialog.Title>Configurar lint</Dialog.Title>
-                  <Dialog.Description>
-                    Selecione os casos que {activeLanguageProvider?.name ?? "o provider"} deve detectar neste workspace.
-                  </Dialog.Description>
-                </div>
-                <Dialog.Close asChild><button className="icon-button" type="button" aria-label="Fechar"><X size={16} /></button></Dialog.Close>
-              </div>
-              <div className="lint-rule-list">
-                {(activeLanguageProvider?.lintRules ?? []).map((rule) => (
-                  <label className="lint-rule" key={rule.id}>
-                    <input
-                      type="checkbox"
-                      checked={lintEnabledRuleIds.includes(rule.id)}
-                      onChange={(event) => {
-                        const next = event.target.checked
-                          ? [...new Set([...lintEnabledRuleIds, rule.id])]
-                          : lintEnabledRuleIds.filter((id) => id !== rule.id);
-                        setLintEnabledRuleIds(next);
-                        if (activeLanguageProvider) {
-                          void updateWorkspaceSettings((current) => ({
-                            ...current,
-                            lint: {
-                              ...current.lint,
-                              [activeLanguageProvider.id]: { enabledRuleIds: next },
-                            },
-                          })).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
-                        }
-                      }}
-                    />
-                    <span><strong>{rule.label}</strong>{rule.description ? <small>{rule.description}</small> : null}</span>
-                  </label>
-                ))}
-              </div>
-              <div className="dialog-actions">
-                <Dialog.Close asChild><button className="button primary" type="button">Concluir</button></Dialog.Close>
-              </div>
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
+        <LintSettingsDialog
+          open={lintSettingsOpen}
+          {...(activeLanguageProvider ? { provider: activeLanguageProvider } : {})}
+          enabledRuleIds={lintEnabledRuleIds}
+          onOpenChange={setLintSettingsOpen}
+          onEnabledRuleIdsChange={(next) => invoke(async () => {
+            setLintEnabledRuleIds(next);
+            if (!activeLanguageProvider) return;
+            await updateWorkspaceSettings((current) => ({
+              ...current,
+              lint: {
+                ...current.lint,
+                [activeLanguageProvider.id]: { enabledRuleIds: next },
+              },
+            }));
+          })}
+        />
 
         <EnvironmentBrowserDialog
           mode={environmentBrowserMode}
@@ -8875,24 +8263,13 @@ export function App() {
           onConfirm={() => invoke(confirmEnvironmentBrowser)}
         />
 
-        {contextMenu ? (
-          <ResourceContextMenu
-            x={contextMenu.x}
-            y={contextMenu.y}
-            items={contextMenu.items}
-            disabled={busy}
-            ariaLabel={`Ações de ${contextMenu.target.kind === "root"
-              ? workspaceName
-              : contextMenu.target.kind === "entry"
-                ? contextMenu.target.entry.name
-                : contextMenu.target.kind === "document"
-                  ? contextMenu.target.document.name
-                  : contextMenu.target.kind === "editor"
-                    ? contextMenu.target.context.document.name
-                    : "texto selecionado"}`}
-            onExecute={(item) => invoke(() => executeContextMenuItem(item, contextMenu.target))}
-          />
-        ) : null}
+        <WorkbenchContextMenuHost
+          ref={contextMenuRef}
+          workspaceName={workspaceName}
+          disabled={busy}
+          onDismiss={() => setEditorContextMenuContext(undefined)}
+          onExecute={(item, target) => invoke(() => executeContextMenuItem(item, target))}
+        />
 
         {completionSession ? (
           <CompletionPopup

@@ -12,6 +12,8 @@
  * mesmos arquivos de estado.
  */
 
+import { TransientRuntimeError } from "./transient-failure";
+
 const WORKSPACE_SCOPE_PREFIX = "/w/";
 const PROJECT_OPEN_QUERY = "tinyideOpenProject";
 const SCOPE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,95}$/;
@@ -136,9 +138,56 @@ export function workspaceScopedPath(path: string, scopeId = activeScopeId): stri
   return `${WORKSPACE_SCOPE_PREFIX}${scopeId}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+/**
+ * Uma falha de transporte contra `127.0.0.1` quase nunca significa que o
+ * runtime saiu do ar: significa que aquela requisição específica não chegou.
+ * Repetir uma vez o que é seguro repetir apaga o glitch antes de ele virar
+ * "Failed to fetch" na cara de quem só clicou em um botão.
+ *
+ * Só métodos idempotentes são repetidos — um `push` do Git jamais.
+ */
+const RETRYABLE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const TRANSPORT_RETRY_DELAY_MS = 120;
+
+function transportFailure(cause: unknown): boolean {
+  if (cause instanceof DOMException && cause.name === "AbortError") return false;
+  if (cause instanceof Error && cause.name === "AbortError") return false;
+  return cause instanceof TypeError || cause instanceof Error;
+}
+
+async function fetchWithTransportRetry(input: string, init: RequestInit): Promise<Response> {
+  const method = (init.method ?? "GET").toUpperCase();
+  const attempts = RETRYABLE_METHODS.has(method) ? 2 : 1;
+  let lastCause: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fetch(input, init);
+    } catch (cause) {
+      if (init.signal?.aborted) {
+        throw init.signal.reason ?? cause;
+      }
+      if (!transportFailure(cause)) throw cause;
+      lastCause = cause;
+      if (attempt < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, TRANSPORT_RETRY_DELAY_MS));
+      }
+    }
+  }
+  if (init.signal?.aborted) {
+    throw init.signal.reason ?? lastCause;
+  }
+  // A mensagem crua do runtime de `fetch` ("Failed to fetch", "Load failed")
+  // não diz nada a quem usa a IDE; o texto original fica em `cause` para o
+  // diagnóstico, e a classe mantém a falha reconhecida como transitória.
+  throw new TransientRuntimeError(
+    "O runtime local não respondeu a esta requisição.",
+    { cause: lastCause },
+  );
+}
+
 /** Chamadas que pertencem ao usuário, não a um projeto: preferências, histórico, registro de workspaces. */
 export function runtimeFetch(input: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(input, init);
+  return fetchWithTransportRetry(input, init);
 }
 
 /**
@@ -149,7 +198,7 @@ export function runtimeFetch(input: string, init: RequestInit = {}): Promise<Res
 export function projectRuntimeFetch(input: string, init: RequestInit = {}): Promise<Response> {
   const path = workspaceScopedPath(input);
   const signal = composeAbortSignals(init.signal, scopeAbort?.signal);
-  return fetch(path, signal ? { ...init, signal } : init);
+  return fetchWithTransportRetry(path, signal ? { ...init, signal } : init);
 }
 
 /**

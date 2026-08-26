@@ -48,7 +48,7 @@ import {
   delay,
   HostRequestError,
   RECONNECTED_NOTICE,
-  RECONNECTING_NOTICE,
+  reconnectingNotice,
   TransientRuntimeError,
 } from "./transient-failure";
 
@@ -522,14 +522,18 @@ async function followHostProcess(
   const retry = createTransientRetry();
 
   do {
-    await delay(hasMore ? 0 : 200);
+    // Com saída acumulada, `hasMore` fica ligado por várias leituras seguidas.
+    // Sem piso nenhum, o monitor entra em rajada contra o runtime local (medido
+    // aqui em ~35 requisições por segundo por processo); 25 ms ainda drenam
+    // ~2,5 MB/s, muito acima do que qualquer processo produz de log.
+    await delay(hasMore ? 25 : 200);
     let delta: HostProcessOutputDelta;
     try {
       delta = await readHostProcessOutput(process.id, cursor);
       if (retry.reset()) publishNotice([RECONNECTED_NOTICE]);
     } catch (cause) {
       const decision = retry.schedule(cause);
-      if (decision.attempt === 1) publishNotice([RECONNECTING_NOTICE]);
+      if (decision.attempt === 1) publishNotice([reconnectingNotice(cause)]);
       await delay(decision.delayMs);
       continue;
     }

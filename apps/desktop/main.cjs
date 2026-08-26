@@ -1,5 +1,4 @@
 const { app, BrowserWindow, clipboard, dialog, ipcMain, session, shell } = require("electron");
-const { randomUUID } = require("node:crypto");
 const { existsSync, statSync } = require("node:fs");
 const { mkdir, readFile, readdir, rm, stat, writeFile } = require("node:fs/promises");
 const { basename, dirname, join, resolve } = require("node:path");
@@ -18,14 +17,17 @@ const {
 } = require("./startup.cjs");
 const { readDesktopState, removeDesktopState, writeDesktopState } = require("./state-store.cjs");
 const { createWorkspaceWatcher, DEFAULT_IGNORED_DIRECTORIES } = require("./workspace-watcher.cjs");
+const { createWorkspaceRegistry } = require("./workspace-registry.cjs");
+const { installNetworkDiagnostics } = require("./network-diagnostics.cjs");
 const { desktopWindowUrl } = require("./window-session.cjs");
 
 let runtime;
 let mainWindow;
 let browserExtensionGuard;
-const desktopWorkspaces = new Map();
-const desktopWorkspaceWatchers = new Map();
-const desktopWorkspaceWatcherIgnores = new Map();
+let networkDiagnostics;
+const workspaceRegistry = createWorkspaceRegistry({
+  startWatcher: (root, extraIgnoredDirectories) => startWorkspaceWatcher(root, extraIgnoredDirectories),
+});
 // Guarda apenas onde o diálogo nativo de "abrir workspace" deve começar. Não é
 // ponteiro de restauração: qual projeto cada janela reabre é decidido pelo
 // escopo na URL e, na falta dele, pelo ponteiro por host do runtime.
@@ -36,7 +38,7 @@ function desktopStateRoot() {
 }
 
 function registeredWorkspace(token) {
-  const root = desktopWorkspaces.get(token);
+  const root = workspaceRegistry.resolveToken(token);
   if (!root) throw new Error("O workspace desktop não está mais registrado.");
   return root;
 }
@@ -51,7 +53,7 @@ function registeredWorkspaceRoot(rootPath) {
     throw new Error("O caminho do workspace e obrigatorio.");
   }
   const root = resolve(rootPath);
-  if (![...desktopWorkspaces.values()].some((candidate) => resolve(candidate) === root)) {
+  if (!workspaceRegistry.isRegistered(root)) {
     throw new Error("O workspace solicitado nao esta registrado.");
   }
   return root;
@@ -70,16 +72,17 @@ function startWorkspaceWatcher(root, extraIgnoredDirectories = []) {
   }, { extraIgnoredDirectories });
 }
 
-async function registerDesktopWorkspace(rootPath, { persist = true } = {}) {
+/**
+ * `owner` é a janela que passa a usar o workspace. Registrar sem dono (o caso
+ * de `open-window`, em que a janela ainda não existe) mantém o workspace vivo
+ * até alguém reivindicá-lo.
+ */
+async function registerDesktopWorkspace(rootPath, { persist = true, owner } = {}) {
   const root = resolve(rootPath);
   if (!existsSync(root) || !statSync(root).isDirectory()) {
     throw new Error("O diretório selecionado não está disponível.");
   }
-  const token = randomUUID();
-  desktopWorkspaces.set(token, root);
-  if (!desktopWorkspaceWatchers.has(root)) {
-    desktopWorkspaceWatchers.set(root, startWorkspaceWatcher(root, desktopWorkspaceWatcherIgnores.get(root)));
-  }
+  const { token } = await workspaceRegistry.register(root, { owner });
   if (persist) {
     await writeDesktopState(desktopStateRoot(), WORKSPACE_PICKER_STATE_KEY, { path: root });
   }
@@ -120,9 +123,10 @@ function installDesktopFileSystemHandlers() {
     return true;
   });
 
-  ipcMain.handle("tinyide:workspace:pick", async (_event, defaultPath) => {
+  ipcMain.handle("tinyide:workspace:pick", async (event, defaultPath) => {
+    const owner = event.sender.id;
     const testWorkspace = process.env.TINYIDE_TEST_WORKSPACE_PICKER_PATH?.trim();
-    if (testWorkspace) return await registerDesktopWorkspace(testWorkspace);
+    if (testWorkspace) return await registerDesktopWorkspace(testWorkspace, { owner });
     const startDirectory = await workspacePickerStartDirectory(stateRoot, defaultPath);
     const result = await dialog.showOpenDialog(mainWindow, {
       title: "Abrir workspace",
@@ -130,12 +134,12 @@ function installDesktopFileSystemHandlers() {
       ...(startDirectory ? { defaultPath: startDirectory } : {}),
     });
     if (result.canceled || !result.filePaths[0]) return undefined;
-    return await registerDesktopWorkspace(result.filePaths[0]);
+    return await registerDesktopWorkspace(result.filePaths[0], { owner });
   });
 
-  ipcMain.handle("tinyide:workspace:restore", async (_event, rootPath) => {
+  ipcMain.handle("tinyide:workspace:restore", async (event, rootPath) => {
     if (typeof rootPath !== "string" || !rootPath.trim()) return undefined;
-    return await registerDesktopWorkspace(rootPath.trim());
+    return await registerDesktopWorkspace(rootPath.trim(), { owner: event.sender.id });
   });
 
   ipcMain.handle("tinyide:workspace:open-window", async (_event, rootPath) => {
@@ -240,10 +244,7 @@ function installDesktopFileSystemHandlers() {
     const list = Array.isArray(extraIgnoredDirectories)
       ? extraIgnoredDirectories.filter((name) => typeof name === "string" && name.trim())
       : [];
-    desktopWorkspaceWatcherIgnores.set(root, list);
-    const existing = desktopWorkspaceWatchers.get(root);
-    if (existing) await existing.close();
-    desktopWorkspaceWatchers.set(root, startWorkspaceWatcher(root, list));
+    await workspaceRegistry.configureIgnores(root, list);
     return true;
   });
 }
@@ -270,7 +271,7 @@ async function startRuntime() {
     workspaceSearchRoot: process.env.TINYIDE_WORKSPACES_ROOT || app.getPath("home"),
     requireWorkspacePath: true,
     workspacePathAllowed(candidate) {
-      return [...desktopWorkspaces.values()].some((root) => resolve(root) === resolve(candidate));
+      return workspaceRegistry.isRegistered(candidate);
     },
     hostId: "desktop",
     ...(initialWorkspace ? { initialWorkspaceRoot: initialWorkspace } : {}),
@@ -333,10 +334,14 @@ function createWindow(url) {
     showWindow();
   };
   ipcMain.on("tinyide:renderer:ready", rendererReady);
+  const owner = window.webContents.id;
   window.on("closed", () => {
     productionHardening.dispose();
     ipcMain.removeListener("tinyide:renderer:ready", rendererReady);
     if (mainWindow === window) mainWindow = undefined;
+    // A janela morreu: o que era só dela (watcher e tokens de acesso) sai com
+    // ela. `webContents` já está destruído aqui, por isso o id é capturado antes.
+    void workspaceRegistry.releaseOwner(owner);
   });
   void window.loadURL(url);
   return window;
@@ -351,6 +356,11 @@ if (isPrimaryInstance) {
     browserExtensionGuard = disableBrowserExtensions(session.defaultSession);
     installDesktopFileSystemHandlers();
     runtime = await startRuntime();
+    networkDiagnostics = installNetworkDiagnostics({
+      webRequest: session.defaultSession.webRequest,
+      runtimeOrigin: runtime.url,
+      logPath: join(app.getPath("userData"), "logs", "network-errors.log"),
+    });
     mainWindow = createWindow(mainWindowUrl());
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow(mainWindowUrl());
@@ -366,8 +376,8 @@ if (isPrimaryInstance) {
 
   installGracefulShutdown(app, async () => {
     browserExtensionGuard?.dispose();
-    await Promise.allSettled([...desktopWorkspaceWatchers.values()].map((watcher) => watcher.close()));
-    desktopWorkspaceWatchers.clear();
+    networkDiagnostics?.dispose();
+    await workspaceRegistry.closeAll();
     if (runtime) await runtime.close();
   });
 }

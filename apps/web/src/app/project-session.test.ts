@@ -129,6 +129,64 @@ describe("scoped requests", () => {
     expect(isWorkspaceScopeAbort(undefined)).toBe(false);
   });
 
+  /**
+   * O sintoma: um único glitch de transporte contra `127.0.0.1` aparecia no
+   * painel Git como "Failed to fetch", com o projeto inteiro carregado atrás.
+   */
+  it("repete uma vez o que é seguro repetir e traduz a falha que persiste", async () => {
+    const fetchMock = vi.fn(async (_input: string) => {
+      throw new TypeError("Failed to fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    setActiveWorkspaceScope("alpha-0011223344556677");
+
+    await expect(projectRuntimeFetch("/plugin-api/git/status")).rejects.toThrow(
+      /O runtime local não respondeu/,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("aproveita a segunda tentativa quando o glitch foi só na primeira", async () => {
+    let attempts = 0;
+    vi.stubGlobal("fetch", vi.fn(async (_input: string) => {
+      attempts += 1;
+      if (attempts === 1) throw new TypeError("Failed to fetch");
+      return new Response(null, { status: 204 });
+    }));
+    setActiveWorkspaceScope("alpha-0011223344556677");
+
+    const response = await projectRuntimeFetch("/plugin-api/git/status");
+    expect(response.status).toBe(204);
+    expect(attempts).toBe(2);
+  });
+
+  /** Repetir um `push` do Git seria pior que a falha. */
+  it("nunca repete requisição que altera estado", async () => {
+    const fetchMock = vi.fn(async (_input: string) => {
+      throw new TypeError("Failed to fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    setActiveWorkspaceScope("alpha-0011223344556677");
+
+    await expect(projectRuntimeFetch("/plugin-api/git/push", { method: "POST", body: "{}" }))
+      .rejects.toThrow(/O runtime local não respondeu/);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("propaga cancelamento sem repetir nem reescrever a causa", async () => {
+    const fetchMock = vi.fn(async (_input: string, init?: RequestInit) => {
+      init?.signal?.throwIfAborted?.();
+      throw new DOMException(WORKSPACE_SCOPE_ABORT_MESSAGE, "AbortError");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    setActiveWorkspaceScope("alpha-0011223344556677");
+
+    await expect(projectRuntimeFetch("/core-api/workspace/resources")).rejects.toSatisfy(
+      (cause: unknown) => isWorkspaceScopeAbort(cause),
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("keeps two projects on disjoint request paths", () => {
     setActiveWorkspaceScope("alpha-0011223344556677");
     const alpha = workspaceScopedPath("/core-api/workspace/resource");

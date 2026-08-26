@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   createTransientRetry,
+  describeTransientFailure,
   HostRequestError,
   isTransientFailure,
   isTransientHttpStatus,
+  reconnectingNotice,
   TransientRuntimeError,
 } from "./transient-failure";
 
@@ -80,5 +82,24 @@ describe("backoff de reconexão", () => {
     expect(retry.schedule(failure).elapsedMs).toBe(900);
     now = 1_500;
     expect(() => retry.schedule(failure)).toThrow(failure);
+  });
+});
+
+describe("motivo da reconexão", () => {
+  /**
+   * "conexão perdida" sozinho não permitia distinguir, depois do episódio, um
+   * erro do runtime de uma requisição que nem saiu da máquina.
+   */
+  it("distingue status do servidor de falha de transporte", () => {
+    expect(describeTransientFailure(new HostRequestError("Falha ao ler a saída.", 500))).toBe("HTTP 500");
+    expect(describeTransientFailure(new TransientRuntimeError("sem resposta", {
+      cause: new TypeError("Failed to fetch"),
+    }))).toBe("Failed to fetch");
+    expect(describeTransientFailure(new Error("socket hang up"))).toBe("socket hang up");
+  });
+
+  it("compõe o aviso do console com o motivo", () => {
+    expect(reconnectingNotice(new HostRequestError("x", 503)))
+      .toBe("[execução] conexão perdida (HTTP 503); tentando reconectar…");
   });
 });

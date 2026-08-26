@@ -112,8 +112,28 @@ export function createTransientRetry(options: TransientRetryOptions = {}): Trans
   };
 }
 
-export const RECONNECTING_NOTICE = "[execução] conexão perdida; tentando reconectar…";
 export const RECONNECTED_NOTICE = "[execução] conexão restabelecida.";
+
+/**
+ * Motivo da falha em uma linha, para ir junto do aviso de reconexão.
+ *
+ * Sem isto o console dizia apenas "conexão perdida", e depois não havia como
+ * saber se o runtime tinha respondido 500, se a requisição nem chegou a sair ou
+ * se o transporte caiu — três causas com investigações completamente
+ * diferentes.
+ */
+export function describeTransientFailure(cause: unknown): string {
+  if (cause instanceof HostRequestError) return `HTTP ${cause.status}`;
+  if (cause instanceof TransientRuntimeError && cause.cause instanceof Error) {
+    return cause.cause.message;
+  }
+  if (cause instanceof Error) return cause.message;
+  return String(cause);
+}
+
+export function reconnectingNotice(cause: unknown): string {
+  return `[execução] conexão perdida (${describeTransientFailure(cause)}); tentando reconectar…`;
+}
 
 export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

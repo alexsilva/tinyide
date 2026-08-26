@@ -432,7 +432,7 @@ import {
   createTransientRetry,
   delay,
   RECONNECTED_NOTICE,
-  RECONNECTING_NOTICE,
+  reconnectingNotice,
 } from "./transient-failure";
 import {
   TEXT_CONTEXT_MENU_EVENT,
@@ -2769,7 +2769,7 @@ export function App() {
             // host. Retenta com backoff e avisa na saída em vez de sumir em silêncio.
             const decision = retry.schedule(cause);
             if (decision.attempt === 1) {
-              processOutput = appendExecutionOutput(processOutput, [RECONNECTING_NOTICE]);
+              processOutput = appendExecutionOutput(processOutput, [reconnectingNotice(cause)]);
               setProfileExecutions((current) => {
                 const state = current[resumed.profileId];
                 return state ? { ...current, [resumed.profileId]: { ...state, output: processOutput } } : current;
@@ -2828,7 +2828,7 @@ export function App() {
           } catch (cause) {
             const decision = retry.schedule(cause);
             if (decision.attempt === 1) {
-              setOutput([...hostProcessOutputLines(process), RECONNECTING_NOTICE]);
+              setOutput([...hostProcessOutputLines(process), reconnectingNotice(cause)]);
             }
             await delay(decision.delayMs);
             continue;

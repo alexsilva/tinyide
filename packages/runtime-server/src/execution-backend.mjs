@@ -416,6 +416,18 @@ export function createExecutionBackend({
       exitCode: undefined, signal: undefined, startedAt, finishedAt: undefined,
     };
     processes.set(id, record);
+    const MAX_RETAINED_EXITED_PROCESSES = 25;
+    const pruneExitedProcesses = () => {
+      const exited = [...processes.values()]
+        .filter((item) => item.status === "exited")
+        .sort((left, right) => (left.finishedAt ?? 0) - (right.finishedAt ?? 0));
+      while (exited.length > MAX_RETAINED_EXITED_PROCESSES) {
+        const oldest = exited.shift();
+        if (oldest) processes.delete(oldest.id);
+      }
+    };
+    pruneExitedProcesses();
+
     child.stdout.on("data", (chunk) => {
       record.stdout = appendOutput(record.stdout, chunk, maxSnapshotStreamChars);
       record.output.append("stdout", chunk);
@@ -431,12 +443,14 @@ export function createExecutionBackend({
       record.status = "exited";
       record.exitCode = -1;
       record.finishedAt = Date.now();
+      pruneExitedProcesses();
     });
     child.on("close", (exitCode, signal) => {
       record.status = "exited";
       record.exitCode = exitCode ?? (signal ? 128 : -1);
       record.signal = signal ?? undefined;
       record.finishedAt = Date.now();
+      pruneExitedProcesses();
     });
     return processSnapshot(record, maxSnapshotOutputChars);
   }

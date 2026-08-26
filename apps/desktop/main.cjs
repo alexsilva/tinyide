@@ -18,7 +18,7 @@ const {
 } = require("./startup.cjs");
 const { readDesktopState, removeDesktopState, writeDesktopState } = require("./state-store.cjs");
 const { createWorkspaceWatcher, DEFAULT_IGNORED_DIRECTORIES } = require("./workspace-watcher.cjs");
-const { DESKTOP_MAIN_SESSION_ID, desktopWindowUrl } = require("./window-session.cjs");
+const { desktopWindowUrl } = require("./window-session.cjs");
 
 let runtime;
 let mainWindow;
@@ -26,7 +26,10 @@ let browserExtensionGuard;
 const desktopWorkspaces = new Map();
 const desktopWorkspaceWatchers = new Map();
 const desktopWorkspaceWatcherIgnores = new Map();
-const LAST_WORKSPACE_STATE_KEY = "last-workspace";
+// Guarda apenas onde o diálogo nativo de "abrir workspace" deve começar. Não é
+// ponteiro de restauração: qual projeto cada janela reabre é decidido pelo
+// escopo na URL e, na falta dele, pelo ponteiro por host do runtime.
+const WORKSPACE_PICKER_STATE_KEY = "workspace-picker-directory";
 
 function desktopStateRoot() {
   return join(app.getPath("userData"), "state");
@@ -78,7 +81,7 @@ async function registerDesktopWorkspace(rootPath, { persist = true } = {}) {
     desktopWorkspaceWatchers.set(root, startWorkspaceWatcher(root, desktopWorkspaceWatcherIgnores.get(root)));
   }
   if (persist) {
-    await writeDesktopState(desktopStateRoot(), LAST_WORKSPACE_STATE_KEY, { path: root });
+    await writeDesktopState(desktopStateRoot(), WORKSPACE_PICKER_STATE_KEY, { path: root });
   }
   return { token, name: basename(root), path: root };
 }
@@ -92,7 +95,7 @@ async function workspacePickerStartDirectory(stateRoot, defaultPath) {
   const requested = typeof defaultPath === "string" ? defaultPath.trim() : "";
   const stored = requested
     ? requested
-    : (await readDesktopState(stateRoot, LAST_WORKSPACE_STATE_KEY).catch(() => undefined))?.path;
+    : (await readDesktopState(stateRoot, WORKSPACE_PICKER_STATE_KEY).catch(() => undefined))?.path;
   const candidate = typeof stored === "string" && stored.trim() ? resolve(stored.trim()) : undefined;
   if (!candidate) return undefined;
   const parent = dirname(candidate);
@@ -135,27 +138,16 @@ function installDesktopFileSystemHandlers() {
     return await registerDesktopWorkspace(rootPath.trim());
   });
 
-  ipcMain.handle("tinyide:workspace:restore-last", async () => {
-    const stored = await readDesktopState(stateRoot, LAST_WORKSPACE_STATE_KEY);
-    const rootPath = typeof stored?.path === "string" ? stored.path.trim() : "";
-    if (!rootPath) return undefined;
-    try {
-      return await registerDesktopWorkspace(rootPath, { persist: false });
-    } catch {
-      await removeDesktopState(stateRoot, LAST_WORKSPACE_STATE_KEY);
-      return undefined;
-    }
-  });
-
-  ipcMain.handle("tinyide:workspace:open-window", async (_event, rootPath, sessionId) => {
+  ipcMain.handle("tinyide:workspace:open-window", async (_event, rootPath) => {
     if (typeof rootPath !== "string" || !rootPath.trim()) throw new Error("O caminho do projeto é obrigatório.");
-    if (sessionId === DESKTOP_MAIN_SESSION_ID) {
-      // A janela principal já ocupa esse id; reutilizá-lo faria a nova janela
-      // compartilhar o estado visual e o ponteiro de workspace dela.
-      throw new Error("Identificador de sessão reservado para a janela principal.");
-    }
-    const descriptor = await registerDesktopWorkspace(rootPath.trim());
-    createWindow(desktopWindowUrl(runtime.url, { sessionId, projectPath: descriptor.path }));
+    // A janela nasce no escopo do projeto que vai abrir. Não há id a reservar:
+    // dois projetos distintos nunca colidem, e o mesmo projeto em duas janelas
+    // compartilha estado porque compartilha o diretório.
+    const descriptor = await registerDesktopWorkspace(rootPath.trim(), { persist: false });
+    createWindow(desktopWindowUrl(runtime.url, {
+      scopeId: runtime.workspaceScopeId(descriptor.path),
+      projectPath: descriptor.path,
+    }));
     return true;
   });
 
@@ -280,15 +272,26 @@ async function startRuntime() {
     workspacePathAllowed(candidate) {
       return [...desktopWorkspaces.values()].some((root) => resolve(root) === resolve(candidate));
     },
-    ...(initialWorkspace
-      ? { initialWorkspaceRoot: initialWorkspace, initialSessionId: DESKTOP_MAIN_SESSION_ID }
-      : {}),
+    hostId: "desktop",
+    ...(initialWorkspace ? { initialWorkspaceRoot: initialWorkspace } : {}),
     bundledPlugins: true,
     host: "127.0.0.1",
     port: Number.isInteger(selectedPort) && selectedPort > 0 ? selectedPort : 0,
   });
   console.log(`[tinyIde] Runtime disponível em ${runtime.url}`);
   return runtime;
+}
+
+/**
+ * A janela principal só nasce com escopo quando o host recebeu um workspace
+ * inicial (`TINYIDE_WORKSPACE`). Fora disso ela abre na raiz e o renderer
+ * decide o projeto a partir do ponteiro deste host — sem herdar o que uma aba
+ * de navegador tenha deixado gravado.
+ */
+function mainWindowUrl() {
+  return desktopWindowUrl(runtime.url, {
+    ...(runtime.initialScopeId ? { scopeId: runtime.initialScopeId } : {}),
+  });
 }
 
 function createWindow(url) {
@@ -348,9 +351,9 @@ if (isPrimaryInstance) {
     browserExtensionGuard = disableBrowserExtensions(session.defaultSession);
     installDesktopFileSystemHandlers();
     runtime = await startRuntime();
-    mainWindow = createWindow(desktopWindowUrl(runtime.url, { sessionId: DESKTOP_MAIN_SESSION_ID }));
+    mainWindow = createWindow(mainWindowUrl());
     app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow(desktopWindowUrl(runtime.url, { sessionId: DESKTOP_MAIN_SESSION_ID }));
+      if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow(mainWindowUrl());
     });
   }).catch((error) => {
     console.error(error);

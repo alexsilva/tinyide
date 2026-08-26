@@ -1,6 +1,5 @@
 import type { TextDiagnostic } from "@tinyide/plugin-api";
 import {
-  clearApplicationSnapshot,
   readApplicationSnapshot,
   readStoredState,
   writeStoredState,
@@ -21,12 +20,13 @@ import {
   isActivityButtonPlacement,
   type ActivityButtonPlacements,
 } from "./activity-layout";
-import { projectSessionStateKey, projectWorkspaceStateKey } from "./project-session";
+import { hasActiveWorkspaceScope } from "./project-session";
 import { isVirtualDocumentId } from "./virtual-documents";
 
-const SESSION_STATE_KEY = (workspaceRoot?: string) => workspaceRoot
-  ? projectWorkspaceStateKey("ui-session", workspaceRoot)
-  : Promise.resolve(projectSessionStateKey("ui-session"));
+// A chave não precisa mais de sufixo: o arquivo já vive dentro do diretório do
+// workspace ativo. Sem escopo aberto não existe sessão visual para ler ou
+// gravar — o layout pertence ao projeto, não à janela vazia.
+const SESSION_STATE_KEY = "ui-session";
 
 export type PersistedSidebarView = string;
 
@@ -244,9 +244,10 @@ export function readSession(): SessionState {
   return defaultSession();
 }
 
-export async function readPersistedSession(workspaceRoot?: string): Promise<SessionState> {
+export async function readPersistedSession(): Promise<SessionState> {
+  if (!hasActiveWorkspaceScope()) return defaultSession();
   try {
-    const stored = await readStoredState(await SESSION_STATE_KEY(workspaceRoot));
+    const stored = await readStoredState(SESSION_STATE_KEY);
     if (stored !== undefined) return normalizeSession(stored);
   } catch (error) {
     console.warn("Não foi possível restaurar a sessão visual persistente.", error);
@@ -255,22 +256,8 @@ export async function readPersistedSession(workspaceRoot?: string): Promise<Sess
 }
 
 export function writeSession(session: SessionState): void {
-  void (async () => {
-    const workspaceRoot = session.workspaceRoot?.trim();
-    if (workspaceRoot) {
-      await writeStoredState(await SESSION_STATE_KEY(workspaceRoot), session);
-      // A chave da sessão mantém apenas o ponteiro necessário para restaurar o
-      // último workspace desta janela. O layout completo nunca é reutilizado
-      // como fallback de outro projeto.
-      await writeStoredState(await SESSION_STATE_KEY(), {
-        ...defaultSession(),
-        workspaceName: session.workspaceName,
-        workspaceRoot,
-      });
-      return;
-    }
-    await writeStoredState(await SESSION_STATE_KEY(), session);
-  })().catch((error) => {
+  if (!hasActiveWorkspaceScope()) return;
+  void writeStoredState(SESSION_STATE_KEY, session).catch((error) => {
     console.warn("Não foi possível persistir a sessão visual.", error);
   });
 }
@@ -293,37 +280,18 @@ export function deserializeEntries(entries: readonly StoredWorkspaceEntry[]): re
   }));
 }
 
-export async function readReactSnapshot(workspaceRoot?: string): Promise<ApplicationSnapshot | undefined> {
-  const snapshot = await readApplicationSnapshot<ApplicationSnapshot>(workspaceRoot);
-  return snapshot?.version === 2 ? snapshot : undefined;
-}
-
-export interface RestoredWorkspaceLocator {
-  readonly workspaceName: string;
-  readonly workspaceRoot?: string;
-  readonly snapshot?: ApplicationSnapshot;
-}
-
 /**
- * Decide qual workspace o reload deve reabrir. O ponteiro global de sessão é
- * reescrito a cada troca de projeto e é a única fonte de verdade; o snapshot
- * global descreve apenas o estado sem workspace. Quando o snapshot aponta para
- * outro projeto ele é resíduo de versões anteriores ao escopo por workspace, e
- * respeitá-lo reabriria o projeto anterior depois de uma troca.
+ * O snapshot vive dentro do diretório do workspace ativo, então ele nunca pode
+ * descrever outro projeto. A checagem de `workspaceRoot` permanece como defesa
+ * contra estado migrado ou copiado à mão: um snapshot de outro caminho é
+ * descartado em vez de reabrir arquivos que não pertencem a este projeto.
  */
-export function resolveRestoredWorkspace(
-  sessionLocator: SessionState,
-  snapshot: ApplicationSnapshot | undefined,
-): RestoredWorkspaceLocator {
-  const workspaceRoot = sessionLocator.workspaceRoot ?? snapshot?.workspaceRoot;
-  const workspaceName = sessionLocator.workspaceRoot
-    ? sessionLocator.workspaceName
-    : snapshot?.workspaceName ?? sessionLocator.workspaceName;
-  return {
-    workspaceName,
-    ...(workspaceRoot ? { workspaceRoot } : {}),
-    ...(snapshot && snapshot.workspaceRoot === workspaceRoot ? { snapshot } : {}),
-  };
+export async function readReactSnapshot(workspaceRoot?: string): Promise<ApplicationSnapshot | undefined> {
+  if (!hasActiveWorkspaceScope()) return undefined;
+  const snapshot = await readApplicationSnapshot<ApplicationSnapshot>();
+  if (snapshot?.version !== 2) return undefined;
+  if (workspaceRoot && snapshot.workspaceRoot && snapshot.workspaceRoot !== workspaceRoot) return undefined;
+  return snapshot;
 }
 
 export function workspaceDocumentsForSnapshot(
@@ -410,8 +378,6 @@ export async function restoreWorkspaceDocuments(
   return restored.filter((document): document is OpenDocument => Boolean(document));
 }
 
-let discardedGlobalSnapshot = false;
-
 export async function writeReactSnapshot(input: {
   readonly workspaceName: string;
   readonly workspaceRoot?: string;
@@ -453,14 +419,6 @@ export async function writeReactSnapshot(input: {
   // FileSystemHandle exige structured clone (IndexedDB). Como a persistência da
   // IDE agora é exclusivamente em arquivos do host, o snapshot deve ser JSON
   // serializável e nunca depender de browser storage.
-  await writeApplicationSnapshot(base, input.workspaceRoot);
-  // O snapshot global descreve apenas o estado sem workspace. Com um projeto
-  // aberto ele vira resíduo — de versões anteriores ao escopo por workspace —
-  // e reabriria o projeto antigo. Descartar uma vez por sessão basta.
-  if (input.workspaceRoot && !discardedGlobalSnapshot) {
-    discardedGlobalSnapshot = true;
-    await clearApplicationSnapshot().catch(() => {
-      discardedGlobalSnapshot = false;
-    });
-  }
+  if (!hasActiveWorkspaceScope()) return;
+  await writeApplicationSnapshot(base);
 }

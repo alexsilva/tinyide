@@ -227,8 +227,8 @@ import {
   readPersistedSession,
   readReactSnapshot,
   readSession,
-  resolveRestoredWorkspace,
   restoreWorkspaceDocuments,
+  type ApplicationSnapshot,
   writeReactSnapshot,
   writeSession,
   type PersistedSidebarView,
@@ -261,6 +261,7 @@ import {
   resourceEditorProviderFor,
   executionViewProviderFor,
   scriptExecutionFor,
+  readWorkspaceScopeDescriptor,
   setHostWorkspace,
   stopHostProcess,
   textEditorLineDecorationProviders,
@@ -287,7 +288,6 @@ import {
   pasteSystemResourcesIntoWorkspace,
   pickWorkspaceDirectory,
   restoreDesktopWorkspaceHandle,
-  restoreLastDesktopWorkspaceHandle,
   runtimeWorkspaceHandle,
   supportsSystemResourceClipboard,
   workspaceRootHintForHandle,
@@ -303,10 +303,13 @@ import {
   type RecentProject,
 } from "./project-history";
 import {
-  createProjectSessionId,
+  activeWorkspaceScopeId,
+  clearActiveWorkspaceScope,
+  clearRequestedProjectReference,
   projectWindowUrl,
   requestedProjectReference,
 } from "./project-session";
+import { clearHostWorkspacePointer, readHostWorkspacePointer } from "./host-pointer";
 import {
   resolvePluginSettingValues,
   resolvePluginStringArraySettingValue,
@@ -2397,7 +2400,7 @@ export function App() {
     rootEntries: readonly WorkspaceEntry[],
   ) => {
     const [session, snapshot] = await Promise.all([
-      readPersistedSession(workspaceRoot),
+      readPersistedSession(),
       readReactSnapshot(workspaceRoot),
     ]);
     applyPersistedVisualSession(session);
@@ -2445,57 +2448,55 @@ export function App() {
         setPreferredIconPackId(persistedUserSettings.appearance?.iconPackId ?? workbenchIconDefaults.packId);
         setFontPreferences(defaultFontPreferences(persistedUserSettings.appearance?.fonts));
         let persistedSession = sessionLocator;
-        const globalLocator = resolveRestoredWorkspace(sessionLocator, await readReactSnapshot());
-        let snapshot = globalLocator.snapshot;
+        let snapshot: ApplicationSnapshot | undefined;
         let restoredDocuments: readonly OpenDocument[] = [];
-        let restoredWorkspaceName = globalLocator.workspaceName;
-        let restoredWorkspaceRoot = globalLocator.workspaceRoot;
         // Handles vivos nunca são restaurados de JSON. Eles são reconstruídos
         // pelo host a partir do caminho persistido do workspace.
         let restoredWorkspaceHandle: BrowserDirectoryHandle | undefined;
+
+        // Qual projeto esta janela abre, em ordem de autoridade decrescente:
+        // o pedido explícito na URL, o escopo já gravado no caminho da janela
+        // (sobrevive a reload) e, só então, o ponteiro deste host. Nenhuma
+        // dessas fontes é compartilhada com outra janela de outro projeto.
         const requestedProject = requestedProjectReference();
-        if (requestedProject) {
-          if (requestedProject.startsWith("path:") && isDesktopHost()) {
+        const target = await (async (): Promise<{ readonly name: string; readonly path?: string } | undefined> => {
+          if (requestedProject?.startsWith("path:")) {
             const requestedPath = requestedProject.slice("path:".length);
-            restoredWorkspaceHandle = await restoreDesktopWorkspaceHandle(requestedPath);
-            restoredWorkspaceRoot = requestedPath;
-          } else {
+            return { name: requestedPath.split(/[\\/]/).filter(Boolean).at(-1) ?? requestedPath, path: requestedPath };
+          }
+          if (requestedProject) {
             const requestedRecent = (await readRecentProjects()).find((project) => project.id === requestedProject);
-            if (requestedRecent) {
-              const hostWorkspace = await setHostWorkspace(requestedRecent.name, requestedRecent.path);
-              restoredWorkspaceRoot = hostWorkspace.workspaceRoot;
-              restoredWorkspaceHandle = isDesktopHost()
-                ? await restoreDesktopWorkspaceHandle(hostWorkspace.workspaceRoot)
-                : runtimeWorkspaceHandle(requestedRecent.name, hostWorkspace.workspaceRoot);
-            }
+            if (!requestedRecent) throw new Error("O projeto solicitado não está mais disponível.");
+            return { name: requestedRecent.name, ...(requestedRecent.path ? { path: requestedRecent.path } : {}) };
           }
-          if (!restoredWorkspaceHandle) throw new Error("O projeto solicitado não está mais disponível.");
-          restoredWorkspaceName = restoredWorkspaceHandle.name;
-          restoredWorkspaceRoot = restoredWorkspaceRoot ?? await workspaceRootHintForHandle(restoredWorkspaceHandle);
-          const url = new URL(window.location.href);
-          url.searchParams.delete("tinyideOpenProject");
-          window.history.replaceState(null, "", url.href);
-        } else if (isDesktopHost()) {
-          if (restoredWorkspaceRoot) {
-            restoredWorkspaceHandle = await restoreDesktopWorkspaceHandle(restoredWorkspaceRoot).catch(() => undefined);
-            if (!restoredWorkspaceHandle) {
-              // O ponteiro de sessão aponta para um projeto que este host não
-              // registra mais — removido, sem permissão, ou gravado por outro
-              // host que compartilha o diretório de estado do usuário. Insistir
-              // nele abriria a janela em estado de erro em vez de cair no
-              // último workspace conhecido deste desktop.
-              restoredWorkspaceRoot = undefined;
-              snapshot = undefined;
-            }
+          const scopeId = activeWorkspaceScopeId();
+          if (scopeId) {
+            const descriptor = await readWorkspaceScopeDescriptor(scopeId).catch(() => undefined);
+            if (descriptor) return { name: descriptor.name, path: descriptor.path };
+            // Escopo órfão: o registro sumiu do disco. Descartar o prefixo é
+            // melhor que abrir em erro — a janela cai no ponteiro do host.
+            clearActiveWorkspaceScope();
           }
+          const pointer = await readHostWorkspacePointer();
+          return pointer ? { name: pointer.name, path: pointer.path } : undefined;
+        })();
+        if (requestedProject) clearRequestedProjectReference();
+
+        let restoredWorkspaceName = target?.name ?? "Sem workspace";
+        let restoredWorkspaceRoot = target?.path;
+        if (target && isDesktopHost()) {
+          restoredWorkspaceHandle = await restoreDesktopWorkspaceHandle(target.path).catch(() => undefined);
           if (!restoredWorkspaceHandle) {
-            restoredWorkspaceHandle = await restoreLastDesktopWorkspaceHandle().catch(() => undefined);
-            if (restoredWorkspaceHandle) {
-              restoredWorkspaceName = restoredWorkspaceHandle.name;
-              restoredWorkspaceRoot = await workspaceRootHintForHandle(restoredWorkspaceHandle);
-            } else {
-              restoredWorkspaceName = "Sem workspace";
-            }
+            // O alvo aponta para um projeto que este host não registra mais —
+            // removido, sem permissão, ou gravado por um host vizinho. Insistir
+            // nele abriria a janela em estado de erro.
+            if (requestedProject) throw new Error("O projeto solicitado não está mais disponível.");
+            restoredWorkspaceName = "Sem workspace";
+            restoredWorkspaceRoot = undefined;
+            await clearHostWorkspacePointer();
+          } else {
+            restoredWorkspaceName = restoredWorkspaceHandle.name;
+            restoredWorkspaceRoot = target.path ?? await workspaceRootHintForHandle(restoredWorkspaceHandle);
           }
         }
         if (restoredWorkspaceName !== "Sem workspace" && (!isDesktopHost() || Boolean(restoredWorkspaceRoot))) {
@@ -2503,8 +2504,10 @@ export function App() {
             const hostWorkspace = await setHostWorkspace(restoredWorkspaceName, restoredWorkspaceRoot);
             restoredWorkspaceRoot = hostWorkspace.workspaceRoot;
             setWorkspaceRoot(hostWorkspace.workspaceRoot);
+            // Só agora existe escopo: a leitura abaixo já cai no diretório de
+            // estado deste projeto.
             [persistedSession, snapshot] = await Promise.all([
-              readPersistedSession(hostWorkspace.workspaceRoot),
+              readPersistedSession(),
               readReactSnapshot(hostWorkspace.workspaceRoot),
             ]);
             applyPersistedVisualSession(persistedSession);
@@ -2524,7 +2527,7 @@ export function App() {
             setError(cause instanceof Error ? cause.message : String(cause));
           }
         } else {
-          await clearHostWorkspace();
+          await clearHostWorkspace().catch(() => undefined);
           setWorkspaceRoot(undefined);
           applyPersistedVisualSession(sessionLocator);
         }
@@ -3021,15 +3024,16 @@ export function App() {
       if (await activateProject(handle, root)) setProjectOpenDialog(false);
       return;
     }
-    const sessionId = createProjectSessionId();
+    // A janela nova nasce sem escopo e o declara ao abrir o projeto: quem
+    // define o diretório de estado é o caminho aberto, não um id sorteado aqui.
     if (isDesktopHost()) {
       if (!root) throw new Error("O app empacotado exige o caminho local do projeto.");
-      await openDesktopProjectWindow(root, sessionId);
+      await openDesktopProjectWindow(root);
     } else {
       const opened = reservedBrowserTab ?? window.open("about:blank", "_blank");
       if (!opened) throw new Error("O navegador bloqueou a abertura da nova aba.");
       opened.opener = null;
-      opened.location.href = projectWindowUrl({ sessionId, pendingProjectId: remembered.id });
+      opened.location.href = projectWindowUrl({ pendingProjectId: remembered.id });
     }
     setRecentProjects(await readRecentProjects());
     setProjectOpenDialog(false);
@@ -3062,14 +3066,13 @@ export function App() {
     try {
       if (target === "new") {
         await persistProjectOpenChoice(target);
-        const sessionId = createProjectSessionId();
         if (isDesktopHost()) {
           if (!project.path) throw new Error("O caminho deste projeto recente não está mais disponível.");
-          await openDesktopProjectWindow(project.path, sessionId);
+          await openDesktopProjectWindow(project.path);
         } else {
           if (!reservedBrowserTab) throw new Error("O navegador bloqueou a abertura da nova aba.");
           reservedBrowserTab.opener = null;
-          reservedBrowserTab.location.href = projectWindowUrl({ sessionId, pendingProjectId: project.id });
+          reservedBrowserTab.location.href = projectWindowUrl({ pendingProjectId: project.id });
         }
         setProjectOpenDialog(false);
         return;

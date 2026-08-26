@@ -31,13 +31,13 @@ import type {
   WorkbenchTextHighlightResult,
   Disposable,
 } from "@tinyide/plugin-api";
-import { projectRuntimeFetch } from "./project-session";
+import { projectRuntimeFetch, runtimeFetch } from "./project-session";
 import { getActiveHostWorkspaceRoot } from "./host-workspace-state";
 import { AppPluginHost } from "./plugin-host";
 import { createOutputFollowControl } from "./output-follow";
 import { createExtensionApi } from "./extension-api";
 import { AppModuleHost } from "./module-host";
-import { readStoredState, writeStoredState } from "../session-store";
+import { readGlobalState, writeGlobalState } from "../session-store";
 
 const PLATFORM_VERSION = "0.4.0";
 const PLUGINS_STATE_KEY = "plugins";
@@ -54,13 +54,13 @@ function parseStoredPlugins(value: unknown): readonly StoredPlugin[] {
 }
 
 export async function readStoredPlugins(): Promise<readonly StoredPlugin[]> {
-  return parseStoredPlugins(await readStoredState(PLUGINS_STATE_KEY));
+  return parseStoredPlugins(await readGlobalState(PLUGINS_STATE_KEY));
 }
 
 export async function writeStoredPlugins(
   stored: readonly StoredPlugin[],
 ): Promise<void> {
-  await writeStoredState(PLUGINS_STATE_KEY, stored);
+  await writeGlobalState(PLUGINS_STATE_KEY, stored);
 }
 
 export function rebaseLoopbackPluginUrl(storedUrl: string, currentUrl: string): string {
@@ -355,7 +355,10 @@ export function pluginConfiguration(pluginId: string): PluginConfigurationApi {
     if (scope === "project" && !getActiveHostWorkspaceRoot()) {
       throw Object.assign(new Error("Abra um workspace antes de alterar a configuração do projeto."), { statusCode: 409 });
     }
-    const response = await projectRuntimeFetch(endpoint(scope), {
+    // Configuração de escopo "user" não pertence a projeto nenhum; a de escopo
+    // "project" vive dentro do workspace aberto e exige o escopo na URL.
+    const send = scope === "user" ? runtimeFetch : projectRuntimeFetch;
+    const response = await send(endpoint(scope), {
       method,
       cache: "no-store",
       ...(value === undefined ? {} : {

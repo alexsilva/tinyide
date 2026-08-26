@@ -1,14 +1,15 @@
+// @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readPersistedSession,
   readSession,
   normalizeSession,
-  resolveRestoredWorkspace,
   restoreWorkspaceDocuments,
   writeReactSnapshot,
   writeSession,
   workspaceDocumentsForSnapshot,
 } from "./persistence";
+import { clearActiveWorkspaceScope, setActiveWorkspaceScope } from "./project-session";
 import type {
   BrowserDirectoryHandle,
   BrowserFileHandle,
@@ -74,7 +75,11 @@ function directoryHandle(
   };
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  clearActiveWorkspaceScope();
+  window.history.replaceState(null, "", "/");
+});
 
 describe("layout persistence", () => {
   it("starts with the execution output panel closed", () => {
@@ -152,6 +157,7 @@ describe("layout persistence", () => {
     };
     const fetchMock = vi.fn(async () => new Response(JSON.stringify(stored), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
+    setActiveWorkspaceScope("alpha-0011223344556677");
 
     await expect(readPersistedSession()).resolves.toMatchObject({
       activityButtonPlacements: {
@@ -162,28 +168,45 @@ describe("layout persistence", () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 
-  it("isolates the visual session by workspace root", async () => {
-    const fetchMock = vi.fn(async (url: string) => new Response(JSON.stringify({
-      sidebarView: url.includes("workspace.") ? "git.changes" : "explorer",
-      sidebarViewsBySide: url.includes("workspace.") ? { right: "git.changes" } : { left: "explorer" },
+  it("isolates the visual session by workspace scope", async () => {
+    const fetchMock = vi.fn(async (_input: string) => new Response(JSON.stringify({
+      sidebarView: "git.changes",
+      sidebarViewsBySide: { right: "git.changes" },
     }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const alpha = await readPersistedSession("/workspaces/alpha");
+    setActiveWorkspaceScope("alpha-0011223344556677");
+    const alpha = await readPersistedSession();
     const alphaUrl = String(fetchMock.mock.calls.at(-1)?.[0]);
-    const beta = await readPersistedSession("/workspaces/beta");
+    setActiveWorkspaceScope("beta-7766554433221100");
+    await readPersistedSession();
     const betaUrl = String(fetchMock.mock.calls.at(-1)?.[0]);
 
     expect(alpha.sidebarViewsBySide).toEqual({ right: "git.changes" });
-    expect(beta.sidebarViewsBySide).toEqual({ right: "git.changes" });
-    expect(alphaUrl).toMatch(/\/core-api\/user\/state\/ui-session\.workspace\.[a-f0-9]{64}$/);
-    expect(betaUrl).toMatch(/\/core-api\/user\/state\/ui-session\.workspace\.[a-f0-9]{64}$/);
-    expect(alphaUrl).not.toBe(betaUrl);
+    expect(alphaUrl).toBe("/w/alpha-0011223344556677/core-api/user/state/ui-session");
+    expect(betaUrl).toBe("/w/beta-7766554433221100/core-api/user/state/ui-session");
+  });
+
+  /**
+   * Sem projeto aberto não há layout a restaurar nem a gravar. Antes essa era a
+   * porta pela qual o estado de um projeto virava fallback do próximo.
+   */
+  it("neither reads nor writes the visual session without an open workspace", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const session = await readPersistedSession();
+    writeSession({ ...readSession(), workspaceName: "alpha", workspaceRoot: "/workspaces/alpha" });
+    await Promise.resolve();
+
+    expect(session).toEqual(readSession());
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("writes the visual session only through host persistence", async () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => new Response(init?.body as string, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
+    setActiveWorkspaceScope("alpha-0011223344556677");
     const session = {
       ...readSession(),
       activityButtonPlacements: {
@@ -193,18 +216,19 @@ describe("layout persistence", () => {
 
     writeSession(session);
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      "/core-api/user/state/ui-session",
+      "/w/alpha-0011223344556677/core-api/user/state/ui-session",
       expect.objectContaining({ method: "PUT", body: JSON.stringify(session) }),
     ));
   });
 
-  it("stores workspace layout separately and keeps the global session as a locator", async () => {
+  it("writes the whole layout to a single scoped file, with no global locator", async () => {
     const writes = new Map<string, unknown>();
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.method === "PUT") writes.set(url, JSON.parse(String(init.body)));
       return new Response(init?.body as string, { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
+    setActiveWorkspaceScope("alpha-0011223344556677");
     const session = {
       ...readSession(),
       workspaceName: "alpha",
@@ -216,14 +240,10 @@ describe("layout persistence", () => {
     };
 
     writeSession(session);
-    await vi.waitFor(() => expect(writes.size).toBe(2));
-    const scoped = [...writes.entries()].find(([url]) => url.includes("ui-session.workspace."));
-    const locator = writes.get("/core-api/user/state/ui-session") as ReturnType<typeof readSession>;
+    await vi.waitFor(() => expect(writes.size).toBe(1));
 
-    expect(scoped?.[1]).toEqual(session);
-    expect(locator.workspaceRoot).toBe("/workspaces/alpha");
-    expect(locator.sidebarViewsBySide).toEqual({ left: "explorer" });
-    expect(locator.activityButtonPlacements).toEqual({});
+    expect([...writes.keys()]).toEqual(["/w/alpha-0011223344556677/core-api/user/state/ui-session"]);
+    expect(writes.values().next().value).toEqual(session);
   });
 
   it("restores every open vertical panel", () => {
@@ -279,58 +299,16 @@ describe("layout persistence", () => {
   });
 });
 
-describe("workspace pointer precedence on reload", () => {
-  function snapshot(workspaceName: string, workspaceRoot?: string) {
-    return {
-      version: 2 as const,
-      workspaceName,
-      ...(workspaceRoot ? { workspaceRoot } : {}),
-      workspaceEntries: [],
-      documents: [],
-      diagnostics: [],
-      output: [],
-    };
-  }
-
-  it("reopens the workspace named by the session pointer, not the stale global snapshot", () => {
-    const pointer = normalizeSession({ workspaceName: "precocerto", workspaceRoot: "/workspace/precocerto" });
-
-    expect(resolveRestoredWorkspace(pointer, snapshot("tinyIde", "/workspace/tinyIde"))).toEqual({
-      workspaceName: "precocerto",
-      workspaceRoot: "/workspace/precocerto",
-    });
-  });
-
-  it("keeps the global snapshot when it belongs to the pointed workspace", () => {
-    const pointer = normalizeSession({ workspaceName: "tinyIde", workspaceRoot: "/workspace/tinyIde" });
-    const owned = snapshot("tinyIde", "/workspace/tinyIde");
-
-    expect(resolveRestoredWorkspace(pointer, owned).snapshot).toBe(owned);
-  });
-
-  it("falls back to the global snapshot while no workspace pointer exists", () => {
-    const empty = normalizeSession({});
-    const orphan = snapshot("tinyIde", "/workspace/tinyIde");
-
-    expect(resolveRestoredWorkspace(empty, orphan)).toMatchObject({
-      workspaceName: "tinyIde",
-      workspaceRoot: "/workspace/tinyIde",
-    });
-    expect(resolveRestoredWorkspace(empty, undefined)).toEqual({ workspaceName: "Sem workspace" });
-  });
-});
-
 describe("workspace document persistence", () => {
-  it("discards the global snapshot once a workspace snapshot is written", async () => {
-    vi.resetModules();
+  it("keeps the snapshot inside the scope of the open workspace", async () => {
     const requests: Array<{ readonly method: string; readonly url: string }> = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       requests.push({ method: init?.method ?? "GET", url: String(url) });
       return new Response(null, { status: 204 });
     }));
-    const { writeReactSnapshot: write } = await import("./persistence");
+    setActiveWorkspaceScope("current-0011223344556677");
 
-    await write({
+    await writeReactSnapshot({
       workspaceName: "current",
       workspaceRoot: "/workspace/current",
       workspaceEntries: [],
@@ -339,11 +317,13 @@ describe("workspace document persistence", () => {
       output: [],
     });
 
-    expect(requests.filter((request) => request.method === "DELETE").map((request) => request.url)).toEqual([
-      "/core-api/user/state/application-snapshot",
-    ]);
+    // Um único arquivo, dentro do escopo. Não há mais snapshot global a
+    // descartar porque não há mais snapshot fora de um workspace.
+    expect(requests).toEqual([{
+      method: "PUT",
+      url: "/w/current-0011223344556677/core-api/user/state/application-snapshot",
+    }]);
   });
-
 
   it("does not duplicate a clean document body in savedContent", async () => {
     let persisted: unknown;
@@ -351,6 +331,7 @@ describe("workspace document persistence", () => {
       persisted = JSON.parse(String(init?.body));
       return Response.json(persisted);
     }));
+    setActiveWorkspaceScope("current-0011223344556677");
     const clean = document({ content: "large clean body", savedContent: "large clean body" });
 
     await writeReactSnapshot({

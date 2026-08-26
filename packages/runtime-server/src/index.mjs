@@ -6,6 +6,14 @@ import { basename, dirname, extname, isAbsolute, join, normalize, relative, reso
 import { pathToFileURL } from "node:url";
 import { createExecutionBackend, createWorkspacePluginConfiguration } from "./execution-backend.mjs";
 import { createUserDataBackend, defaultTinyIdeUserDataRoot } from "./user-data-backend.mjs";
+import {
+  assertWorkspaceScopeId,
+  listWorkspaceScopes,
+  readWorkspaceScope,
+  registerWorkspaceScope,
+  removeWorkspaceScope,
+  workspaceScopeId,
+} from "./workspace-scope.mjs";
 
 const CONTENT_TYPES = {
   ".css": "text/css; charset=utf-8",
@@ -23,8 +31,11 @@ const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MAX_WORKSPACE_RESOURCE_BYTES = 128 * 1024 * 1024;
 const MANIFEST_CACHE_TTL_MS = 1000;
 const CDN_ORIGIN = "https://cdn.jsdelivr.net";
-const DEFAULT_SESSION_ID = "default";
-const SESSION_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
+// Prefixo que carrega a identidade do workspace na própria URL. Toda chamada de
+// API feita com um projeto aberto passa por `/w/<scopeId>/…`: o escopo deixa de
+// depender de um header que qualquer janela pode omitir e passa a ser visível no
+// devtools, no log de acesso e no histórico do navegador.
+const WORKSPACE_SCOPE_PREFIX = "/w/";
 
 function validInlineScriptHashes(hashes) {
   if (!Array.isArray(hashes)) return [];
@@ -159,7 +170,11 @@ export function createTinyIdeRuntime(options) {
   const webRoot = options.webRoot ? resolve(options.webRoot) : undefined;
   const workspaceSearchRoot = resolve(options.workspaceSearchRoot ?? process.env.TINYIDE_WORKSPACES_ROOT ?? dirname(hostRoot));
   const userDataRoot = resolve(options.userDataRoot ?? defaultTinyIdeUserDataRoot());
-  const userDataBackend = createUserDataBackend({ root: userDataRoot });
+  // Desktop e servidor de desenvolvimento compartilham o mesmo diretório de
+  // dados do usuário. O `hostId` separa o que é ponteiro de janela ("qual
+  // projeto reabrir") sem separar o que é do projeto: o estado do workspace
+  // continua sendo um só, venha de onde vier.
+  const userDataBackend = createUserDataBackend({ root: userDataRoot, hostId: options.hostId ?? "web" });
   // O motivo distingue recargas rotineiras (rebuild de plugin, limpeza de
   // cache), em que backends devem preservar recursos reataráveis, da troca ou
   // fechamento de workspace ("workspace-switch"), em que devem encerrá-los.
@@ -188,41 +203,66 @@ export function createTinyIdeRuntime(options) {
     return descriptors;
   }
 
-  const sessionContexts = new Map();
-  // O workspace inicial pertence a uma sessão específica: o host que embute o
-  // runtime escolhe qual. O desktop nomeia a própria janela principal, então
-  // amarrar o bootstrap ao id "default" deixaria `TINYIDE_WORKSPACE` sem efeito.
-  const initialSessionId = options.initialSessionId ?? DEFAULT_SESSION_ID;
-  function createSessionContext(sessionId) {
+  // Um contexto por workspace, nunca por janela. Duas janelas do mesmo projeto
+  // compartilham processos e backends — que é o comportamento correto, já que
+  // compartilham o próprio diretório —, e projetos diferentes não têm como se
+  // enxergar: não existe mais um contexto "default" no qual todos caem.
+  const workspaceContexts = new Map();
+  const initialWorkspaceRoot = options.initialWorkspaceRoot
+    ? resolve(options.initialWorkspaceRoot)
+    : undefined;
+  const initialScopeId = initialWorkspaceRoot ? workspaceScopeId(initialWorkspaceRoot) : undefined;
+
+  function createWorkspaceContext(scopeId) {
     const context = {
-      sessionId,
-      workspaceRoot: sessionId === initialSessionId && options.initialWorkspaceRoot
-        ? resolve(options.initialWorkspaceRoot)
-        : undefined,
+      scopeId,
+      workspaceRoot: scopeId === initialScopeId ? initialWorkspaceRoot : undefined,
       backendHandlers: new Map(),
       executionBackend: undefined,
     };
     context.executionBackend = createExecutionBackend({ workspaceRoot: () => context.workspaceRoot });
     return context;
   }
-  function sessionContext(sessionId = DEFAULT_SESSION_ID) {
-    let context = sessionContexts.get(sessionId);
+
+  function workspaceContext(scopeId) {
+    let context = workspaceContexts.get(scopeId);
     if (!context) {
-      context = createSessionContext(sessionId);
-      sessionContexts.set(sessionId, context);
+      context = createWorkspaceContext(scopeId);
+      workspaceContexts.set(scopeId, context);
     }
     return context;
   }
+
+  // Requisições sem escopo só alcançam estado global (preferências do usuário,
+  // projetos recentes) e o registro de workspaces. Elas recebem um contexto
+  // vazio, sem workspace: qualquer rota que precise de arquivos responde 409 em
+  // vez de operar sobre "o último projeto que alguém abriu".
+  const unscopedContext = {
+    scopeId: undefined,
+    workspaceRoot: undefined,
+    backendHandlers: new Map(),
+    executionBackend: createExecutionBackend({ workspaceRoot: () => undefined }),
+  };
+
   async function resetExecutionBackend(context) {
     await context.executionBackend.dispose?.();
     context.executionBackend = createExecutionBackend({ workspaceRoot: () => context.workspaceRoot });
   }
-  function requestSessionId(request) {
-    const value = request.headers["x-tinyide-session-id"];
-    const sessionId = Array.isArray(value) ? value[0] : value;
-    if (!sessionId) return DEFAULT_SESSION_ID;
-    if (!SESSION_ID_PATTERN.test(sessionId)) throw new Error("Identificador de sessão inválido.");
-    return sessionId;
+
+  /**
+   * Separa `/w/<scopeId>` do restante do caminho. Um escopo malformado é erro de
+   * requisição, não motivo para cair no caminho sem escopo — silenciar aqui
+   * reintroduziria o estado compartilhado pela porta dos fundos.
+   */
+  function splitScopedPath(pathname) {
+    if (!pathname.startsWith(WORKSPACE_SCOPE_PREFIX)) return { pathname };
+    const rest = pathname.slice(WORKSPACE_SCOPE_PREFIX.length);
+    const separator = rest.indexOf("/");
+    const rawScopeId = separator < 0 ? rest : rest.slice(0, separator);
+    return {
+      scopeId: assertWorkspaceScopeId(decodeURIComponent(rawScopeId)),
+      pathname: separator < 0 ? "/" : rest.slice(separator),
+    };
   }
   const openInFileManager = options.openInFileManager ?? openSystemFileManager;
 
@@ -375,14 +415,17 @@ export function createTinyIdeRuntime(options) {
     response.end("Not found.");
   }) => {
     applySecurityHeaders(response, cachedPluginDescriptors(), options.inlineScriptHashes);
-    const requestUrl = new URL(request.url ?? "/", "http://localhost");
-    let context;
+    const rawUrl = new URL(request.url ?? "/", "http://localhost");
+    let scopeId;
+    let pathname;
     try {
-      context = sessionContext(requestSessionId(request));
+      ({ scopeId, pathname } = splitScopedPath(rawUrl.pathname));
     } catch (error) {
       writeJson(response, 400, {error: error instanceof Error ? error.message : String(error)});
       return;
     }
+    const requestUrl = new URL(`${pathname}${rawUrl.search}`, "http://localhost");
+    const context = scopeId ? workspaceContext(scopeId) : unscopedContext;
 
     if ((requestUrl.pathname.startsWith("/core-api/") || requestUrl.pathname.startsWith("/plugin-api/"))
       && !requestOriginAllowed(request)) {
@@ -390,15 +433,65 @@ export function createTinyIdeRuntime(options) {
       return;
     }
 
+    if (requestUrl.pathname === "/core-api/workspace/scopes" && request.method === "GET") {
+      void listWorkspaceScopes(userDataRoot)
+        .then((scopes) => writeJson(response, 200, scopes))
+        .catch((error) => writeJson(response, 500, {error: error instanceof Error ? error.message : String(error)}));
+      return;
+    }
+
+    if (requestUrl.pathname.startsWith("/core-api/workspace/scopes/")) {
+      let requestedScopeId;
+      try {
+        requestedScopeId = assertWorkspaceScopeId(
+          decodeURIComponent(requestUrl.pathname.slice("/core-api/workspace/scopes/".length)),
+        );
+      } catch (error) {
+        writeJson(response, 400, {error: error instanceof Error ? error.message : String(error)});
+        return;
+      }
+      if (request.method === "GET") {
+        void readWorkspaceScope(userDataRoot, requestedScopeId).then((descriptor) => {
+          if (!descriptor) writeJson(response, 404, {error: "Workspace desconhecido."});
+          else writeJson(response, 200, descriptor);
+        }).catch((error) => writeJson(response, 500, {error: error instanceof Error ? error.message : String(error)}));
+        return;
+      }
+      if (request.method === "DELETE") {
+        void removeWorkspaceScope(userDataRoot, requestedScopeId).then(() => {
+          workspaceContexts.delete(requestedScopeId);
+          writeJson(response, 204, undefined);
+        }).catch((error) => writeJson(response, 500, {error: error instanceof Error ? error.message : String(error)}));
+        return;
+      }
+      writeJson(response, 405, {error: "Método não permitido."});
+      return;
+    }
+
+    // Abrir um projeto é o que cria o escopo. A resposta devolve o `scopeId`
+    // para que a janela reancore todas as chamadas seguintes — e a própria URL —
+    // no diretório de estado daquele workspace.
     if (request.method === "POST" && requestUrl.pathname === "/core-api/workspace") {
       void readJson(request).then(async (payload) => {
         const nextWorkspaceRoot = resolveWorkspaceSelection(payload);
-        if (nextWorkspaceRoot !== context.workspaceRoot) {
-          await disposeCachedBackends(context, "workspace-switch");
-          await resetExecutionBackend(context);
-          context.workspaceRoot = nextWorkspaceRoot;
+        const nextScopeId = workspaceScopeId(nextWorkspaceRoot);
+        if (scopeId && scopeId !== nextScopeId) {
+          const error = new Error("O workspace informado não pertence a este escopo.");
+          error.statusCode = 409;
+          throw error;
         }
-        writeJson(response, 200, {workspaceRoot: context.workspaceRoot});
+        const descriptor = await registerWorkspaceScope(userDataRoot, nextWorkspaceRoot);
+        const target = workspaceContext(nextScopeId);
+        if (nextWorkspaceRoot !== target.workspaceRoot) {
+          await disposeCachedBackends(target, "workspace-switch");
+          await resetExecutionBackend(target);
+          target.workspaceRoot = nextWorkspaceRoot;
+        }
+        writeJson(response, 200, {
+          workspaceRoot: target.workspaceRoot,
+          scopeId: nextScopeId,
+          name: descriptor.name,
+        });
       }).catch((error) => writeJson(
         response,
         Number.isInteger(error?.statusCode) ? error.statusCode : 400,
@@ -408,6 +501,10 @@ export function createTinyIdeRuntime(options) {
     }
 
     if (request.method === "DELETE" && requestUrl.pathname === "/core-api/workspace") {
+      if (!scopeId) {
+        writeJson(response, 400, {error: "Fechar um workspace exige o escopo na URL."});
+        return;
+      }
       void disposeCachedBackends(context, "workspace-switch").then(() => {
         return resetExecutionBackend(context);
       }).then(() => {
@@ -562,7 +659,7 @@ export function createTinyIdeRuntime(options) {
       // Uma rejeição não tratada aqui derruba o processo Node inteiro — e com
       // ele todos os PTYs de terminal hospedados neste runtime.
       const apiPath = requestUrl.pathname.slice("/core-api".length);
-      void Promise.resolve(userDataBackend(request, response, apiPath))
+      void Promise.resolve(userDataBackend(request, response, apiPath, scopeId))
         .then((handled) => handled ? undefined : context.executionBackend(request, response, apiPath))
         .catch((error) => {
           if (!response.headersSent && !response.writableEnded) {
@@ -654,13 +751,28 @@ export function createTinyIdeRuntime(options) {
     userDataRoot,
     pluginsRoot,
     webRoot,
-    // A API programática age sobre a sessão que o host embutiu (a janela
-    // principal do desktop, ou "default" no servidor de desenvolvimento) — não
-    // sobre a primeira sessão que aparecer numa requisição.
-    get workspaceRoot() { return sessionContext(initialSessionId).workspaceRoot; },
+    workspaceScopeId,
+    initialScopeId,
+    /**
+     * Torna o workspace inicial resolvível por id antes de a primeira janela
+     * abrir: sem o registro em disco, um reload apontando para `/w/<scopeId>`
+     * não teria como redescobrir o caminho do projeto.
+     */
+    registerInitialWorkspaceScope() {
+      return initialWorkspaceRoot
+        ? registerWorkspaceScope(userDataRoot, initialWorkspaceRoot)
+        : Promise.resolve(undefined);
+    },
+    // A API programática age sobre o workspace que o host embutiu via
+    // `initialWorkspaceRoot` — não sobre o primeiro escopo que aparecer numa
+    // requisição.
+    get workspaceRoot() {
+      return initialScopeId ? workspaceContext(initialScopeId).workspaceRoot : undefined;
+    },
     setWorkspaceRoot(path) {
-      const context = sessionContext(initialSessionId);
       const nextWorkspaceRoot = path ? resolve(path) : undefined;
+      if (!nextWorkspaceRoot) return undefined;
+      const context = workspaceContext(workspaceScopeId(nextWorkspaceRoot));
       if (nextWorkspaceRoot !== context.workspaceRoot) {
         void resetExecutionBackend(context);
         context.workspaceRoot = nextWorkspaceRoot;
@@ -668,26 +780,27 @@ export function createTinyIdeRuntime(options) {
       }
       return context.workspaceRoot;
     },
-    // Recarregar código de plugin invalida o backend de todas as sessões: cada
-    // janela tem o próprio cache, e limpar só o da sessão do host deixaria as
-    // demais rodando a versão antiga.
+    // Recarregar código de plugin invalida o backend de todos os workspaces:
+    // cada um tem o próprio cache, e limpar só o do workspace do host deixaria
+    // os demais rodando a versão antiga.
     clearBackendCache() {
-      return Promise.allSettled([...sessionContexts.values()]
+      return Promise.allSettled([...workspaceContexts.values(), unscopedContext]
         .map((context) => disposeCachedBackends(context)));
     },
     clearManifestCache() { manifestCache = { expiresAt: 0, descriptors: [] }; },
     async dispose() {
-      await Promise.allSettled([...sessionContexts.values()].flatMap((context) => [
+      await Promise.allSettled([...workspaceContexts.values(), unscopedContext].flatMap((context) => [
         context.executionBackend.dispose?.(),
         disposeCachedBackends(context),
       ]));
-      sessionContexts.clear();
+      workspaceContexts.clear();
     },
   };
 }
 
 export async function startTinyIdeRuntime(options) {
   const runtime = createTinyIdeRuntime(options);
+  await runtime.registerInitialWorkspaceScope();
   const server = createServer((request, response) => runtime.middleware(request, response));
   server.maxHeadersCount = 100;
   // O runtime só atende loopback e um único consumidor (o renderer). Manter o idle de

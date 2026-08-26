@@ -1,5 +1,5 @@
 import type { BrowserDirectoryHandle, WorkspaceEntry } from "../browser-filesystem";
-import { readStoredState, removeStoredState, writeStoredState } from "../session-store";
+import { readGlobalState, writeGlobalState } from "../session-store";
 
 const RECENT_PROJECTS_KEY = "recent-projects";
 const PROJECT_OPEN_PREFERENCE_KEY = "project-open-preference";
@@ -51,7 +51,7 @@ export function classifyOpenedDirectory(entries: readonly WorkspaceEntry[]): "pr
 }
 
 export async function readRecentProjects(): Promise<readonly RecentProject[]> {
-  return normalizeRecentProjects(await readStoredState(RECENT_PROJECTS_KEY));
+  return normalizeRecentProjects(await readGlobalState(RECENT_PROJECTS_KEY));
 }
 
 export async function rememberRecentProject(input: {
@@ -74,24 +74,22 @@ export async function rememberRecentProject(input: {
   };
   // Handles são objetos vivos e nunca são persistidos. Projetos recentes são
   // reconstruídos exclusivamente a partir do caminho resolvido pelo host.
-  await removeStoredState(`recent-project-handle.${id}`).catch(() => undefined);
-  await writeStoredState(RECENT_PROJECTS_KEY, [project, ...recent.filter((item) => item.id !== id)].slice(0, MAX_RECENT_PROJECTS));
+  await writeGlobalState(RECENT_PROJECTS_KEY, [project, ...recent.filter((item) => item.id !== id)].slice(0, MAX_RECENT_PROJECTS));
   return project;
 }
 
 export async function removeRecentProject(id: string): Promise<void> {
   const recent = await readRecentProjects();
-  await writeStoredState(RECENT_PROJECTS_KEY, recent.filter((item) => item.id !== id));
-  await removeStoredState(`recent-project-handle.${id}`);
+  await writeGlobalState(RECENT_PROJECTS_KEY, recent.filter((item) => item.id !== id));
 }
 
 export async function readProjectOpenPreference(): Promise<ProjectOpenTarget> {
-  const value = await readStoredState(PROJECT_OPEN_PREFERENCE_KEY);
+  const value = await readGlobalState(PROJECT_OPEN_PREFERENCE_KEY);
   return value === "current" || value === "new" ? value : "ask";
 }
 
 export async function writeProjectOpenPreference(value: ProjectOpenTarget): Promise<void> {
-  await writeStoredState(PROJECT_OPEN_PREFERENCE_KEY, value);
+  await writeGlobalState(PROJECT_OPEN_PREFERENCE_KEY, value);
 }
 
 export const projectHistoryInternals = {

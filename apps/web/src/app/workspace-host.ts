@@ -40,8 +40,7 @@ export interface TinyIdeDesktopApi {
   getPathForFile(file: File): string;
   pickDirectory?(defaultPath?: string): Promise<DesktopWorkspaceDescriptor | undefined>;
   restoreDirectory?(path: string): Promise<DesktopWorkspaceDescriptor | undefined>;
-  restoreLastDirectory?(): Promise<DesktopWorkspaceDescriptor | undefined>;
-  openProjectWindow?(path: string, sessionId: string): Promise<boolean>;
+  openProjectWindow?(path: string): Promise<boolean>;
   listDirectory?(token: string, path: string): Promise<readonly DesktopWorkspaceEntryDescriptor[]>;
   ensureFile?(token: string, path: string, create: boolean): Promise<boolean>;
   ensureDirectory?(token: string, path: string, create: boolean): Promise<boolean>;
@@ -437,20 +436,10 @@ export async function restoreDesktopWorkspaceHandle(
   return descriptor ? new DesktopDirectoryHandleImpl(desktop, descriptor) : undefined;
 }
 
-export async function restoreLastDesktopWorkspaceHandle(
-  desktop: TinyIdeDesktopApi | undefined = typeof window === "undefined"
-    ? undefined
-    : window.tinyideDesktop,
-): Promise<BrowserDirectoryHandle | undefined> {
-  if (!supportsDesktopWorkspace(desktop) || !desktop.restoreLastDirectory) return undefined;
-  const descriptor = await desktop.restoreLastDirectory();
-  return descriptor ? new DesktopDirectoryHandleImpl(desktop, descriptor) : undefined;
-}
-
-export async function openDesktopProjectWindow(path: string, sessionId: string): Promise<boolean> {
+export async function openDesktopProjectWindow(path: string): Promise<boolean> {
   const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
   if (!desktop?.openProjectWindow) return false;
-  return desktop.openProjectWindow(path, sessionId);
+  return desktop.openProjectWindow(path);
 }
 
 function parentPath(path: string): string | undefined {

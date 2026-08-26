@@ -2,11 +2,35 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import {
+  assertWorkspaceScopeId,
+  hostScopeDirectory,
+  workspaceScopeDirectory,
+} from "./workspace-scope.mjs";
 
 const USER_SETTINGS_VERSION = 1;
 const STATE_KEY_PATTERN = /^[a-z0-9][a-z0-9._-]{0,191}$/i;
 const PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 const userSettingsWrites = new Map();
+
+/**
+ * Estado que pertence ao usuário, não a um projeto: preferências e histórico
+ * que fazem sentido compartilhar entre todos os workspaces. Qualquer outra
+ * chave só é aceita dentro de um escopo de workspace.
+ *
+ * A lista é uma allowlist, e não uma denylist, de propósito: sem ela bastaria
+ * alguém acrescentar uma chave nova sem escopo para o vazamento de estado entre
+ * projetos voltar em silêncio — que foi como o problema original nasceu.
+ */
+const GLOBAL_STATE_KEYS = new Set([
+  "recent-projects",
+  "project-open-preference",
+  "plugins",
+]);
+
+export function isGlobalStateKey(key) {
+  return GLOBAL_STATE_KEYS.has(key);
+}
 
 function writeJson(response, status, payload) {
   response.statusCode = status;
@@ -33,9 +57,24 @@ function settingsPath(root) {
   return join(root, "settings.json");
 }
 
-function statePath(root, key) {
+/**
+ * Sem `scopeId` o estado é global (`<root>/state`); com escopo ele vive dentro
+ * do diretório do próprio workspace. Não existe caminho intermediário: uma
+ * chave não-global fora de escopo é recusada em vez de cair no diretório
+ * compartilhado.
+ */
+function statePath(root, key, scopeId) {
   if (!STATE_KEY_PATTERN.test(key)) throw new Error("Chave de estado do usuário inválida.");
+  if (scopeId) return join(workspaceScopeDirectory(root, scopeId), "state", `${key}.json`);
+  if (!isGlobalStateKey(key)) {
+    throw new Error(`A chave de estado '${key}' pertence a um workspace e exige escopo.`);
+  }
   return join(root, "state", `${key}.json`);
+}
+
+function hostStatePath(root, hostId, key) {
+  if (!STATE_KEY_PATTERN.test(key)) throw new Error("Chave de estado do host inválida.");
+  return join(hostScopeDirectory(root, hostId), `${key}.json`);
 }
 
 async function readJsonFile(path) {
@@ -133,21 +172,75 @@ export async function patchUserPluginData(root, pluginId, patch) {
   return normalizedPluginData(settings.pluginData?.[id]);
 }
 
-export async function readUserState(root, key) {
-  return await readJsonFile(statePath(root, key));
+export async function readUserState(root, key, scopeId) {
+  return await readJsonFile(statePath(root, key, scopeId));
 }
 
-export async function writeUserState(root, key, value) {
-  await writeJsonFile(statePath(root, key), value);
+export async function writeUserState(root, key, value, scopeId) {
+  await writeJsonFile(statePath(root, key, scopeId), value);
 }
 
-export async function removeUserState(root, key) {
-  await rm(statePath(root, key), { force: true });
+export async function removeUserState(root, key, scopeId) {
+  await rm(statePath(root, key, scopeId), { force: true });
 }
 
-export function createUserDataBackend({ root }) {
+/**
+ * Ponteiro de "qual projeto este host reabre". É por host — não global e não por
+ * workspace — porque o desktop e uma aba de navegador compartilham o mesmo
+ * diretório de dados do usuário: um ponteiro único faria o último a gravar
+ * decidir o que o outro abre no próximo reload.
+ */
+export async function readHostState(root, hostId, key) {
+  return await readJsonFile(hostStatePath(root, hostId, key));
+}
+
+export async function writeHostState(root, hostId, key, value) {
+  await writeJsonFile(hostStatePath(root, hostId, key), value);
+}
+
+export async function removeHostState(root, hostId, key) {
+  await rm(hostStatePath(root, hostId, key), { force: true });
+}
+
+export function createUserDataBackend({ root, hostId = "web" }) {
   const userDataRoot = resolve(root);
-  return async function handleUserData(request, response, path) {
+  const host = assertWorkspaceScopeId(hostId);
+  return async function handleUserData(request, response, path, scopeId) {
+    if (path.startsWith("/host/state/")) {
+      let key;
+      try {
+        key = decodeURIComponent(path.slice("/host/state/".length));
+      } catch {
+        writeJson(response, 400, { error: "Chave de estado do host inválida." });
+        return true;
+      }
+      if (!STATE_KEY_PATTERN.test(key)) {
+        writeJson(response, 400, { error: "Chave de estado do host inválida." });
+        return true;
+      }
+      if (request.method === "GET") {
+        const value = await readHostState(userDataRoot, host, key);
+        if (value === undefined) writeJson(response, 204);
+        else writeJson(response, 200, value);
+        return true;
+      }
+      if (request.method === "PUT") {
+        const chunks = [];
+        for await (const chunk of request) chunks.push(chunk);
+        const value = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : null;
+        await writeHostState(userDataRoot, host, key, value);
+        writeJson(response, 200, value);
+        return true;
+      }
+      if (request.method === "DELETE") {
+        await removeHostState(userDataRoot, host, key);
+        writeJson(response, 204);
+        return true;
+      }
+      writeJson(response, 405, { error: "Método não permitido." });
+      return true;
+    }
+
     if (path === "/user/settings") {
       if (request.method === "GET") {
         writeJson(response, 200, await readUserSettings(userDataRoot));
@@ -207,8 +300,14 @@ export function createUserDataBackend({ root }) {
       writeJson(response, 400, { error: "Chave de estado do usuário inválida." });
       return true;
     }
+    if (!scopeId && !isGlobalStateKey(key)) {
+      writeJson(response, 400, {
+        error: `A chave de estado '${key}' pertence a um workspace e exige escopo.`,
+      });
+      return true;
+    }
     if (request.method === "GET") {
-      const value = await readUserState(userDataRoot, key);
+      const value = await readUserState(userDataRoot, key, scopeId);
       // Ausência de estado é um caso normal (primeira execução ou preferência
       // ainda não definida), não um erro HTTP que deva poluir o console.
       if (value === undefined) writeJson(response, 204);
@@ -219,12 +318,12 @@ export function createUserDataBackend({ root }) {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
       const value = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : null;
-      await writeUserState(userDataRoot, key, value);
+      await writeUserState(userDataRoot, key, value, scopeId);
       writeJson(response, 200, value);
       return true;
     }
     if (request.method === "DELETE") {
-      await removeUserState(userDataRoot, key);
+      await removeUserState(userDataRoot, key, scopeId);
       writeJson(response, 204);
       return true;
     }
@@ -235,5 +334,7 @@ export function createUserDataBackend({ root }) {
 
 export const userDataInternals = {
   statePath,
+  hostStatePath,
   settingsPath,
+  GLOBAL_STATE_KEYS,
 };

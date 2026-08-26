@@ -18,7 +18,8 @@ async function fixture(options = {}) {
   const webRoot = join(root, "web");
   const pluginsRoot = join(root, "plugins");
   const workspaceRoot = join(root, "workspace");
-  await Promise.all([mkdir(webRoot), mkdir(pluginsRoot), mkdir(workspaceRoot)]);
+  const userDataRoot = options.userDataRoot ?? join(root, "user-data");
+  await Promise.all([mkdir(webRoot), mkdir(pluginsRoot), mkdir(workspaceRoot), mkdir(userDataRoot, { recursive: true })]);
   await writeFile(join(webRoot, "index.html"), "<!doctype html><title>tinyIde</title>");
   await writeFile(join(webRoot, "app-AbCdEf12.js"), "export {};");
   const runtime = await startTinyIdeRuntime({
@@ -26,20 +27,26 @@ async function fixture(options = {}) {
     webRoot,
     pluginsRoot,
     workspaceSearchRoot: root,
+    userDataRoot,
     initialWorkspaceRoot: workspaceRoot,
     host: "127.0.0.1",
     port: 0,
     ...options,
   });
   resources.push({ runtime, root });
-  return { root, webRoot, pluginsRoot, workspaceRoot, runtime };
+  // Toda chamada que toca o projeto viaja com o escopo no caminho. O helper
+  // deixa isso explícito nos testes: não existe rota de workspace "sem dono".
+  const scoped = (path, workspace = workspaceRoot) => (
+    `${runtime.url}/w/${runtime.workspaceScopeId(workspace)}${path}`
+  );
+  return { root, webRoot, pluginsRoot, workspaceRoot, userDataRoot, runtime, scoped };
 }
 
 describe("runtime server hardening", () => {
   it("terminates active execution process trees when the runtime closes", async () => {
-    const { runtime, root, workspaceRoot } = await fixture();
+    const { runtime, root, workspaceRoot, scoped } = await fixture();
     const pidPath = join(root, "child.pid");
-    const started = await fetch(`${runtime.url}/core-api/execution/processes`, {
+    const started = await fetch(scoped("/core-api/execution/processes"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -143,10 +150,13 @@ describe("runtime server hardening", () => {
   });
 
   it("rejects malformed or unsafe plugin identifiers without invoking a backend", async () => {
-    const { runtime } = await fixture();
-    const invalid = await fetch(`${runtime.url}/plugin-api/%2Fetc/status`);
+    const { runtime, scoped } = await fixture();
+    const invalid = await fetch(scoped("/plugin-api/%2Fetc/status"));
     expect(invalid.status).toBe(400);
     await expect(invalid.json()).resolves.toEqual({ error: "Identificador de plugin inválido." });
+
+    // Sem escopo o backend do plugin sequer é alcançável.
+    expect((await fetch(`${runtime.url}/plugin-api/sample/status`)).status).toBe(409);
   });
 
   it("caches plugin directory discovery and supports explicit invalidation", async () => {
@@ -199,39 +209,57 @@ describe("runtime server hardening", () => {
   });
 
   it("selects and clears a workspace through the public API", async () => {
-    const { runtime, workspaceRoot } = await fixture();
+    const { runtime, workspaceRoot, scoped } = await fixture();
     const selected = await fetch(`${runtime.url}/core-api/workspace`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: "workspace", path: workspaceRoot }),
     });
     expect(selected.status).toBe(200);
-    await expect(selected.json()).resolves.toEqual({ workspaceRoot });
+    await expect(selected.json()).resolves.toEqual({
+      workspaceRoot,
+      scopeId: runtime.workspaceScopeId(workspaceRoot),
+      name: basename(workspaceRoot),
+    });
     expect(runtime.workspaceRoot).toBe(workspaceRoot);
 
-    const cleared = await fetch(`${runtime.url}/core-api/workspace`, { method: "DELETE" });
+    const cleared = await fetch(scoped("/core-api/workspace"), { method: "DELETE" });
     expect(cleared.status).toBe(204);
     expect(runtime.workspaceRoot).toBeUndefined();
-    const pluginRequest = await fetch(`${runtime.url}/plugin-api/sample/status`);
+    const pluginRequest = await fetch(scoped("/plugin-api/sample/status"));
     expect(pluginRequest.status).toBe(409);
   });
 
+  it("recusa fechar workspace e ler estado de projeto sem escopo na URL", async () => {
+    const { runtime } = await fixture();
+    const semEscopo = await fetch(`${runtime.url}/core-api/workspace`, { method: "DELETE" });
+    expect(semEscopo.status).toBe(400);
+
+    // Chave de projeto fora de escopo é erro, não gravação no arquivo global.
+    const estado = await fetch(`${runtime.url}/core-api/user/state/ui-session`);
+    expect(estado.status).toBe(400);
+    await expect(estado.json()).resolves.toMatchObject({ error: expect.stringContaining("exige escopo") });
+
+    // Chaves do usuário continuam acessíveis sem projeto aberto.
+    expect((await fetch(`${runtime.url}/core-api/user/state/recent-projects`)).status).toBe(204);
+  });
+
   it("serves workspace resources through a reconstructible host-backed API", async () => {
-    const { runtime, workspaceRoot } = await fixture();
+    const { workspaceRoot, scoped } = await fixture();
     await mkdir(join(workspaceRoot, "src"));
     await writeFile(join(workspaceRoot, "src", "main.txt"), "before");
 
-    const list = await fetch(`${runtime.url}/core-api/workspace/resources?path=src`);
+    const list = await fetch(scoped("/core-api/workspace/resources?path=src"));
     expect(list.status).toBe(200);
     await expect(list.json()).resolves.toEqual([
       { name: "main.txt", kind: "file" },
     ]);
 
-    const read = await fetch(`${runtime.url}/core-api/workspace/resource?path=src%2Fmain.txt`);
+    const read = await fetch(scoped("/core-api/workspace/resource?path=src%2Fmain.txt"));
     expect(read.status).toBe(200);
     await expect(read.text()).resolves.toBe("before");
 
-    const write = await fetch(`${runtime.url}/core-api/workspace/resource?path=src%2Fmain.txt`, {
+    const write = await fetch(scoped("/core-api/workspace/resource?path=src%2Fmain.txt"), {
       method: "PUT",
       headers: { "content-type": "application/octet-stream" },
       body: "after",
@@ -239,51 +267,81 @@ describe("runtime server hardening", () => {
     expect(write.status).toBe(200);
     await expect(readFile(join(workspaceRoot, "src", "main.txt"), "utf8")).resolves.toBe("after");
 
-    const create = await fetch(`${runtime.url}/core-api/workspace/resources`, {
+    const create = await fetch(scoped("/core-api/workspace/resources"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: "src/new.txt", kind: "file", create: true }),
     });
     expect(create.status).toBe(200);
 
-    const remove = await fetch(`${runtime.url}/core-api/workspace/resource?path=src%2Fnew.txt`, {
+    const remove = await fetch(scoped("/core-api/workspace/resource?path=src%2Fnew.txt"), {
       method: "DELETE",
     });
     expect(remove.status).toBe(200);
     await expect(readFile(join(workspaceRoot, "src", "new.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("isolates workspace selection between browser sessions", async () => {
+  it("isola o estado de cada workspace pelo caminho da requisição", async () => {
     const { runtime, root, workspaceRoot } = await fixture();
     const secondWorkspace = join(root, "second-workspace");
     await mkdir(secondWorkspace);
-    const select = (sessionId, name, path) => fetch(`${runtime.url}/core-api/workspace`, {
+    const select = (name, path) => fetch(`${runtime.url}/core-api/workspace`, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-tinyide-session-id": sessionId,
-      },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ name, path }),
     });
-    expect((await select("session-a", basename(workspaceRoot), workspaceRoot)).status).toBe(200);
-    expect((await select("session-b", basename(secondWorkspace), secondWorkspace)).status).toBe(200);
+    expect((await select(basename(workspaceRoot), workspaceRoot)).status).toBe(200);
+    expect((await select(basename(secondWorkspace), secondWorkspace)).status).toBe(200);
 
-    const context = async (sessionId) => fetch(`${runtime.url}/core-api/context`, {
-      headers: { "x-tinyide-session-id": sessionId },
-    }).then((response) => response.json());
-    await expect(context("session-a")).resolves.toEqual({ workspaceRoot });
-    await expect(context("session-b")).resolves.toEqual({ workspaceRoot: secondWorkspace });
+    const context = async (workspace) => fetch(
+      `${runtime.url}/w/${runtime.workspaceScopeId(workspace)}/core-api/context`,
+    ).then((response) => response.json());
+    await expect(context(workspaceRoot)).resolves.toEqual({ workspaceRoot });
+    await expect(context(secondWorkspace)).resolves.toEqual({ workspaceRoot: secondWorkspace });
+
+    // Dois projetos, dois diretórios de estado — e um não enxerga o do outro.
+    const write = (workspace, value) => fetch(
+      `${runtime.url}/w/${runtime.workspaceScopeId(workspace)}/core-api/user/state/ui-session`,
+      { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ value }) },
+    );
+    await write(workspaceRoot, "alpha");
+    await write(secondWorkspace, "beta");
+    const read = (workspace) => fetch(
+      `${runtime.url}/w/${runtime.workspaceScopeId(workspace)}/core-api/user/state/ui-session`,
+    ).then((response) => response.json());
+    await expect(read(workspaceRoot)).resolves.toEqual({ value: "alpha" });
+    await expect(read(secondWorkspace)).resolves.toEqual({ value: "beta" });
+  });
+
+  it("resolve o escopo da URL de volta para o projeto e recusa ids inválidos", async () => {
+    const { runtime, workspaceRoot } = await fixture();
+    await fetch(`${runtime.url}/core-api/workspace`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: basename(workspaceRoot), path: workspaceRoot }),
+    });
+    const scopeId = runtime.workspaceScopeId(workspaceRoot);
+
+    const descriptor = await fetch(`${runtime.url}/core-api/workspace/scopes/${scopeId}`);
+    expect(descriptor.status).toBe(200);
+    await expect(descriptor.json()).resolves.toMatchObject({ path: workspaceRoot, scopeId });
+
+    const desconhecido = await fetch(`${runtime.url}/core-api/workspace/scopes/nao-registrado-0000`);
+    expect(desconhecido.status).toBe(404);
+
+    const invalido = await fetch(`${runtime.url}/w/..%2F..%2Fetc/core-api/context`);
+    expect(invalido.status).toBe(400);
   });
 
   it("opens only workspace directories in the system file manager", async () => {
     const openedDirectories = [];
-    const { runtime, workspaceRoot } = await fixture({
+    const { workspaceRoot, scoped } = await fixture({
       openInFileManager: async (directory) => { openedDirectories.push(directory); },
     });
     await mkdir(join(workspaceRoot, "src"));
     await writeFile(join(workspaceRoot, "src", "main.ts"), "export {};\n");
 
-    const file = await fetch(`${runtime.url}/core-api/workspace/open-in-file-manager`, {
+    const file = await fetch(scoped("/core-api/workspace/open-in-file-manager"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: "src/main.ts" }),
@@ -291,7 +349,7 @@ describe("runtime server hardening", () => {
     expect(file.status).toBe(200);
     expect(openedDirectories).toEqual([join(workspaceRoot, "src")]);
 
-    const root = await fetch(`${runtime.url}/core-api/workspace/open-in-file-manager`, {
+    const root = await fetch(scoped("/core-api/workspace/open-in-file-manager"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: "" }),
@@ -299,7 +357,7 @@ describe("runtime server hardening", () => {
     expect(root.status).toBe(200);
     expect(openedDirectories).toEqual([join(workspaceRoot, "src"), workspaceRoot]);
 
-    const outside = await fetch(`${runtime.url}/core-api/workspace/open-in-file-manager`, {
+    const outside = await fetch(scoped("/core-api/workspace/open-in-file-manager"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: "../outside" }),
@@ -326,7 +384,7 @@ describe("runtime server hardening", () => {
   });
 
   it("loads a plugin backend and reuses it while unchanged", async () => {
-    const { runtime, pluginsRoot } = await fixture();
+    const { runtime, pluginsRoot, scoped } = await fixture();
     const pluginRoot = join(pluginsRoot, "sample");
     await mkdir(pluginRoot);
     await writeFile(join(pluginRoot, "plugin.json"), JSON.stringify({
@@ -347,14 +405,14 @@ describe("runtime server hardening", () => {
     `);
     runtime.clearManifestCache();
 
-    const first = await fetch(`${runtime.url}/plugin-api/sample/ping`).then((response) => response.json());
-    const second = await fetch(`${runtime.url}/plugin-api/sample/ping`).then((response) => response.json());
+    const first = await fetch(scoped("/plugin-api/sample/ping")).then((response) => response.json());
+    const second = await fetch(scoped("/plugin-api/sample/ping")).then((response) => response.json());
     expect(first).toMatchObject({ path: "/ping", requests: 1 });
     expect(second).toMatchObject({ path: "/ping", requests: 2 });
   });
 
   it("passes the workspace-switch reason to backend dispose only when the workspace changes", async () => {
-    const { runtime, root, pluginsRoot, workspaceRoot } = await fixture();
+    const { runtime, root, pluginsRoot, workspaceRoot, scoped } = await fixture();
     const secondWorkspace = join(root, "second-workspace");
     await mkdir(secondWorkspace);
     const reasonsPath = join(root, "dispose-reasons.json");
@@ -386,24 +444,24 @@ describe("runtime server hardening", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name, path }),
     });
-    expect((await fetch(`${runtime.url}/plugin-api/observer/status`)).status).toBe(200);
+    expect((await fetch(scoped("/plugin-api/observer/status"))).status).toBe(200);
     await runtime.clearBackendCache();
-    expect((await fetch(`${runtime.url}/plugin-api/observer/status`)).status).toBe(200);
+    expect((await fetch(scoped("/plugin-api/observer/status"))).status).toBe(200);
+    // Selecionar o segundo projeto não toca no backend do primeiro: cada
+    // escopo tem o próprio. O descarte vem de fechar o escopo, não de abrir
+    // outro — que é justamente o isolamento que faltava.
     expect((await select(basename(secondWorkspace), secondWorkspace)).status).toBe(200);
-    expect((await fetch(`${runtime.url}/plugin-api/observer/status`)).status).toBe(200);
-    expect((await select(basename(workspaceRoot), workspaceRoot)).status).toBe(200);
+    expect((await fetch(scoped("/plugin-api/observer/status"))).status).toBe(200);
+    expect((await fetch(scoped("/core-api/workspace"), { method: "DELETE" })).status).toBe(204);
 
-    // Recarga rotineira (cache limpo) preserva recursos: sem motivo. Troca de
-    // workspace encerra-os: motivo "workspace-switch".
     await expect(readFile(reasonsPath, "utf8").then(JSON.parse)).resolves.toEqual([
       null,
-      "workspace-switch",
       "workspace-switch",
     ]);
   });
 
   it("preserves plugin processes when reload restores the same workspace", async () => {
-    const { runtime, root, pluginsRoot, workspaceRoot } = await fixture();
+    const { runtime, root, pluginsRoot, workspaceRoot, scoped } = await fixture();
     const pluginRoot = join(pluginsRoot, "persistent");
     const pidPath = join(root, "plugin-child.pid");
     await mkdir(pluginRoot);
@@ -432,7 +490,7 @@ describe("runtime server hardening", () => {
     `);
     runtime.clearManifestCache();
 
-    const activated = await fetch(`${runtime.url}/plugin-api/persistent/status`);
+    const activated = await fetch(scoped("/plugin-api/persistent/status"));
     expect(activated.status).toBe(200);
     const childPid = Number(await readFile(pidPath, "utf8"));
     expect(childPid).toBeGreaterThan(0);
@@ -453,7 +511,7 @@ describe("runtime server hardening", () => {
   });
 
   it("blocks plugin backends that escape their plugin directory", async () => {
-    const { runtime, root, pluginsRoot } = await fixture();
+    const { runtime, root, pluginsRoot, scoped } = await fixture();
     await writeFile(join(root, "outside-backend.mjs"), "export function createBackend() {}");
     const pluginRoot = join(pluginsRoot, "unsafe");
     await mkdir(pluginRoot);
@@ -465,16 +523,24 @@ describe("runtime server hardening", () => {
     }));
     runtime.clearManifestCache();
 
-    const response = await fetch(`${runtime.url}/plugin-api/unsafe/ping`);
+    const response = await fetch(scoped("/plugin-api/unsafe/ping"));
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining("backend inválido") });
   });
 
   it("serves the SPA fallback and rejects malformed plugin asset paths", async () => {
-    const { runtime } = await fixture();
+    const { runtime, workspaceRoot, scoped } = await fixture();
     const fallback = await fetch(`${runtime.url}/deep/link`);
     expect(fallback.status).toBe(200);
     expect(await fallback.text()).toContain("tinyIde");
+
+    // A própria página vive dentro do escopo: recarregar /w/<id>/ devolve a
+    // aplicação, e é assim que a janela reabre o mesmo projeto sem ponteiro.
+    const scopedPage = await fetch(`${runtime.url}/w/${runtime.workspaceScopeId(workspaceRoot)}/`);
+    expect(scopedPage.status).toBe(200);
+    expect(await scopedPage.text()).toContain("tinyIde");
+    // Assets hasheados continuam servidos por baixo do escopo.
+    expect((await fetch(scoped("/app-AbCdEf12.js"))).status).toBe(200);
 
     const malformed = await fetch(`${runtime.url}/dev-plugins/%E0%A4%A`);
     expect(malformed.status).toBe(400);
@@ -487,25 +553,51 @@ describe("runtime server hardening", () => {
     expect(() => runtime.clearBackendCache()).not.toThrow();
   });
 
-  it("isola o workspace por sessão e entrega o bootstrap à sessão do host", async () => {
-    const { runtime, workspaceRoot, root } = await fixture({ initialSessionId: "desktop" });
+  it("entrega o workspace inicial ao escopo do próprio caminho, e a nenhum outro", async () => {
+    const { runtime, workspaceRoot, root, userDataRoot } = await fixture();
     const outroWorkspace = join(root, "outro");
     await mkdir(outroWorkspace);
 
-    // O workspace inicial pertence à sessão nomeada pelo host, não a "default".
+    // O workspace embutido pelo host pertence ao escopo derivado do caminho.
     expect(runtime.workspaceRoot).toBe(workspaceRoot);
-    const semSessao = await fetch(`${runtime.url}/core-api/workspace/resources?path=`);
-    expect(semSessao.status).toBe(409);
+    expect(runtime.initialScopeId).toBe(runtime.workspaceScopeId(workspaceRoot));
+    // E já nasce registrado em disco, para que um reload em /w/<id> o resolva.
+    await expect(readFile(
+      join(userDataRoot, "workspaces", runtime.initialScopeId, "workspace.json"),
+      "utf8",
+    ).then(JSON.parse)).resolves.toMatchObject({ path: workspaceRoot });
 
-    // Trocar o projeto numa sessão não move o da outra.
+    // Requisição sem escopo não alcança arquivo nenhum.
+    const semEscopo = await fetch(`${runtime.url}/core-api/workspace/resources?path=`);
+    expect(semEscopo.status).toBe(409);
+
+    // Abrir outro projeto não move o do host.
     const trocou = await fetch(`${runtime.url}/core-api/workspace`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-tinyide-session-id": "outra-janela" },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: basename(outroWorkspace), path: outroWorkspace }),
     });
     expect(trocou.status).toBe(200);
-    expect(await trocou.json()).toEqual({ workspaceRoot: outroWorkspace });
+    expect(await trocou.json()).toMatchObject({ workspaceRoot: outroWorkspace });
     expect(runtime.workspaceRoot).toBe(workspaceRoot);
+  });
+
+  it("separa o ponteiro de projeto por host, mesmo compartilhando o diretório de dados", async () => {
+    const { runtime, root, userDataRoot } = await fixture();
+    const outro = await fixture({ hostId: "desktop", userDataRoot });
+
+    const write = (target, path) => fetch(`${target.url}/core-api/host/state/last-workspace`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    await write(runtime, join(root, "projeto-do-navegador"));
+    await write(outro.runtime, join(root, "projeto-do-desktop"));
+
+    const read = (target) => fetch(`${target.url}/core-api/host/state/last-workspace`)
+      .then((response) => response.json());
+    await expect(read(runtime)).resolves.toEqual({ path: join(root, "projeto-do-navegador") });
+    await expect(read(outro.runtime)).resolves.toEqual({ path: join(root, "projeto-do-desktop") });
   });
 
   it("configures conservative HTTP server limits", async () => {

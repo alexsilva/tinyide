@@ -1,6 +1,6 @@
 {
   "name": "tinyide",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "description": "IDE extensível baseada em navegador, empacotada para Linux.",
   "main": "apps/desktop/main.cjs",
   "author": "tinyIde",

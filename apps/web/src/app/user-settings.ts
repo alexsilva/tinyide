@@ -1,5 +1,5 @@
 import type { PluginSettingsMap } from "@tinyide/plugin-api";
-import { projectRuntimeFetch } from "./project-session";
+import { runtimeFetch } from "./project-session";
 import type { WorkspaceEditorSettings } from "./workspace-settings";
 import type { WorkbenchFontPreferences } from "./workbench/font-manager";
 
@@ -38,7 +38,7 @@ export function mergePluginSettings(
 }
 
 export async function readUserSettings(): Promise<UserSettings> {
-  const response = await projectRuntimeFetch("/core-api/user/settings", { cache: "no-store" });
+  const response = await runtimeFetch("/core-api/user/settings", { cache: "no-store" });
   const payload = await response.json() as UserSettings | { readonly error?: string };
   if (!response.ok) {
     throw new Error("error" in payload && payload.error
@@ -49,7 +49,7 @@ export async function readUserSettings(): Promise<UserSettings> {
 }
 
 export async function writeUserSettings(settings: UserSettings): Promise<UserSettings> {
-  const response = await projectRuntimeFetch("/core-api/user/settings", {
+  const response = await runtimeFetch("/core-api/user/settings", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings),

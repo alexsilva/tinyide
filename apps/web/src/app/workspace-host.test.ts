@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearActiveWorkspaceScope, setActiveWorkspaceScope } from "./project-session";
 import type {
   BrowserDirectoryHandle,
   BrowserFileHandle,
@@ -6,7 +7,6 @@ import type {
 import {
   openInSystemFileManager,
   pickWorkspaceDirectory,
-  restoreLastDesktopWorkspaceHandle,
   WORKSPACE_PICKER_ID,
   workspaceRootFromFilePath,
   workspaceRootHintForHandle,
@@ -71,25 +71,6 @@ describe("workspaceRootHintForHandle", () => {
   });
 });
 
-describe("restoreLastDesktopWorkspaceHandle", () => {
-  it("restaura o último workspace registrado pelo processo desktop", async () => {
-    const desktop = {
-      getPathForFile: () => "",
-      pickDirectory: async () => undefined,
-      restoreDirectory: async () => undefined,
-      restoreLastDirectory: async () => ({ token: "token", name: "preco", path: "/mnt/projects/preco" }),
-      listDirectory: async () => [],
-      ensureFile: async () => true,
-      ensureDirectory: async () => true,
-      readFile: async () => ({ bytes: new Uint8Array(), lastModified: 0 }),
-      writeFile: async () => true,
-      removeEntry: async () => true,
-    };
-    const handle = await restoreLastDesktopWorkspaceHandle(desktop);
-    expect(handle).toMatchObject({ name: "preco", desktopWorkspaceRoot: "/mnt/projects/preco" });
-  });
-});
-
 describe("pickWorkspaceDirectory", () => {
   it("abre o diálogo nativo no último diretório conhecido", async () => {
     const pickDirectory = vi.fn(async () => ({ token: "token", name: "preco", path: "/mnt/projects/preco" }));
@@ -120,6 +101,8 @@ describe("pickWorkspaceDirectory", () => {
   });
 });
 
+afterEach(() => clearActiveWorkspaceScope());
+
 describe("system file manager bridge", () => {
   it("delegates only when the desktop bridge exposes the operation", async () => {
     const openInFileManager = vi.fn(async () => true);
@@ -133,9 +116,10 @@ describe("system file manager bridge", () => {
     const fetch = vi.fn(async () => new Response(JSON.stringify({ directory: "/mnt/projects/preco/src" }), { status: 200 }));
     vi.stubGlobal("window", { tinyideDesktop: {} });
     vi.stubGlobal("fetch", fetch);
+    setActiveWorkspaceScope("preco-0011223344556677");
 
     await expect(openInSystemFileManager("/mnt/projects/preco", "src/main.ts")).resolves.toBe(true);
-    expect(fetch).toHaveBeenCalledWith("/core-api/workspace/open-in-file-manager", expect.objectContaining({
+    expect(fetch).toHaveBeenCalledWith("/w/preco-0011223344556677/core-api/workspace/open-in-file-manager", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ path: "src/main.ts" }),
     }));

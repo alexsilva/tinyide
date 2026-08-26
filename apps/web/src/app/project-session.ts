@@ -1,88 +1,116 @@
-const PROJECT_SESSION_QUERY = "tinyideSession";
+/**
+ * Identidade de escopo do cliente.
+ *
+ * A IDE não tem mais "sessão de janela": o que isola estado é o workspace
+ * aberto, e ele aparece no próprio caminho da URL (`/w/<scopeId>/`). Toda
+ * chamada de API que toca o projeto é reancorada nesse prefixo, e o servidor
+ * resolve o escopo para o diretório de estado daquele workspace.
+ *
+ * O ganho não é cosmético: enquanto a identidade era um parâmetro opcional,
+ * qualquer janela que o omitisse caía num escopo compartilhado chamado
+ * "default" — e duas janelas apontando para projetos diferentes disputavam os
+ * mesmos arquivos de estado.
+ */
+
+const WORKSPACE_SCOPE_PREFIX = "/w/";
 const PROJECT_OPEN_QUERY = "tinyideOpenProject";
-const DEFAULT_PROJECT_SESSION_ID = "default";
-const PROJECT_SESSION_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
+const SCOPE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,95}$/;
 
-let cachedSessionId: string | undefined;
-const workspaceScopeHashes = new Map<string, Promise<string>>();
-
-function validSessionId(value: string | null | undefined): value is string {
-  return Boolean(value && PROJECT_SESSION_PATTERN.test(value));
+function validScopeId(value: string | null | undefined): value is string {
+  return Boolean(value && SCOPE_ID_PATTERN.test(value));
 }
 
-export function createProjectSessionId(): string {
-  return crypto.randomUUID();
-}
-
-export function projectSessionId(): string {
-  if (cachedSessionId) return cachedSessionId;
-  // `window` pode existir sem `location` utilizável (ambientes de teste, workers):
-  // a ausência do parâmetro não deve derrubar a requisição.
-  const queryValue = (() => {
-    const href = typeof window === "undefined" ? undefined : window.location?.href;
-    if (!href) return undefined;
-    try {
-      return new URL(href).searchParams.get(PROJECT_SESSION_QUERY);
-    } catch {
-      return undefined;
-    }
-  })();
-  cachedSessionId = validSessionId(queryValue)
-    ? queryValue
-    : DEFAULT_PROJECT_SESSION_ID;
-  return cachedSessionId;
-}
-
-export function projectSessionStateKey(key: string): string {
-  const sessionId = projectSessionId();
-  return sessionId === DEFAULT_PROJECT_SESSION_ID ? key : `${key}.${sessionId}`;
-}
-
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+function scopeFromPathname(pathname: string): string | undefined {
+  if (!pathname.startsWith(WORKSPACE_SCOPE_PREFIX)) return undefined;
+  const rest = pathname.slice(WORKSPACE_SCOPE_PREFIX.length);
+  const separator = rest.indexOf("/");
+  const candidate = separator < 0 ? rest : rest.slice(0, separator);
+  return validScopeId(candidate) ? candidate : undefined;
 }
 
 /**
- * Estado visual é simultaneamente isolado pela janela/sessão do host e pelo
- * workspace. O caminho não entra no nome do arquivo de estado: além de evitar
- * limites de tamanho e caracteres do SO, o hash impede que dois workspaces
- * compartilhem acidentalmente a mesma chave global de UI.
+ * `window` pode existir sem `location` utilizável (workers, ambientes de teste).
+ * A identidade do escopo é mantida em memória de qualquer forma; só a reescrita
+ * da URL é que depende do documento.
  */
-export async function projectWorkspaceStateKey(key: string, workspaceRoot: string): Promise<string> {
-  const root = workspaceRoot.trim();
-  if (!root) throw new Error("Workspace obrigatório para estado escopado.");
-  const scope = `${projectSessionId()}\0${root}`;
-  let hash = workspaceScopeHashes.get(scope);
-  if (!hash) {
-    hash = sha256Hex(scope);
-    workspaceScopeHashes.set(scope, hash);
+function currentWindowUrl(): URL | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const href = window.location?.href;
+    return href ? new URL(href) : undefined;
+  } catch {
+    return undefined;
   }
-  return `${key}.workspace.${await hash}`;
 }
 
-export function projectSessionHeaders(headers?: HeadersInit): Headers {
-  const next = new Headers(headers);
-  next.set("X-TinyIde-Session-Id", projectSessionId());
-  return next;
+function currentPathname(): string {
+  return currentWindowUrl()?.pathname ?? "/";
 }
 
-export function projectRuntimeFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-  return fetch(input, {
-    ...init,
-    headers: projectSessionHeaders(init.headers),
-  });
+let activeScopeId: string | undefined = scopeFromPathname(currentPathname());
+
+export function activeWorkspaceScopeId(): string | undefined {
+  return activeScopeId;
 }
 
+/**
+ * Reescreve a URL da janela para o escopo do projeto recém-aberto. Usa
+ * `replaceState` — e não navegação — porque o app já está montado: o objetivo é
+ * que um reload posterior volte para o mesmo projeto sem depender de nenhum
+ * ponteiro global.
+ */
+export function setActiveWorkspaceScope(scopeId: string): void {
+  if (!validScopeId(scopeId)) throw new Error("Identificador de workspace inválido.");
+  activeScopeId = scopeId;
+  const url = currentWindowUrl();
+  if (!url) return;
+  const suffix = url.pathname.startsWith(WORKSPACE_SCOPE_PREFIX)
+    ? url.pathname.slice(WORKSPACE_SCOPE_PREFIX.length).split("/").slice(1).join("/")
+    : url.pathname.replace(/^\/+/, "");
+  url.pathname = `${WORKSPACE_SCOPE_PREFIX}${scopeId}/${suffix}`;
+  url.searchParams.delete(PROJECT_OPEN_QUERY);
+  window.history?.replaceState?.(null, "", url.href);
+}
+
+export function clearActiveWorkspaceScope(): void {
+  activeScopeId = undefined;
+  const url = currentWindowUrl();
+  if (!url?.pathname.startsWith(WORKSPACE_SCOPE_PREFIX)) return;
+  url.pathname = `/${url.pathname.slice(WORKSPACE_SCOPE_PREFIX.length).split("/").slice(1).join("/")}`;
+  window.history?.replaceState?.(null, "", url.href);
+}
+
+export function workspaceScopedPath(path: string, scopeId = activeScopeId): string {
+  if (!scopeId) throw new Error("Nenhum workspace aberto para esta operação.");
+  return `${WORKSPACE_SCOPE_PREFIX}${scopeId}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+/** Chamadas que pertencem ao usuário, não a um projeto: preferências, histórico, registro de workspaces. */
+export function runtimeFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(input, init);
+}
+
+/**
+ * Chamadas que tocam o projeto aberto. A ausência de escopo é erro explícito, e
+ * não uma requisição sem prefixo: sem isso a chamada silenciosamente atingiria
+ * estado global de novo.
+ */
+export function projectRuntimeFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(workspaceScopedPath(input), init);
+}
+
+export function hasActiveWorkspaceScope(): boolean {
+  return Boolean(activeScopeId);
+}
+
+/** URL de uma janela nova. Sem escopo ela abre o seletor de projeto. */
 export function projectWindowUrl(input: {
-  readonly sessionId: string;
+  readonly scopeId?: string;
   readonly pendingProjectId?: string;
   readonly projectPath?: string;
-}): string {
-  const url = new URL(window.location.href);
-  url.searchParams.set(PROJECT_SESSION_QUERY, input.sessionId);
+} = {}): string {
+  const url = currentWindowUrl() ?? new URL("http://localhost/");
+  url.pathname = input.scopeId ? `${WORKSPACE_SCOPE_PREFIX}${input.scopeId}/` : "/";
   url.searchParams.delete(PROJECT_OPEN_QUERY);
   if (input.pendingProjectId) url.searchParams.set(PROJECT_OPEN_QUERY, input.pendingProjectId);
   if (input.projectPath) url.searchParams.set(PROJECT_OPEN_QUERY, `path:${input.projectPath}`);
@@ -91,12 +119,19 @@ export function projectWindowUrl(input: {
 }
 
 export function requestedProjectReference(): string | undefined {
-  if (typeof window === "undefined") return undefined;
-  const value = new URL(window.location.href).searchParams.get(PROJECT_OPEN_QUERY)?.trim();
+  const value = currentWindowUrl()?.searchParams.get(PROJECT_OPEN_QUERY)?.trim();
   return value || undefined;
 }
 
+export function clearRequestedProjectReference(): void {
+  const url = currentWindowUrl();
+  if (!url?.searchParams.has(PROJECT_OPEN_QUERY)) return;
+  url.searchParams.delete(PROJECT_OPEN_QUERY);
+  window.history?.replaceState?.(null, "", url.href);
+}
+
 export const projectSessionInternals = {
-  validSessionId,
-  sha256Hex,
+  validScopeId,
+  scopeFromPathname,
+  WORKSPACE_SCOPE_PREFIX,
 };

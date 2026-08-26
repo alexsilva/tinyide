@@ -1,7 +1,17 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_WORKSPACE_SETTINGS, readWorkspaceSettings, writeWorkspaceSettings } from "./workspace-settings";
+import { clearActiveWorkspaceScope, setActiveWorkspaceScope } from "./project-session";
 
-afterEach(() => vi.unstubAllGlobals());
+const SCOPE = "workspace-0011223344556677";
+
+beforeEach(() => setActiveWorkspaceScope(SCOPE));
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  clearActiveWorkspaceScope();
+  window.history.replaceState(null, "", "/");
+});
 
 describe("workspace settings", () => {
   it("reads settings with workspace headers", async () => {
@@ -11,7 +21,7 @@ describe("workspace settings", () => {
     // A camada de sessão normaliza os cabeçalhos em Headers e acrescenta os seus,
     // então o que importa é o conteúdo enviado, não a forma do objeto.
     const [url, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [string, RequestInit];
-    expect(url).toBe("/core-api/workspace/settings");
+    expect(url).toBe("/w/{SCOPE}/core-api/workspace/settings".replace("{SCOPE}", SCOPE));
     expect(init.cache).toBe("no-store");
     const sent = new Headers(init.headers);
     expect(sent.get("X-TinyIde-Workspace-Root")).toBe("/workspace");
@@ -23,7 +33,7 @@ describe("workspace settings", () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify(settings), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     await expect(writeWorkspaceSettings("/workspace", settings)).resolves.toEqual(settings);
-    expect(fetchMock).toHaveBeenCalledWith("/core-api/workspace/settings", expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith(`/w/${SCOPE}/core-api/workspace/settings`, expect.objectContaining({
       method: "PUT",
       body: JSON.stringify(settings),
     }));

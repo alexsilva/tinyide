@@ -2,8 +2,10 @@ import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  readHostState,
   readUserSettings,
   readUserState,
+  writeHostState,
   writeUserSettings,
   writeUserState,
 } from "./user-data-backend.mjs";
@@ -44,17 +46,49 @@ describe("user data backend", () => {
     expect(JSON.parse(await readFile(join(root, "settings.json"), "utf8"))).toEqual(settings);
   });
 
-  it("stores session state outside project settings and leaves no temporary files", async () => {
+  it("guarda o estado de UI dentro do diretório do próprio workspace", async () => {
     const root = await testRoot();
     const session = { sidebarVisible: false, sidebarViewsBySide: {} };
-    await writeUserState(root, "ui-session.project-a", session);
+    const alpha = "alpha-0011223344556677";
+    const beta = "beta-7766554433221100";
+    await writeUserState(root, "ui-session", session, alpha);
+    await writeUserState(root, "ui-session", { sidebarVisible: true }, beta);
 
-    expect(await readUserState(root, "ui-session.project-a")).toEqual(session);
-    expect(await readdir(join(root, "state"))).toEqual(["ui-session.project-a.json"]);
+    expect(await readUserState(root, "ui-session", alpha)).toEqual(session);
+    expect(await readUserState(root, "ui-session", beta)).toEqual({ sidebarVisible: true });
+    expect(await readdir(join(root, "workspaces", alpha, "state"))).toEqual(["ui-session.json"]);
+    // Nada de estado de projeto vaza para o diretório global.
+    await expect(readdir(join(root, "state"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  /**
+   * A allowlist é a defesa estrutural do isolamento: uma chave nova sem escopo
+   * falha em vez de cair no diretório compartilhado, que foi como o estado de
+   * um projeto passou a sobrescrever o de outro.
+   */
+  it("só aceita fora de escopo as chaves que pertencem ao usuário", async () => {
+    const root = await testRoot();
+    await writeUserState(root, "recent-projects", [{ id: "a" }]);
+
+    expect(await readUserState(root, "recent-projects")).toEqual([{ id: "a" }]);
+    expect(await readdir(join(root, "state"))).toEqual(["recent-projects.json"]);
+    await expect(writeUserState(root, "ui-session", {})).rejects.toThrow("exige escopo");
+  });
+
+  it("separa o ponteiro de cada host", async () => {
+    const root = await testRoot();
+    await writeHostState(root, "web", "last-workspace", { path: "/projetos/alpha" });
+    await writeHostState(root, "desktop", "last-workspace", { path: "/projetos/beta" });
+
+    expect(await readHostState(root, "web", "last-workspace")).toEqual({ path: "/projetos/alpha" });
+    expect(await readHostState(root, "desktop", "last-workspace")).toEqual({ path: "/projetos/beta" });
   });
 
   it("rejects unsafe state keys", async () => {
     const root = await testRoot();
-    await expect(writeUserState(root, "../outside", {})).rejects.toThrow("Chave de estado do usuário inválida");
+    await expect(writeUserState(root, "../outside", {}, "alpha-0011223344556677"))
+      .rejects.toThrow("Chave de estado do usuário inválida");
+    await expect(writeUserState(root, "ui-session", {}, "../escape"))
+      .rejects.toThrow("Identificador de workspace inválido");
   });
 });

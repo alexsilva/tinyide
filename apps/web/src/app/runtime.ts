@@ -34,7 +34,14 @@ import { appendExecutionOutput } from "./execution/execution-output-buffer";
 import { pluginLanguageProviderFor } from "./generic-syntax";
 import { platform } from "./platform";
 import { setActiveHostWorkspaceRoot } from "./host-workspace-state";
-import { projectRuntimeFetch } from "./project-session";
+import { writeHostWorkspacePointer } from "./host-pointer";
+import {
+  clearActiveWorkspaceScope,
+  hasActiveWorkspaceScope,
+  projectRuntimeFetch,
+  runtimeFetch,
+  setActiveWorkspaceScope,
+} from "./project-session";
 import {
   createTransientRetry,
   delay,
@@ -342,14 +349,19 @@ export async function readHostContext(): Promise<{ readonly workspaceRoot: strin
   return context;
 }
 
+/**
+ * Abrir um projeto é o ato que define o escopo desta janela. A requisição sai
+ * sem prefixo — ainda não existe escopo — e a resposta traz o `scopeId` que
+ * passa a ancorar todas as chamadas seguintes e a própria URL da janela.
+ */
 export async function setHostWorkspace(
   workspaceName: string,
   workspaceRootHint?: string,
-): Promise<{ readonly workspaceRoot: string }> {
+): Promise<{ readonly workspaceRoot: string; readonly scopeId: string }> {
   // Durante a troca, nenhum plugin deve continuar consultando o backend do
   // workspace anterior enquanto o runtime desmonta seus handlers.
   setActiveHostWorkspaceRoot(undefined);
-  const response = await projectRuntimeFetch("/core-api/workspace", {
+  const response = await runtimeFetch("/core-api/workspace", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -357,24 +369,53 @@ export async function setHostWorkspace(
       ...(workspaceRootHint ? { path: workspaceRootHint } : {}),
     }),
   });
-  const payload = await readHostJson<{ readonly workspaceRoot?: string; readonly error?: string }>(
-    response,
-    "Não foi possível definir a raiz do workspace no host.",
-  );
-  if (!payload.workspaceRoot) {
+  const payload = await readHostJson<{
+    readonly workspaceRoot?: string;
+    readonly scopeId?: string;
+    readonly error?: string;
+  }>(response, "Não foi possível definir a raiz do workspace no host.");
+  if (!payload.workspaceRoot || !payload.scopeId) {
     throw new Error(payload.error ?? "Não foi possível definir a raiz do workspace no host.");
   }
+  setActiveWorkspaceScope(payload.scopeId);
   setActiveHostWorkspaceRoot(payload.workspaceRoot);
-  return { workspaceRoot: payload.workspaceRoot };
+  // Ponteiro deste host, gravado num só lugar: abrir um projeto é o único
+  // evento que muda qual projeto uma janela nova deste host deve reabrir. Não
+  // bloqueia a abertura — é um atalho de conveniência, e esta janela já sabe
+  // qual é o seu projeto pelo escopo na URL.
+  void writeHostWorkspacePointer({ path: payload.workspaceRoot, name: workspaceName });
+  return { workspaceRoot: payload.workspaceRoot, scopeId: payload.scopeId };
 }
 
 export async function clearHostWorkspace(): Promise<void> {
   setActiveHostWorkspaceRoot(undefined);
+  if (!hasActiveWorkspaceScope()) return;
   const response = await projectRuntimeFetch("/core-api/workspace", { method: "DELETE" });
+  clearActiveWorkspaceScope();
   if (!response.ok && response.status !== 204) {
     const payload = await response.json().catch(() => undefined) as { readonly error?: string } | undefined;
     throw new Error(payload?.error ?? "Não foi possível limpar o workspace ativo no host.");
   }
+}
+
+export interface WorkspaceScopeDescriptor {
+  readonly scopeId: string;
+  readonly path: string;
+  readonly name: string;
+}
+
+/** Resolve o escopo vindo da URL de volta para o projeto que ele representa. */
+export async function readWorkspaceScopeDescriptor(
+  scopeId: string,
+): Promise<WorkspaceScopeDescriptor | undefined> {
+  const response = await runtimeFetch(`/core-api/workspace/scopes/${encodeURIComponent(scopeId)}`, {
+    cache: "no-store",
+  });
+  if (response.status === 404) return undefined;
+  return await readHostJson<WorkspaceScopeDescriptor>(
+    response,
+    "Não foi possível resolver o workspace desta janela.",
+  );
 }
 
 export async function startHostProcess(request: HostProcessStartRequest): Promise<HostProcessSnapshot> {

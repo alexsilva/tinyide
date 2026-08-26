@@ -54,6 +54,55 @@ export function activeWorkspaceScopeId(): string | undefined {
 }
 
 /**
+ * Identidade desta janela perante o runtime. Não persiste: vale enquanto o
+ * documento existir. O servidor a usa para contar quantas janelas continuam em
+ * cada workspace e encerrar o que sobra quando a última sai.
+ */
+const clientId = ((): string => {
+  const random = globalThis.crypto?.randomUUID?.();
+  if (random) return random;
+  return `w-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+})();
+
+export function workspaceClientId(): string {
+  return clientId;
+}
+
+/**
+ * Cancelamento em bloco das chamadas do escopo corrente.
+ *
+ * Trocar de projeto não espera as requisições em voo terminarem — e uma
+ * resposta do projeto anterior chegando depois da troca é aplicada como se
+ * fosse do novo: era assim que o painel Git oscilava entre a branch antiga e a
+ * nova. Abortar no momento da troca elimina a categoria inteira de erro, em vez
+ * de exigir que cada consumidor se lembre de comparar escopos.
+ */
+export const WORKSPACE_SCOPE_ABORT_MESSAGE = "O workspace desta janela mudou.";
+
+let scopeAbort: AbortController | undefined = typeof AbortController === "function"
+  ? new AbortController()
+  : undefined;
+
+function renewScopeAbort(): void {
+  scopeAbort?.abort(new DOMException(WORKSPACE_SCOPE_ABORT_MESSAGE, "AbortError"));
+  scopeAbort = typeof AbortController === "function" ? new AbortController() : undefined;
+}
+
+/**
+ * `true` quando a falha veio da troca de workspace, e não do servidor. Aceita
+ * também a mensagem já convertida em texto porque é assim que a maior parte da
+ * aplicação repassa erros para a barra de avisos.
+ */
+export function isWorkspaceScopeAbort(value: unknown): boolean {
+  if (value === WORKSPACE_SCOPE_ABORT_MESSAGE) return true;
+  // `DOMException` nem sempre herda de `Error` (jsdom é um dos casos), então a
+  // checagem olha as propriedades e não a cadeia de protótipos.
+  if (typeof value !== "object" || value === null) return false;
+  const { name, message } = value as { readonly name?: unknown; readonly message?: unknown };
+  return name === "AbortError" || message === WORKSPACE_SCOPE_ABORT_MESSAGE;
+}
+
+/**
  * Reescreve a URL da janela para o escopo do projeto recém-aberto. Usa
  * `replaceState` — e não navegação — porque o app já está montado: o objetivo é
  * que um reload posterior volte para o mesmo projeto sem depender de nenhum
@@ -61,6 +110,7 @@ export function activeWorkspaceScopeId(): string | undefined {
  */
 export function setActiveWorkspaceScope(scopeId: string): void {
   if (!validScopeId(scopeId)) throw new Error("Identificador de workspace inválido.");
+  if (scopeId !== activeScopeId) renewScopeAbort();
   activeScopeId = scopeId;
   const url = currentWindowUrl();
   if (!url) return;
@@ -73,6 +123,7 @@ export function setActiveWorkspaceScope(scopeId: string): void {
 }
 
 export function clearActiveWorkspaceScope(): void {
+  if (activeScopeId) renewScopeAbort();
   activeScopeId = undefined;
   const url = currentWindowUrl();
   if (!url?.pathname.startsWith(WORKSPACE_SCOPE_PREFIX)) return;
@@ -96,7 +147,31 @@ export function runtimeFetch(input: string, init: RequestInit = {}): Promise<Res
  * estado global de novo.
  */
 export function projectRuntimeFetch(input: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(workspaceScopedPath(input), init);
+  const path = workspaceScopedPath(input);
+  const signal = composeAbortSignals(init.signal, scopeAbort?.signal);
+  return fetch(path, signal ? { ...init, signal } : init);
+}
+
+/**
+ * `AbortSignal.any` não existe em todos os alvos suportados; o fallback encadeia
+ * manualmente. Quem já passou o próprio `signal` continua podendo cancelar.
+ */
+function composeAbortSignals(
+  own: AbortSignal | null | undefined,
+  scope: AbortSignal | undefined,
+): AbortSignal | undefined {
+  if (!scope) return own ?? undefined;
+  if (!own) return scope;
+  const anySignal = (AbortSignal as unknown as { any?: (signals: readonly AbortSignal[]) => AbortSignal }).any;
+  if (typeof anySignal === "function") return anySignal([own, scope]);
+  const controller = new AbortController();
+  const forward = (source: AbortSignal) => {
+    if (source.aborted) controller.abort(source.reason);
+    else source.addEventListener("abort", () => controller.abort(source.reason), { once: true });
+  };
+  forward(own);
+  forward(scope);
+  return controller.signal;
 }
 
 export function hasActiveWorkspaceScope(): boolean {

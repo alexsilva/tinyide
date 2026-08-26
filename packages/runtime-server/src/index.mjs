@@ -102,6 +102,16 @@ function requestOriginAllowed(request) {
   }
 }
 
+/**
+ * Identidade da janela que fala com o runtime. Serve só para contar quem está
+ * em cada workspace; um valor inválido é tratado como ausência, e não como
+ * erro, porque a consequência é apenas manter o escopo vivo mais tempo.
+ */
+export function workspaceClientId(payload) {
+  const value = payload?.clientId;
+  return typeof value === "string" && /^[A-Za-z0-9-]{8,128}$/.test(value) ? value : undefined;
+}
+
 async function readJson(request) {
   const chunks = [];
   let totalBytes = 0;
@@ -219,6 +229,12 @@ export function createTinyIdeRuntime(options) {
       workspaceRoot: scopeId === initialScopeId ? initialWorkspaceRoot : undefined,
       backendHandlers: new Map(),
       executionBackend: undefined,
+      // Janelas que declararam estar neste escopo. Sem isso não há como
+      // distinguir "ninguém está mais neste projeto" de "outra janela continua
+      // nele", e o runtime só teria as opções ruins: manter processos órfãos
+      // para sempre ou derrubar terminais de quem ainda está trabalhando.
+      clients: new Set(),
+      hadClients: false,
     };
     context.executionBackend = createExecutionBackend({ workspaceRoot: () => context.workspaceRoot });
     return context;
@@ -247,6 +263,47 @@ export function createTinyIdeRuntime(options) {
   async function resetExecutionBackend(context) {
     await context.executionBackend.dispose?.();
     context.executionBackend = createExecutionBackend({ workspaceRoot: () => context.workspaceRoot });
+  }
+
+  /**
+   * Encerra tudo que pertence a um workspace: backends de plugin (terminais,
+   * watchers) e processos de execução. Só é chamado quando o escopo ficou sem
+   * nenhuma janela — é o descarte, não uma recarga.
+   */
+  async function releaseWorkspaceContext(context) {
+    await disposeCachedBackends(context, "workspace-switch");
+    await resetExecutionBackend(context);
+    context.workspaceRoot = undefined;
+    context.clients.clear();
+    // O contexto vazio permanece no mapa de propósito: recriá-lo devolveria o
+    // `initialWorkspaceRoot` ao escopo inicial e o workspace fechado voltaria
+    // sozinho.
+  }
+
+  /**
+   * Uma janela só existe em um escopo por vez. Registrar num escopo é, por
+   * definição, sair do anterior — e o anterior, sem ninguém dentro, é liberado.
+   *
+   * Sem `clientId` nada acontece: chamadas programáticas e clientes antigos
+   * seguem com o comportamento de manter o contexto vivo.
+   */
+  async function attachWorkspaceClient(scopeId, clientId) {
+    if (!clientId) return;
+    const target = workspaceContext(scopeId);
+    target.clients.add(clientId);
+    target.hadClients = true;
+    await releaseAbandonedContexts(clientId, scopeId);
+  }
+
+  async function releaseAbandonedContexts(clientId, keepScopeId) {
+    if (!clientId) return;
+    const abandoned = [];
+    for (const context of workspaceContexts.values()) {
+      if (context.scopeId === keepScopeId) continue;
+      if (!context.clients.delete(clientId)) continue;
+      if (context.hadClients && context.clients.size === 0) abandoned.push(context);
+    }
+    await Promise.allSettled(abandoned.map((context) => releaseWorkspaceContext(context)));
   }
 
   /**
@@ -487,6 +544,9 @@ export function createTinyIdeRuntime(options) {
           await resetExecutionBackend(target);
           target.workspaceRoot = nextWorkspaceRoot;
         }
+        // Depois de o escopo novo estar pronto: a janela deixou o projeto
+        // anterior, e o que sobrava dele (terminais, processos) morre aqui.
+        await attachWorkspaceClient(nextScopeId, workspaceClientId(payload));
         writeJson(response, 200, {
           workspaceRoot: target.workspaceRoot,
           scopeId: nextScopeId,
@@ -505,12 +565,22 @@ export function createTinyIdeRuntime(options) {
         writeJson(response, 400, {error: "Fechar um workspace exige o escopo na URL."});
         return;
       }
-      void disposeCachedBackends(context, "workspace-switch").then(() => {
-        return resetExecutionBackend(context);
-      }).then(() => {
-        context.workspaceRoot = undefined;
+      void releaseWorkspaceContext(context).then(() => {
         writeJson(response, 204, undefined);
       }).catch((error) => writeJson(response, 500, {error: error instanceof Error ? error.message : String(error)}));
+      return;
+    }
+
+    /**
+     * Saída sem troca: a janela foi fechada. Chega por `sendBeacon`, então
+     * responde sempre 204 — não há ninguém do outro lado para ler um erro — e o
+     * escopo só é liberado se nenhuma outra janela continuar nele.
+     */
+    if (request.method === "POST" && requestUrl.pathname === "/core-api/workspace/release") {
+      void readJson(request)
+        .then((payload) => releaseAbandonedContexts(workspaceClientId(payload), undefined))
+        .catch(() => undefined)
+        .then(() => writeJson(response, 204, undefined));
       return;
     }
 

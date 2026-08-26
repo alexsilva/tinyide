@@ -460,6 +460,91 @@ describe("runtime server hardening", () => {
     ]);
   });
 
+  it("releases the previous workspace when the window that was in it moves to another project", async () => {
+    const { runtime, root, pluginsRoot, workspaceRoot, scoped } = await fixture();
+    const secondWorkspace = join(root, "second-workspace");
+    await mkdir(secondWorkspace);
+    const reasonsPath = join(root, "switch-reasons.json");
+    await writeFile(reasonsPath, "[]");
+    const pluginRoot = join(pluginsRoot, "observer");
+    await mkdir(pluginRoot);
+    await writeFile(join(pluginRoot, "plugin.json"), JSON.stringify({
+      id: "observer",
+      name: "Observer",
+      version: "1.0.0",
+      entrypoints: { backend: "backend.mjs" },
+    }));
+    await writeFile(join(pluginRoot, "backend.mjs"), `
+      import { readFileSync, writeFileSync } from "node:fs";
+      export function createBackend({ workspaceRoot }) {
+        const handler = (_request, response) => response.end("ok");
+        handler.dispose = async (options) => {
+          const reasons = JSON.parse(readFileSync(${JSON.stringify(reasonsPath)}, "utf8"));
+          reasons.push([options?.reason ?? null, workspaceRoot]);
+          writeFileSync(${JSON.stringify(reasonsPath)}, JSON.stringify(reasons));
+        };
+        return handler;
+      }
+    `);
+    runtime.clearManifestCache();
+
+    const select = (path, clientId) => fetch(`${runtime.url}/core-api/workspace`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: basename(path), path, ...(clientId ? { clientId } : {}) }),
+    });
+    // Duas janelas no primeiro projeto: enquanto uma delas continuar lá, os
+    // terminais e processos daquele workspace precisam sobreviver.
+    expect((await select(workspaceRoot, "window-alpha")).status).toBe(200);
+    expect((await select(workspaceRoot, "window-beta")).status).toBe(200);
+    expect((await fetch(scoped("/plugin-api/observer/status"))).status).toBe(200);
+
+    expect((await select(secondWorkspace, "window-alpha")).status).toBe(200);
+    await expect(readFile(reasonsPath, "utf8").then(JSON.parse)).resolves.toEqual([]);
+
+    // A última janela saiu: agora não há mais ninguém para quem preservar o
+    // estado vivo do projeto anterior.
+    expect((await select(secondWorkspace, "window-beta")).status).toBe(200);
+    await expect(readFile(reasonsPath, "utf8").then(JSON.parse)).resolves.toEqual([
+      ["workspace-switch", workspaceRoot],
+    ]);
+    expect((await fetch(scoped("/plugin-api/observer/status"))).status).toBe(409);
+  });
+
+  it("releases the workspace of a window that closed without switching projects", async () => {
+    const { runtime, root, workspaceRoot, scoped } = await fixture();
+    const pidPath = join(root, "released-child.pid");
+    expect((await fetch(`${runtime.url}/core-api/workspace`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: basename(workspaceRoot), path: workspaceRoot, clientId: "window-alpha" }),
+    })).status).toBe(200);
+    expect((await fetch(scoped("/core-api/execution/processes"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        executable: process.execPath,
+        arguments: ["-e", `require('fs').writeFileSync(${JSON.stringify(pidPath)}, String(process.pid)); setInterval(() => {}, 1000)`],
+        workingDirectory: workspaceRoot,
+      }),
+    })).status).toBe(201);
+    let childPid;
+    for (let attempt = 0; attempt < 50 && !childPid; attempt += 1) {
+      try { childPid = Number(await readFile(pidPath, "utf8")); } catch {}
+      if (!childPid) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(childPid).toBeGreaterThan(0);
+
+    const released = await fetch(`${runtime.url}/core-api/workspace/release`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ clientId: "window-alpha" }),
+    });
+    expect(released.status).toBe(204);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(() => process.kill(childPid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+  });
+
   it("preserves plugin processes when reload restores the same workspace", async () => {
     const { runtime, root, pluginsRoot, workspaceRoot, scoped } = await fixture();
     const pluginRoot = join(pluginsRoot, "persistent");

@@ -262,6 +262,7 @@ import {
   executionViewProviderFor,
   scriptExecutionFor,
   readWorkspaceScopeDescriptor,
+  releaseHostWorkspaceClient,
   setHostWorkspace,
   stopHostProcess,
   textEditorLineDecorationProviders,
@@ -306,6 +307,7 @@ import {
   activeWorkspaceScopeId,
   clearActiveWorkspaceScope,
   clearRequestedProjectReference,
+  isWorkspaceScopeAbort,
   projectWindowUrl,
   requestedProjectReference,
 } from "./project-session";
@@ -709,7 +711,17 @@ export function App() {
   const [resourceDecorations, setResourceDecorations] = useState<ReadonlyMap<string, ResourceDecoration>>(new Map());
   const [resourceDecorationRevision, setResourceDecorationRevision] = useState(0);
   const [restorationComplete, setRestorationComplete] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setErrorState] = useState<string>();
+  /**
+   * Trocar de projeto cancela as chamadas em voo do projeto anterior. Esse
+   * cancelamento é o comportamento correto, não uma falha: mostrá-lo na barra de
+   * avisos encheria a tela de erro justamente no momento em que tudo está sendo
+   * substituído.
+   */
+  const setError = useCallback<typeof setErrorState>((value) => {
+    if (isWorkspaceScopeAbort(value)) return;
+    setErrorState(value);
+  }, []);
   const [externalDocumentNotices, setExternalDocumentNotices] = useState<ReadonlyMap<string, ExternalFileNoticeState>>(new Map());
   const [workspaceExternalSync, setWorkspaceExternalSync] = useState<WorkspaceExternalSyncState>();
   const [workspaceAccess, setWorkspaceAccess] = useState<"ready" | "permission-required" | "missing">("ready");
@@ -752,6 +764,14 @@ export function App() {
     };
     document.addEventListener(TEXT_CONTEXT_MENU_EVENT, openTextContextMenu);
     return () => document.removeEventListener(TEXT_CONTEXT_MENU_EVENT, openTextContextMenu);
+  }, []);
+  // Fechar a janela é uma saída de workspace como qualquer outra: sem avisar o
+  // runtime, os terminais e processos daquele projeto continuariam vivos sem
+  // nenhuma janela para controlá-los.
+  useEffect(() => {
+    const release = () => releaseHostWorkspaceClient();
+    window.addEventListener("pagehide", release);
+    return () => window.removeEventListener("pagehide", release);
   }, []);
   const [draggingExplorerPaths, setDraggingExplorerPaths] = useState<ReadonlySet<string>>(new Set());
   const [dropTargetExplorerPath, setDropTargetExplorerPath] = useState<string>();

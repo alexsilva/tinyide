@@ -41,6 +41,7 @@ import {
   projectRuntimeFetch,
   runtimeFetch,
   setActiveWorkspaceScope,
+  workspaceClientId,
 } from "./project-session";
 import {
   createTransientRetry,
@@ -366,6 +367,10 @@ export async function setHostWorkspace(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       name: workspaceName,
+      // Declarar a janela é o que permite ao runtime encerrar o que ficou do
+      // projeto anterior — terminais e processos — sem afetar outra janela que
+      // continue nele.
+      clientId: workspaceClientId(),
       ...(workspaceRootHint ? { path: workspaceRootHint } : {}),
     }),
   });
@@ -385,6 +390,23 @@ export async function setHostWorkspace(
   // qual é o seu projeto pelo escopo na URL.
   void writeHostWorkspacePointer({ path: payload.workspaceRoot, name: workspaceName });
   return { workspaceRoot: payload.workspaceRoot, scopeId: payload.scopeId };
+}
+
+/**
+ * Avisa o runtime de que esta janela saiu — fechada, não trocando de projeto.
+ * Usa `sendBeacon` porque `unload`/`pagehide` não esperam promessas: sem isso,
+ * fechar a janela deixaria terminais e processos do workspace rodando sem dono.
+ */
+export function releaseHostWorkspaceClient(): void {
+  const body = JSON.stringify({ clientId: workspaceClientId() });
+  const beacon = navigator.sendBeacon?.bind(navigator);
+  if (beacon?.("/core-api/workspace/release", new Blob([body], { type: "application/json" }))) return;
+  void runtimeFetch("/core-api/workspace/release", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    keepalive: true,
+  }).catch(() => undefined);
 }
 
 export async function clearHostWorkspace(): Promise<void> {

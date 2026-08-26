@@ -79,6 +79,11 @@ export async function createWorkspace(files) {
  * O workspace vem por `TINYIDE_WORKSPACE`, o mesmo caminho que o desktop usa para
  * reabrir o último projeto.
  */
+/**
+ * `options.pickerPath` troca o diretório que o seletor nativo devolve, o que
+ * permite abrir um segundo projeto na mesma execução; `options.userDataDir`
+ * reaproveita o estado de um lançamento anterior (recentes, ponteiro do host).
+ */
 export async function launchIde(workspaceRoot, options = {}) {
   // Estado isolado por execução: um teste não pode herdar sessão, plugins ou abas
   // deixadas por outro.
@@ -91,6 +96,9 @@ export async function launchIde(workspaceRoot, options = {}) {
       "--no-sandbox",
       "--disable-gpu",
       `--user-data-dir=${userDataDir}`,
+      // Ambientes sem sessão gráfica própria (Xvfb, CI) precisam apontar a
+      // plataforma do Chromium à mão: `TINYIDE_E2E_ELECTRON_ARGS=--ozone-platform=x11`.
+      ...(process.env.TINYIDE_E2E_ELECTRON_ARGS?.split(" ").filter(Boolean) ?? []),
     ],
     cwd: repositoryRoot,
     env: {
@@ -99,7 +107,7 @@ export async function launchIde(workspaceRoot, options = {}) {
       TINYIDE_WORKSPACES_ROOT: dirname(workspaceRoot),
       // Gancho já existente no processo principal: dispensa o seletor nativo de
       // diretório, que o teste não conseguiria operar.
-      TINYIDE_TEST_WORKSPACE_PICKER_PATH: workspaceRoot,
+      TINYIDE_TEST_WORKSPACE_PICKER_PATH: options.pickerPath ?? workspaceRoot,
     },
     timeout: 60_000,
   });

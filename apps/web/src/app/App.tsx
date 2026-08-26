@@ -3081,10 +3081,17 @@ export function App() {
       if (dirtyDocuments.length && !window.confirm(
         `${dirtyDocuments.length === 1 ? "Há um arquivo não salvo" : `Há ${dirtyDocuments.length} arquivos não salvos`}. Abrir outro projeto na tela atual descartará essas alterações. Continuar?`,
       )) return;
+      // No desktop o runtime só aceita caminhos que o processo principal já
+      // registrou. Restaurar o handle antes é o que faz esse registro — na
+      // ordem inversa o `setHostWorkspace` é recusado por caminho fora da raiz.
+      const desktopHandle = isDesktopHost()
+        ? await restoreDesktopWorkspaceHandle(project.path)
+        : undefined;
+      if (isDesktopHost() && !desktopHandle) {
+        throw new Error("O projeto recente não está mais disponível ou perdeu permissão de acesso.");
+      }
       const hostWorkspace = await setHostWorkspace(project.name, project.path);
-      const handle = isDesktopHost()
-        ? await restoreDesktopWorkspaceHandle(hostWorkspace.workspaceRoot)
-        : runtimeWorkspaceHandle(project.name, hostWorkspace.workspaceRoot);
+      const handle = desktopHandle ?? runtimeWorkspaceHandle(project.name, hostWorkspace.workspaceRoot);
       if (!handle) throw new Error("O projeto recente não está mais disponível ou perdeu permissão de acesso.");
       // O descarte de alterações já foi confirmado antes de trocar o contexto
       // do runtime. Evita deixar plugins apontando para outro projeto se o

@@ -241,6 +241,7 @@ import {
   environmentProviderById,
   environmentProviders,
   hostProcessOutputLines,
+  hostProcessPollDelay,
   languageProviderFor,
   lintDocument,
   loadEnvironments,
@@ -428,6 +429,7 @@ import { EnvironmentManagerSidebar } from "./execution/EnvironmentManagerSidebar
 import { EnvironmentBrowserDialog } from "./execution/EnvironmentBrowserDialog";
 import { FollowedExecutionOutput } from "./execution/FollowedExecutionOutput";
 import { appendExecutionOutput } from "./execution/execution-output-buffer";
+import { tryAcquireHostProcessMonitor } from "./execution/process-monitor";
 import {
   createTransientRetry,
   delay,
@@ -2728,12 +2730,16 @@ export function App() {
     if (!resumedProfileProcesses.length) return;
     let cancelled = false;
     const monitor = async (resumed: ResumedProfileProcess) => {
+      const monitorLease = tryAcquireHostProcessMonitor(resumed.processId);
+      if (!monitorLease) return;
       const retry = createTransientRetry();
       try {
         let process = await readHostProcess(resumed.processId);
         let cursor = process.outputEndCursor ?? process.outputStartCursor ?? 0;
         let processOutput = resumedProfileProcessOutput(resumed, process);
-        while (!cancelled) {
+        let hasMore = false;
+        let idlePolls = 0;
+        const publishState = () => {
           setProfileExecutions((current) => ({
             ...current,
             [resumed.profileId]: {
@@ -2756,13 +2762,18 @@ export function App() {
                 : {}),
             },
           }));
+        };
+        publishState();
+        while (!cancelled) {
           if (process.status !== "running") break;
-          await new Promise((resolve) => window.setTimeout(resolve, 200));
+          await delay(hostProcessPollDelay(hasMore, idlePolls));
           let delta;
+          let reconnected = false;
           try {
             delta = await readHostProcessOutput(resumed.processId, cursor);
             if (retry.reset()) {
               processOutput = appendExecutionOutput(processOutput, [RECONNECTED_NOTICE]);
+              reconnected = true;
             }
           } catch (cause) {
             // Falha de transporte não mata o monitor: o processo segue vivo no
@@ -2778,12 +2789,24 @@ export function App() {
             await delay(decision.delayMs);
             continue;
           }
+          const outputChanged = delta.truncated || delta.chunks.length > 0;
+          const statusChanged = delta.status !== process.status
+            || delta.stopRequested !== Boolean(process.stopRequested)
+            || delta.exitCode !== process.exitCode
+            || delta.signal !== process.signal
+            || delta.finishedAt !== process.finishedAt;
           cursor = delta.cursor;
-          processOutput = appendExecutionOutput(
-            processOutput,
-            delta.chunks.map((chunk) => chunk.text),
-            { truncated: delta.truncated },
-          );
+          hasMore = delta.hasMore;
+          if (outputChanged) {
+            idlePolls = 0;
+            processOutput = appendExecutionOutput(
+              processOutput,
+              delta.chunks.map((chunk) => chunk.text),
+              { truncated: delta.truncated },
+            );
+          } else {
+            idlePolls += 1;
+          }
           process = {
             ...process,
             status: delta.status,
@@ -2796,10 +2819,12 @@ export function App() {
             outputEndCursor: delta.endCursor,
             outputTruncated: delta.truncated,
           };
+          if (outputChanged || statusChanged || reconnected) publishState();
         }
       } catch (cause) {
         if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
       } finally {
+        monitorLease.dispose();
         if (!cancelled) {
           setResumedProfileProcesses((current) => current.filter((item) => item.processId !== resumed.processId));
         }
@@ -2815,16 +2840,34 @@ export function App() {
     if (!resumedProcessId) return;
     let cancelled = false;
     const monitor = async () => {
+      const monitorLease = tryAcquireHostProcessMonitor(resumedProcessId);
+      if (!monitorLease) return;
       const retry = createTransientRetry();
       try {
         let process = await readHostProcess(resumedProcessId);
+        let idlePolls = 0;
+        let previousOutput = hostProcessOutputLines(process);
+        setOutput([...previousOutput]);
         while (!cancelled) {
-          setOutput([...hostProcessOutputLines(process)]);
           if (process.status !== "running") break;
-          await new Promise((resolve) => window.setTimeout(resolve, 250));
+          await delay(hostProcessPollDelay(false, idlePolls));
           try {
-            process = await readHostProcess(resumedProcessId);
-            retry.reset();
+            const next = await readHostProcess(resumedProcessId);
+            const nextOutput = hostProcessOutputLines(next);
+            const outputChanged = nextOutput.length !== previousOutput.length
+              || nextOutput.some((line, index) => line !== previousOutput[index]);
+            const statusChanged = next.status !== process.status
+              || next.exitCode !== process.exitCode
+              || next.stopRequested !== process.stopRequested;
+            const reconnected = retry.reset();
+            process = next;
+            if (outputChanged || statusChanged || reconnected) {
+              previousOutput = nextOutput;
+              idlePolls = 0;
+              setOutput([...nextOutput, ...(reconnected ? [RECONNECTED_NOTICE] : [])]);
+            } else {
+              idlePolls += 1;
+            }
           } catch (cause) {
             const decision = retry.schedule(cause);
             if (decision.attempt === 1) {
@@ -2837,6 +2880,7 @@ export function App() {
       } catch (cause) {
         if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
       } finally {
+        monitorLease.dispose();
         if (!cancelled) {
           setBusy(false);
           setActiveProcessId((current) => current === resumedProcessId ? undefined : current);
@@ -2975,6 +3019,7 @@ export function App() {
     setDebugCommandPending({});
     setDebugRestartingProfileIds(new Set());
     setDebugBreakpoints([]);
+    editorHistoriesRef.current.clear();
     documentFoldsRef.current = new Map();
     setDocumentFolds(new Map());
     setPanelVisible(false);

@@ -411,6 +411,50 @@ describe("runtime server hardening", () => {
     expect(second).toMatchObject({ path: "/ping", requests: 2 });
   });
 
+  it("restarts only the changed plugin backend in an isolated worker", async () => {
+    const { runtime, pluginsRoot, scoped } = await fixture();
+    const pluginRoot = join(pluginsRoot, "reloadable");
+    await mkdir(pluginRoot);
+    await writeFile(join(pluginRoot, "plugin.json"), JSON.stringify({
+      id: "reloadable",
+      name: "Reloadable",
+      version: "1.0.0",
+      entrypoints: { backend: "backend.mjs" },
+    }));
+    const backendPath = join(pluginRoot, "backend.mjs");
+    await writeFile(backendPath, `
+      let requests = 0;
+      export function createBackend() {
+        return (_request, response) => {
+          requests += 1;
+          response.setHeader("Content-Type", "application/json");
+          response.end(JSON.stringify({ version: 1, requests }));
+        };
+      }
+    `);
+    runtime.clearManifestCache();
+
+    await expect(fetch(scoped("/plugin-api/reloadable/ping")).then((response) => response.json()))
+      .resolves.toEqual({ version: 1, requests: 1 });
+    await expect(fetch(scoped("/plugin-api/reloadable/ping")).then((response) => response.json()))
+      .resolves.toEqual({ version: 1, requests: 2 });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await writeFile(backendPath, `
+      let requests = 0;
+      export function createBackend() {
+        return (_request, response) => {
+          requests += 1;
+          response.setHeader("Content-Type", "application/json");
+          response.end(JSON.stringify({ version: 2, requests }));
+        };
+      }
+    `);
+
+    await expect(fetch(scoped("/plugin-api/reloadable/ping")).then((response) => response.json()))
+      .resolves.toEqual({ version: 2, requests: 1 });
+  });
+
   it("passes the workspace-switch reason to backend dispose only when the workspace changes", async () => {
     const { runtime, root, pluginsRoot, workspaceRoot, scoped } = await fixture();
     const secondWorkspace = join(root, "second-workspace");

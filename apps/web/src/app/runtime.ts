@@ -31,6 +31,7 @@ import type {
 } from "@tinyide/plugin-api";
 import type { OpenDocument } from "../browser-filesystem";
 import { appendExecutionOutput } from "./execution/execution-output-buffer";
+import { tryAcquireHostProcessMonitor } from "./execution/process-monitor";
 import { pluginLanguageProviderFor } from "./generic-syntax";
 import { platform } from "./platform";
 import { setActiveHostWorkspaceRoot } from "./host-workspace-state";
@@ -516,48 +517,69 @@ async function followHostProcess(
   /** Anexa linhas de aviso à saída acumulada (reconexão), sem substituí-la. */
   publishNotice: (lines: readonly string[]) => void,
 ): Promise<HostProcessSnapshot> {
+  const monitor = tryAcquireHostProcessMonitor(initial.id);
+  if (!monitor) {
+    throw new Error(`O processo '${initial.id}' já possui um monitor ativo.`);
+  }
   let process = initial;
   let cursor = initial.outputStartCursor ?? 0;
   let hasMore = false;
+  let idlePolls = 0;
   const retry = createTransientRetry();
 
-  do {
-    // Com saída acumulada, `hasMore` fica ligado por várias leituras seguidas.
-    // Sem piso nenhum, o monitor entra em rajada contra o runtime local (medido
-    // aqui em ~35 requisições por segundo por processo); 25 ms ainda drenam
-    // ~2,5 MB/s, muito acima do que qualquer processo produz de log.
-    await delay(hasMore ? 25 : 200);
-    let delta: HostProcessOutputDelta;
-    try {
-      delta = await readHostProcessOutput(process.id, cursor);
-      if (retry.reset()) publishNotice([RECONNECTED_NOTICE]);
-    } catch (cause) {
-      const decision = retry.schedule(cause);
-      if (decision.attempt === 1) publishNotice([reconnectingNotice(cause)]);
-      await delay(decision.delayMs);
-      continue;
-    }
-    cursor = delta.cursor;
-    hasMore = delta.hasMore;
-    onDelta(delta);
-    process = {
-      ...process,
-      status: delta.status,
-      stopRequested: delta.stopRequested,
-      ...(delta.exitCode === undefined ? {} : { exitCode: delta.exitCode }),
-      ...(delta.signal === undefined ? {} : { signal: delta.signal }),
-      ...(delta.finishedAt === undefined ? {} : { finishedAt: delta.finishedAt }),
-      durationMs: delta.durationMs,
-      outputStartCursor: delta.startCursor,
-      outputEndCursor: delta.endCursor,
-      outputTruncated: delta.truncated,
-    };
-    if (callbacks.shouldStop?.() && process.status === "running") {
-      await stopHostProcess(process.id);
-    }
-  } while (process.status === "running" || hasMore);
+  try {
+    do {
+      // Com saída acumulada, `hasMore` fica ligado por várias leituras seguidas.
+      // Sem piso nenhum, o monitor entra em rajada contra o runtime local (medido
+      // aqui em ~35 requisições por segundo por processo); 25 ms ainda drenam
+      // ~2,5 MB/s, muito acima do que qualquer processo produz de log.
+      await delay(hostProcessPollDelay(hasMore, idlePolls));
+      let delta: HostProcessOutputDelta;
+      try {
+        delta = await readHostProcessOutput(process.id, cursor);
+        if (retry.reset()) publishNotice([RECONNECTED_NOTICE]);
+      } catch (cause) {
+        const decision = retry.schedule(cause);
+        if (decision.attempt === 1) publishNotice([reconnectingNotice(cause)]);
+        await delay(decision.delayMs);
+        continue;
+      }
+      cursor = delta.cursor;
+      hasMore = delta.hasMore;
+      const outputChanged = delta.truncated || delta.chunks.length > 0;
+      if (outputChanged) {
+        idlePolls = 0;
+        onDelta(delta);
+      } else {
+        idlePolls += 1;
+      }
+      process = {
+        ...process,
+        status: delta.status,
+        stopRequested: delta.stopRequested,
+        ...(delta.exitCode === undefined ? {} : { exitCode: delta.exitCode }),
+        ...(delta.signal === undefined ? {} : { signal: delta.signal }),
+        ...(delta.finishedAt === undefined ? {} : { finishedAt: delta.finishedAt }),
+        durationMs: delta.durationMs,
+        outputStartCursor: delta.startCursor,
+        outputEndCursor: delta.endCursor,
+        outputTruncated: delta.truncated,
+      };
+      if (callbacks.shouldStop?.() && process.status === "running") {
+        await stopHostProcess(process.id);
+      }
+    } while (process.status === "running" || hasMore);
 
-  return process;
+    return process;
+  } finally {
+    monitor.dispose();
+  }
+}
+
+export function hostProcessPollDelay(hasMore: boolean, idlePolls: number): number {
+  if (hasMore) return 25;
+  if (idlePolls <= 0) return 200;
+  return Math.min(1_000, 200 * (2 ** Math.min(idlePolls, 3)));
 }
 
 function activeFileDirectory(path: string | undefined): string | undefined {

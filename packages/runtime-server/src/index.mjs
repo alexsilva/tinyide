@@ -3,8 +3,8 @@ import { mkdir, readFile, realpath, readdir, rm, stat, writeFile } from "node:fs
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
-import { createExecutionBackend, createWorkspacePluginConfiguration } from "./execution-backend.mjs";
+import { createExecutionBackend } from "./execution-backend.mjs";
+import { createPluginBackendProxy } from "./plugin-backend-proxy.mjs";
 import { createUserDataBackend, defaultTinyIdeUserDataRoot } from "./user-data-backend.mjs";
 import {
   assertWorkspaceScopeId,
@@ -443,11 +443,10 @@ export function createTinyIdeRuntime(options) {
         context.backendHandlers.delete(cacheKey);
         await disposeBackendHandler(cached.handler);
       }
-      const imported = await import(`${pathToFileURL(backendPath).href}?v=${backendMtime}`);
-      if (typeof imported.createBackend !== "function") throw new Error(`Plugin backend must export createBackend(): ${pluginId}`);
-      const handler = imported.createBackend({
+      const handler = createPluginBackendProxy({
+        backendPath,
         workspaceRoot: activeWorkspaceRoot,
-        configuration: createWorkspacePluginConfiguration(activeWorkspaceRoot, pluginId),
+        pluginId,
       });
       context.backendHandlers.set(cacheKey, {mtime: backendMtime, handler});
       return handler;

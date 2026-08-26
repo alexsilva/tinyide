@@ -92,7 +92,11 @@ function runtimePlugin() {
         || normalizedChangedPath.endsWith(`${sep}dist${sep}frontend.js`)
         || normalizedChangedPath.endsWith(`${sep}src${sep}backend.mjs`)
       ) {
-        runtime.clearBackendCache();
+        // Backends são isolados por plugin em workers. O runtime compara o
+        // mtime do entrypoint em cada chamada e reinicia somente o worker do
+        // plugin alterado; invalidar todos aqui derrubaria terminais e outros
+        // recursos vivos sem necessidade.
+        if (normalizedChangedPath.endsWith(`${sep}plugin.json`)) runtime.clearManifestCache();
         server.ws.send({type: "full-reload", path: "*"});
       }
     });

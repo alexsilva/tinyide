@@ -385,7 +385,7 @@ export function supportsSystemResourceClipboard(): boolean {
 
 const FALLBACK_WATCHER_DEFAULT_IGNORED_DIRECTORIES: readonly string[] = [
   ".cache", ".git", ".idea", ".mypy_cache", ".next", ".nuxt", ".pytest_cache", ".svelte-kit",
-  ".tox", ".tinyide", ".venv", "__pycache__", "build", "coverage", "dist", "node_modules",
+  ".tox", ".tinyide", ".tmp", ".venv", "__pycache__", "build", "coverage", "dist", "node_modules",
   "release", "site", "target", "venv",
 ];
 

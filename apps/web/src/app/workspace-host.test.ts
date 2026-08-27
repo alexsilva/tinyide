@@ -5,6 +5,7 @@ import type {
   BrowserFileHandle,
 } from "../browser-filesystem";
 import {
+  desktopWatcherDefaultIgnoredDirectories,
   openInSystemFileManager,
   pickWorkspaceDirectory,
   WORKSPACE_PICKER_ID,
@@ -98,6 +99,20 @@ describe("pickWorkspaceDirectory", () => {
 
     await expect(pickWorkspaceDirectory("/mnt/projects/preco")).resolves.toMatchObject({ name: "preco" });
     expect(showDirectoryPicker).toHaveBeenCalledWith({ id: WORKSPACE_PICKER_ID, mode: "readwrite" });
+  });
+});
+
+describe("desktop watcher defaults", () => {
+  it("keeps .tmp out of the external-change watcher fallback", () => {
+    vi.stubGlobal("window", { tinyideDesktop: {} });
+    expect(desktopWatcherDefaultIgnoredDirectories()).toContain(".tmp");
+  });
+
+  it("prefers the defaults published by the desktop host", () => {
+    vi.stubGlobal("window", {
+      tinyideDesktop: { watcherDefaultIgnoredDirectories: ["desktop-only"] },
+    });
+    expect(desktopWatcherDefaultIgnoredDirectories()).toEqual(["desktop-only"]);
   });
 });
 

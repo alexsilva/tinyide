@@ -13,6 +13,7 @@ const IGNORED_DIRECTORIES = new Set([
   ".svelte-kit",
   ".tox",
   ".tinyide",
+  ".tmp",
   ".venv",
   "__pycache__",
   "build",

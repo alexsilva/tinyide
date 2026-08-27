@@ -9,6 +9,7 @@ const require = createRequire(import.meta.url);
 const {
   createGitignoreFilter,
   createWorkspaceWatcher,
+  DEFAULT_IGNORED_DIRECTORIES,
   ignoredWorkspacePath,
   workspaceRelativePath,
 } = require("./workspace-watcher.cjs");
@@ -36,8 +37,10 @@ describe("desktop workspace watcher", () => {
   it("ignores heavy dependency/build directories", () => {
     expect(ignoredWorkspacePath("/workspace", "/workspace/node_modules/pkg/index.js")).toBe(true);
     expect(ignoredWorkspacePath("/workspace", "/workspace/dist/bundle.js")).toBe(true);
+    expect(ignoredWorkspacePath("/workspace", "/workspace/.tmp/performance-workspace/file.txt")).toBe(true);
     expect(ignoredWorkspacePath("/workspace", "/workspace/.venv/lib/site-packages/x.py")).toBe(true);
     expect(ignoredWorkspacePath("/workspace", "/workspace/src/node_modules_helper.ts")).toBe(false);
+    expect(DEFAULT_IGNORED_DIRECTORIES).toContain(".tmp");
   });
 
   it("supports wildcard patterns in extra ignored directories", () => {

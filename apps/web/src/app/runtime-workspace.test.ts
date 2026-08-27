@@ -38,7 +38,7 @@ describe("host workspace transition", () => {
     expect(window.location.pathname).toBe("/w/new-0011223344556677/");
   });
 
-  it("keeps plugin access blocked when selecting the new workspace fails", async () => {
+  it("restores plugin access to the current workspace when selecting the new workspace fails", async () => {
     setActiveHostWorkspaceRoot("/workspace/old");
     globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ error: "workspace inválido" }), {
       status: 400,
@@ -46,6 +46,6 @@ describe("host workspace transition", () => {
     })) as typeof fetch;
 
     await expect(setHostWorkspace("broken", "/workspace/missing")).rejects.toThrow("workspace inválido");
-    expect(getActiveHostWorkspaceRoot()).toBeUndefined();
+    expect(getActiveHostWorkspaceRoot()).toBe("/workspace/old");
   });
 });

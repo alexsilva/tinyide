@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { startTinyIdeRuntime } from "./index.mjs";
+import { registerWorkspaceScope } from "./workspace-scope.mjs";
 
 const resources = [];
 
@@ -123,6 +124,34 @@ describe("runtime server hardening", () => {
     });
     expect(response.status).toBe(413);
     await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining("limite") });
+  });
+
+  it("allows previously registered workspaces outside the search root without allowing arbitrary paths", async () => {
+    const { runtime, userDataRoot } = await fixture();
+    const outsideRoot = await mkdtemp(join(tmpdir(), "tinyide-known-workspace-"));
+    resources.push({ root: outsideRoot });
+    const knownWorkspace = join(outsideRoot, "known-project");
+    const unknownWorkspace = join(outsideRoot, "unknown-project");
+    await Promise.all([mkdir(knownWorkspace), mkdir(unknownWorkspace)]);
+
+    const select = (path) => fetch(`${runtime.url}/core-api/workspace`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: basename(path), path }),
+    });
+
+    expect((await select(knownWorkspace)).status).toBe(400);
+    expect((await select(unknownWorkspace)).status).toBe(400);
+
+    await registerWorkspaceScope(userDataRoot, knownWorkspace);
+
+    const accepted = await select(knownWorkspace);
+    expect(accepted.status).toBe(200);
+    await expect(accepted.json()).resolves.toMatchObject({
+      workspaceRoot: knownWorkspace,
+      scopeId: runtime.workspaceScopeId(knownWorkspace),
+    });
+    expect((await select(unknownWorkspace)).status).toBe(400);
   });
 
   it("rejects cross-origin API calls while accepting the runtime origin", async () => {
@@ -587,6 +616,25 @@ describe("runtime server hardening", () => {
     expect(released.status).toBe(204);
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(() => process.kill(childPid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+  });
+
+  it("treats concurrent workspace registration from the same window as one client", async () => {
+    const { runtime, root, workspaceRoot } = await fixture();
+    const secondWorkspace = join(root, "second-workspace");
+    await mkdir(secondWorkspace);
+    const select = (path) => fetch(`${runtime.url}/core-api/workspace`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: basename(path), path, clientId: "window-concurrent" }),
+    });
+
+    const opened = await Promise.all([select(workspaceRoot), select(workspaceRoot)]);
+    expect(opened.map((response) => response.status)).toEqual([200, 200]);
+    expect((await select(secondWorkspace)).status).toBe(200);
+
+    const oldScope = runtime.workspaceScopeId(workspaceRoot);
+    const oldContext = await fetch(`${runtime.url}/w/${oldScope}/core-api/context`);
+    expect(oldContext.status).not.toBe(200);
   });
 
   it("preserves plugin processes when reload restores the same workspace", async () => {

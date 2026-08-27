@@ -17,6 +17,8 @@ import { TransientRuntimeError } from "./transient-failure";
 const WORKSPACE_SCOPE_PREFIX = "/w/";
 const PROJECT_OPEN_QUERY = "tinyideOpenProject";
 const SCOPE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,95}$/;
+const WINDOW_CLIENT_NAME_PREFIX = "tinyide-client:";
+const CLIENT_ID_PATTERN = /^[A-Za-z0-9-]{8,128}$/;
 
 function validScopeId(value: string | null | undefined): value is string {
   return Boolean(value && SCOPE_ID_PATTERN.test(value));
@@ -56,15 +58,30 @@ export function activeWorkspaceScopeId(): string | undefined {
 }
 
 /**
- * Identidade desta janela perante o runtime. Não persiste: vale enquanto o
- * documento existir. O servidor a usa para contar quantas janelas continuam em
- * cada workspace e encerrar o que sobra quando a última sai.
+ * Identidade desta janela perante o runtime. Precisa sobreviver a reload do
+ * documento: Vite, recuperação de erro ou o próprio usuário podem recarregar a
+ * mesma janela, e gerar outro id deixaria o cliente anterior órfão no workspace.
+ * `window.name` pertence ao browsing context (não ao módulo JS), sobrevive a
+ * reload e uma nova janela `_blank` começa com identidade própria.
  */
-const clientId = ((): string => {
+function newClientId(): string {
   const random = globalThis.crypto?.randomUUID?.();
   if (random) return random;
   return `w-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
-})();
+}
+
+function windowClientId(): string {
+  if (typeof window === "undefined") return newClientId();
+  const persisted = window.name.startsWith(WINDOW_CLIENT_NAME_PREFIX)
+    ? window.name.slice(WINDOW_CLIENT_NAME_PREFIX.length)
+    : undefined;
+  if (persisted && CLIENT_ID_PATTERN.test(persisted)) return persisted;
+  const created = newClientId();
+  window.name = `${WINDOW_CLIENT_NAME_PREFIX}${created}`;
+  return created;
+}
+
+const clientId = windowClientId();
 
 export function workspaceClientId(): string {
   return clientId;
@@ -257,5 +274,6 @@ export function clearRequestedProjectReference(): void {
 export const projectSessionInternals = {
   validScopeId,
   scopeFromPathname,
+  windowClientId,
   WORKSPACE_SCOPE_PREFIX,
 };

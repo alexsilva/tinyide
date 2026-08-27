@@ -9,6 +9,7 @@ import { createUserDataBackend, defaultTinyIdeUserDataRoot } from "./user-data-b
 import {
   assertWorkspaceScopeId,
   listWorkspaceScopes,
+  normalizeWorkspacePath,
   readWorkspaceScope,
   registerWorkspaceScope,
   removeWorkspaceScope,
@@ -404,16 +405,23 @@ export function createTinyIdeRuntime(options) {
     return nearest[0].path;
   }
 
-  function resolveWorkspaceSelection(payload) {
+  async function workspacePathAllowed(candidate) {
+    if (typeof options.workspacePathAllowed === "function") {
+      return await options.workspacePathAllowed(candidate);
+    }
+    if (isInsideWorkspaceSearchRoot(candidate)) return true;
+    const descriptor = await readWorkspaceScope(userDataRoot, workspaceScopeId(candidate));
+    return Boolean(descriptor && normalizeWorkspacePath(descriptor.path) === normalizeWorkspacePath(candidate));
+  }
+
+  async function resolveWorkspaceSelection(payload) {
     const name = typeof payload.name === "string" ? payload.name.trim() : "";
     if (!name || name.includes("/") || name.includes("\\") || name.includes("\0")) throw new Error("Nome de workspace inválido.");
     if (typeof payload.path === "string" && payload.path.trim()) {
       const candidate = resolve(payload.path.trim());
-      const pathAllowed = typeof options.workspacePathAllowed === "function"
-        ? options.workspacePathAllowed(candidate)
-        : isInsideWorkspaceSearchRoot(candidate);
+      const pathAllowed = await workspacePathAllowed(candidate);
       if (!pathAllowed || !existsSync(candidate) || !statSync(candidate).isDirectory()) {
-        throw new Error("O workspace salvo não está disponível dentro da raiz configurada para workspaces.");
+        throw new Error("O workspace informado não está autorizado ou disponível neste host.");
       }
       if (basename(candidate) !== name) throw new Error("O caminho salvo não corresponde ao workspace selecionado.");
       return candidate;
@@ -529,7 +537,7 @@ export function createTinyIdeRuntime(options) {
     // no diretório de estado daquele workspace.
     if (request.method === "POST" && requestUrl.pathname === "/core-api/workspace") {
       void readJson(request).then(async (payload) => {
-        const nextWorkspaceRoot = resolveWorkspaceSelection(payload);
+        const nextWorkspaceRoot = await resolveWorkspaceSelection(payload);
         const nextScopeId = workspaceScopeId(nextWorkspaceRoot);
         if (scopeId && scopeId !== nextScopeId) {
           const error = new Error("O workspace informado não pertence a este escopo.");

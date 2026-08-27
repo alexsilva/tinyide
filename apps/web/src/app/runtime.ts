@@ -34,7 +34,7 @@ import { appendExecutionOutput } from "./execution/execution-output-buffer";
 import { tryAcquireHostProcessMonitor } from "./execution/process-monitor";
 import { pluginLanguageProviderFor } from "./generic-syntax";
 import { platform } from "./platform";
-import { setActiveHostWorkspaceRoot } from "./host-workspace-state";
+import { getActiveHostWorkspaceRoot, setActiveHostWorkspaceRoot } from "./host-workspace-state";
 import { writeHostWorkspacePointer } from "./host-pointer";
 import {
   clearActiveWorkspaceScope,
@@ -362,6 +362,7 @@ export async function setHostWorkspace(
 ): Promise<{ readonly workspaceRoot: string; readonly scopeId: string }> {
   // Durante a troca, nenhum plugin deve continuar consultando o backend do
   // workspace anterior enquanto o runtime desmonta seus handlers.
+  const previousWorkspaceRoot = getActiveHostWorkspaceRoot();
   setActiveHostWorkspaceRoot(undefined);
   const response = await runtimeFetch("/core-api/workspace", {
     method: "POST",
@@ -375,6 +376,7 @@ export async function setHostWorkspace(
       ...(workspaceRootHint ? { path: workspaceRootHint } : {}),
     }),
   });
+  if (!response.ok) setActiveHostWorkspaceRoot(previousWorkspaceRoot);
   const payload = await readHostJson<{
     readonly workspaceRoot?: string;
     readonly scopeId?: string;

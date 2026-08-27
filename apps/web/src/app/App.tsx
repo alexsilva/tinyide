@@ -713,6 +713,7 @@ export function App() {
   const [resourceDecorations, setResourceDecorations] = useState<ReadonlyMap<string, ResourceDecoration>>(new Map());
   const [resourceDecorationRevision, setResourceDecorationRevision] = useState(0);
   const [restorationComplete, setRestorationComplete] = useState(false);
+  const restorationStartedRef = useRef(false);
   const [error, setErrorState] = useState<string>();
   /**
    * Trocar de projeto cancela as chamadas em voo do projeto anterior. Esse
@@ -2459,6 +2460,12 @@ export function App() {
   }, [applyPersistedVisualSession]);
 
   useEffect(() => {
+    // React StrictMode executa effects de montagem duas vezes em desenvolvimento
+    // para expor side effects não-idempotentes. A restauração abre o workspace,
+    // cria workers/watchers e portanto não pode ser disparada em paralelo. O
+    // ref pertence à montagem efetiva do App e sobrevive ao replay do effect.
+    if (restorationStartedRef.current) return;
+    restorationStartedRef.current = true;
     platform.initialize()
       .then(async () => {
         const [sessionLocator, persistedUserSettings] = await Promise.all([

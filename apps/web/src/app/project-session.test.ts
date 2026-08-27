@@ -17,6 +17,7 @@ import {
 afterEach(() => {
   clearActiveWorkspaceScope();
   window.history.replaceState(null, "", "/");
+  window.name = "";
   vi.unstubAllGlobals();
 });
 
@@ -49,6 +50,16 @@ describe("workspace scope identity", () => {
     clearActiveWorkspaceScope();
     expect(hasActiveWorkspaceScope()).toBe(false);
     expect(window.location.pathname).toBe("/");
+  });
+
+  it("keeps the runtime client identity across module reloads in the same window", async () => {
+    window.name = "";
+    const first = projectSessionInternals.windowClientId();
+    expect(window.name).toBe(`tinyide-client:${first}`);
+
+    vi.resetModules();
+    const reloaded = await import("./project-session");
+    expect(reloaded.workspaceClientId()).toBe(first);
   });
 });
 

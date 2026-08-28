@@ -40,6 +40,7 @@ describe("plugin contribution expansion", () => {
     const secondDispose = vi.fn();
     const firstMount = vi.fn(() => ({ dispose: firstDispose }));
     const secondMount = vi.fn(async () => ({ dispose: secondDispose }));
+    const firstMountStatus = vi.fn();
     const activityBadge = {
       snapshot: () => ({ value: 2, label: "2 ativos", tone: "active" as const }),
       subscribe: vi.fn(() => ({ dispose: vi.fn() })),
@@ -51,7 +52,7 @@ describe("plugin contribution expansion", () => {
       activityBadge,
       views: [
         { id: "second", label: "Segundo", order: 2, mount: secondMount },
-        { id: "first", label: "Primeiro", order: 1, mount: firstMount },
+        { id: "first", label: "Primeiro", order: 1, mountStatus: firstMountStatus, mount: firstMount },
       ],
     } as WorkbenchToolWindowHookContribution;
     const [expanded] = expandWorkbenchToolWindowContribution(contribution);
@@ -60,10 +61,12 @@ describe("plugin contribution expansion", () => {
     const container = document.createElement("div");
     const selected: string[] = [];
     const registered: string[] = [];
+    const registeredTabs: WorkbenchTabContribution[] = [];
     const tabDisposals: ReturnType<typeof vi.fn>[] = [];
     const tabs = {
       register(item: WorkbenchTabContribution) {
         registered.push(item.id);
+        registeredTabs.push(item);
         const dispose = vi.fn();
         tabDisposals.push(dispose);
         return { dispose };
@@ -83,6 +86,7 @@ describe("plugin contribution expansion", () => {
     await Promise.resolve();
 
     expect(registered).toEqual(["first", "second"]);
+    expect(registeredTabs[0]?.mountStatus).toBe(firstMountStatus);
     expect(selected).toEqual(["first"]);
     expect(firstMount).toHaveBeenCalledTimes(1);
     expect(secondMount).toHaveBeenCalledTimes(1);

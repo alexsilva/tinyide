@@ -1167,7 +1167,7 @@ export interface WorkbenchTabContribution {
   readonly placement?: "start" | "end";
   onSelect(): void;
   onClose?(): void | Promise<void>;
-  /** Renders custom content inside the tab, after the label and before the close button. */
+  /** Renders lightweight status content beside the tab label. */
   mountStatus?(container: HTMLElement): void | Disposable;
 }
 
@@ -1238,6 +1238,8 @@ export interface WorkbenchToolWindowViewContribution {
   readonly label: string;
   readonly order?: number;
   readonly placement?: "start" | "end";
+  /** Renders lightweight status content beside the view label in the panel tab. */
+  mountStatus?(container: HTMLElement): void | Disposable;
   mount(context: WorkbenchPanelMountContext): void | Disposable | Promise<void | Disposable>;
 }
 
@@ -1479,6 +1481,7 @@ export interface WorkbenchExecutionApi {
 
 export interface WorkbenchApi {
   readonly dialogs: WorkbenchDialogApi;
+  readonly notifications: WorkbenchNotificationApi;
   readonly editor: WorkbenchTextEditorApi;
   readonly text: WorkbenchTextApi;
   readonly workspace: WorkbenchWorkspaceApi;
@@ -1487,6 +1490,10 @@ export interface WorkbenchApi {
   readonly execution: WorkbenchExecutionApi;
   openSidebar(id: string): void;
   openToolWindow(id: string, viewId?: string): void;
+}
+
+export interface WorkbenchNotificationApi {
+  error(message: string): void;
 }
 
 /**

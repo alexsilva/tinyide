@@ -715,6 +715,7 @@ export function App() {
   const [restorationComplete, setRestorationComplete] = useState(false);
   const restorationStartedRef = useRef(false);
   const [error, setErrorState] = useState<string>();
+  const [pluginNotificationError, setPluginNotificationError] = useState<string>();
   /**
    * Trocar de projeto cancela as chamadas em voo do projeto anterior. Esse
    * cancelamento é o comportamento correto, não uma falha: mostrá-lo na barra de
@@ -1896,6 +1897,9 @@ export function App() {
   }, [platformSnapshot.plugins, restorationComplete]);
 
   useEffect(() => platform.workbench.bind({
+    notifyError(message) {
+      setPluginNotificationError(message);
+    },
     openSidebar(id) {
       if (!workbenchSidebars.some((sidebar) => sidebar.id === id)) {
         throw new Error(`Sidebar não registrada: ${id}`);
@@ -2322,6 +2326,14 @@ export function App() {
       if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
     };
   }, [error]);
+
+  useEffect(() => {
+    if (!pluginNotificationError) return;
+    const timer = setTimeout(() => setPluginNotificationError((value) => (
+      value === pluginNotificationError ? undefined : value
+    )), 7000);
+    return () => clearTimeout(timer);
+  }, [pluginNotificationError]);
 
   useEffect(() => () => {
     if (workspaceExternalSyncTimerRef.current) clearTimeout(workspaceExternalSyncTimerRef.current);
@@ -8509,6 +8521,18 @@ export function App() {
             })}
             onClose={() => setProjectOpenDialog(false)}
           />
+        ) : null}
+
+        {pluginNotificationError ? (
+          <div className="error-toast" role="alert" data-source="plugin-notification">
+            <span>{pluginNotificationError}</span>
+            <button
+              className="icon-button small"
+              type="button"
+              aria-label="Fechar notificação"
+              onClick={() => setPluginNotificationError(undefined)}
+            ><X size={14} /></button>
+          </div>
         ) : null}
 
         {error ? (

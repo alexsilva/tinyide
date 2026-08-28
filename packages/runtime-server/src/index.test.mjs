@@ -45,7 +45,7 @@ async function fixture(options = {}) {
 
 describe("runtime server hardening", () => {
   it("terminates active execution process trees when the runtime closes", async () => {
-    const { runtime, root, workspaceRoot, scoped } = await fixture();
+    const { runtime, root, workspaceRoot, scoped } = await fixture({ workspaceClientReleaseGraceMs: 20 });
     const pidPath = join(root, "child.pid");
     const started = await fetch(scoped("/core-api/execution/processes"), {
       method: "POST",
@@ -67,7 +67,7 @@ describe("runtime server hardening", () => {
     await runtime.close();
     const resource = resources.find((item) => item.runtime === runtime);
     if (resource) resource.runtime = undefined;
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 60));
     expect(() => process.kill(childPid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
   });
 
@@ -585,7 +585,7 @@ describe("runtime server hardening", () => {
   });
 
   it("releases the workspace of a window that closed without switching projects", async () => {
-    const { runtime, root, workspaceRoot, scoped } = await fixture();
+    const { runtime, root, workspaceRoot, scoped } = await fixture({ workspaceClientReleaseGraceMs: 20 });
     const pidPath = join(root, "released-child.pid");
     expect((await fetch(`${runtime.url}/core-api/workspace`, {
       method: "POST",
@@ -614,7 +614,7 @@ describe("runtime server hardening", () => {
       body: JSON.stringify({ clientId: "window-alpha" }),
     });
     expect(released.status).toBe(204);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 60));
     expect(() => process.kill(childPid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
   });
 
@@ -638,7 +638,7 @@ describe("runtime server hardening", () => {
   });
 
   it("preserves plugin processes when reload restores the same workspace", async () => {
-    const { runtime, root, pluginsRoot, workspaceRoot, scoped } = await fixture();
+    const { runtime, root, pluginsRoot, workspaceRoot, scoped } = await fixture({ workspaceClientReleaseGraceMs: 80 });
     const pluginRoot = join(pluginsRoot, "persistent");
     const pidPath = join(root, "plugin-child.pid");
     await mkdir(pluginRoot);
@@ -672,12 +672,27 @@ describe("runtime server hardening", () => {
     const childPid = Number(await readFile(pidPath, "utf8"));
     expect(childPid).toBeGreaterThan(0);
 
+    expect((await fetch(`${runtime.url}/core-api/workspace`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "workspace", path: workspaceRoot, clientId: "window-reload" }),
+    })).status).toBe(200);
+
+    expect((await fetch(`${runtime.url}/core-api/workspace/release`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ clientId: "window-reload" }),
+    })).status).toBe(204);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
     const restored = await fetch(`${runtime.url}/core-api/workspace`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "workspace", path: workspaceRoot }),
+      body: JSON.stringify({ name: "workspace", path: workspaceRoot, clientId: "window-reload" }),
     });
     expect(restored.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 100));
     expect(() => process.kill(childPid, 0)).not.toThrow();
 
     await runtime.close();

@@ -219,6 +219,10 @@ export function createTinyIdeRuntime(options) {
   // compartilham o próprio diretório —, e projetos diferentes não têm como se
   // enxergar: não existe mais um contexto "default" no qual todos caem.
   const workspaceContexts = new Map();
+  const pendingClientReleases = new Map();
+  const workspaceClientReleaseGraceMs = Number.isFinite(options.workspaceClientReleaseGraceMs)
+    ? Math.max(0, Number(options.workspaceClientReleaseGraceMs))
+    : 1_500;
   const initialWorkspaceRoot = options.initialWorkspaceRoot
     ? resolve(options.initialWorkspaceRoot)
     : undefined;
@@ -290,10 +294,27 @@ export function createTinyIdeRuntime(options) {
    */
   async function attachWorkspaceClient(scopeId, clientId) {
     if (!clientId) return;
+    const pendingRelease = pendingClientReleases.get(clientId);
+    if (pendingRelease) {
+      clearTimeout(pendingRelease);
+      pendingClientReleases.delete(clientId);
+    }
     const target = workspaceContext(scopeId);
     target.clients.add(clientId);
     target.hadClients = true;
     await releaseAbandonedContexts(clientId, scopeId);
+  }
+
+  function scheduleWorkspaceClientRelease(clientId) {
+    if (!clientId) return;
+    const previous = pendingClientReleases.get(clientId);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+      pendingClientReleases.delete(clientId);
+      void releaseAbandonedContexts(clientId, undefined);
+    }, workspaceClientReleaseGraceMs);
+    timer.unref?.();
+    pendingClientReleases.set(clientId, timer);
   }
 
   async function releaseAbandonedContexts(clientId, keepScopeId) {
@@ -585,7 +606,7 @@ export function createTinyIdeRuntime(options) {
      */
     if (request.method === "POST" && requestUrl.pathname === "/core-api/workspace/release") {
       void readJson(request)
-        .then((payload) => releaseAbandonedContexts(workspaceClientId(payload), undefined))
+        .then((payload) => scheduleWorkspaceClientRelease(workspaceClientId(payload)))
         .catch(() => undefined)
         .then(() => writeJson(response, 204, undefined));
       return;
@@ -866,6 +887,8 @@ export function createTinyIdeRuntime(options) {
     },
     clearManifestCache() { manifestCache = { expiresAt: 0, descriptors: [] }; },
     async dispose() {
+      for (const timer of pendingClientReleases.values()) clearTimeout(timer);
+      pendingClientReleases.clear();
       await Promise.allSettled([...workspaceContexts.values(), unscopedContext].flatMap((context) => [
         context.executionBackend.dispose?.(),
         disposeCachedBackends(context),

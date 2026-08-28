@@ -58,6 +58,7 @@ export function expandWorkbenchToolWindowContribution(
           label: view.label,
           ...(view.order !== undefined ? { order: view.order } : {}),
           ...(view.placement ? { placement: view.placement } : {}),
+          ...(view.mountStatus ? { mountStatus: view.mountStatus } : {}),
           onSelect: () => activate(view.id),
         }));
         try {

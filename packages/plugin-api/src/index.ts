@@ -1403,6 +1403,8 @@ export interface WorkbenchWorkspaceResourceOpenRequest {
   readonly endColumn?: number;
   /** Selects the resource in the Explorer, expanding its ancestors. */
   readonly reveal?: boolean;
+  /** Keeps the requested line or line range visually highlighted in the editor. */
+  readonly highlight?: boolean;
 }
 
 export interface WorkbenchWorkspaceApi {

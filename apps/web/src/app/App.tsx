@@ -741,6 +741,11 @@ export function App() {
   const [explorerPendingDeletion, setExplorerPendingDeletion] = useState<readonly WorkspaceEntry[]>();
   const [explorerClipboard, setExplorerClipboard] = useState<readonly ExplorerClipboardEntry[] | undefined>(undefined);
   const [highlightedExplorerPath, setHighlightedExplorerPath] = useState<string>();
+  const [editorAttentionHighlight, setEditorAttentionHighlight] = useState<{
+    documentId: string;
+    startLine: number;
+    endLine: number;
+  }>();
   const [selectedExplorerPath, setSelectedExplorerPath] = useState<string>();
   const [selectedExplorerPaths, setSelectedExplorerPaths] = useState<ReadonlySet<string>>(new Set());
   const [editorContextMenuContext, setEditorContextMenuContext] = useState<TextEditorContextMenuContext>();
@@ -1471,6 +1476,17 @@ export function App() {
       end: editorProjectedOffsetFromSourceOffset(activeEditorContent, activeFoldProjection, activeEditorSearchMatch.end),
     };
   }, [activeEditorSearchMatch, activeFoldProjection, activeEditorContent]);
+  const activeEditorAttentionLines = useMemo<{ startLine: number; endLine: number } | undefined>(() => {
+    if (!editorAttentionHighlight || editorAttentionHighlight.documentId !== activeDocument?.id) return undefined;
+    const startLine = activeFoldProjection?.visibleLineByFileLine[editorAttentionHighlight.startLine - 1]
+      ?? editorAttentionHighlight.startLine;
+    const endLine = activeFoldProjection?.visibleLineByFileLine[editorAttentionHighlight.endLine - 1]
+      ?? editorAttentionHighlight.endLine;
+    return {
+      startLine: Math.min(startLine, endLine),
+      endLine: Math.max(startLine, endLine),
+    };
+  }, [editorAttentionHighlight, activeDocument?.id, activeFoldProjection]);
   /**
    * Enquanto o menu de contexto do editor está aberto, o texto que o originou (a seleção ou a
    * palavra sob o ponteiro) fica realçado para deixar claro sobre o que as ações vão agir.
@@ -3453,35 +3469,72 @@ export function App() {
     if (request.reveal) {
       const nextExpanded = new Set([...expanded, ...explorerAncestorDirectoryPaths(path)]);
       if (workspacePathContainsHiddenSegment(path)) setExplorerShowHidden(true);
+      setSidebarView("explorer");
+      const side = activitySideFor("builtin:explorer");
+      setSidebarViewsBySide((current) => ({ ...current, [side]: "explorer" }));
+      setSidebarVisible(true);
       setExpanded(nextExpanded);
       setEntries(await hydrateExplorerPath(entries, path));
       setSelectedExplorerPath(path);
+      setSelectedExplorerPaths(new Set([path]));
+      const revealExplorerEntry = (remainingAttempts = 6) => {
+        requestAnimationFrame(() => {
+          const element = document.querySelector<HTMLElement>(`[data-explorer-path="${CSS.escape(path)}"]`);
+          if (element) {
+            element.scrollIntoView({ block: "center" });
+            const viewport = element.closest<HTMLElement>(".explorer-content");
+            if (viewport) {
+              const elementRect = element.getBoundingClientRect();
+              const viewportRect = viewport.getBoundingClientRect();
+              if (elementRect.top >= viewportRect.top && elementRect.bottom <= viewportRect.bottom) return;
+            }
+          }
+          if (remainingAttempts > 1) revealExplorerEntry(remainingAttempts - 1);
+        });
+      };
+      revealExplorerEntry();
     }
     if (request.line && request.line > 0) {
       const targetLine = request.line;
-      if (targetDocument?.kind === "text" && request.column && request.column > 0) {
+      if (targetDocument?.kind === "text") {
         const selectionStart = textOffsetAtPosition(targetDocument.content, {
           line: request.line,
-          column: request.column,
+          column: request.column ?? 1,
         });
-        const selectionEnd = request.endLine && request.endColumn
+        const selectionEnd = request.endLine
           ? textOffsetAtPosition(targetDocument.content, {
               line: request.endLine,
-              column: request.endColumn,
+              column: request.endColumn ?? Number.MAX_SAFE_INTEGER,
             })
-          : selectionStart;
+          : request.highlight
+            ? textOffsetAtPosition(targetDocument.content, {
+                line: request.line,
+                column: Number.MAX_SAFE_INTEGER,
+              })
+            : selectionStart;
+        const editorSelectionEnd = request.highlight ? selectionStart : selectionEnd;
         setDocuments((current) => current.map((document) => document.id === targetDocument.id
           ? {
               ...document,
               selectionStart,
-              selectionEnd,
+              selectionEnd: editorSelectionEnd,
               scrollTop: editorScrollTopForLine(targetLine),
             }
           : document));
-        revealEditorLocation(targetLine, selectionStart, selectionEnd);
+        setEditorAttentionHighlight(request.highlight
+          ? {
+              documentId: targetDocument.id,
+              startLine: request.line,
+              endLine: Math.max(request.line, request.endLine ?? request.line),
+            }
+          : undefined);
+        revealEditorLocation(targetLine, selectionStart, editorSelectionEnd);
       } else {
+        setEditorAttentionHighlight(undefined);
         scrollEditorToLine(targetLine);
       }
+    } else {
+      setEditorAttentionHighlight(undefined);
     }
   };
 
@@ -7198,6 +7251,22 @@ export function App() {
     />
   ) : null;
 
+  const editorAttentionLinesElement = activeDocument && activeEditorAttentionLines ? (
+    <div
+      className={`editor-attention-lines${editorUsesHighlightScroller ? " editor-attention-lines--inline" : ""}`}
+      aria-hidden="true"
+      data-attention-start-line={activeEditorAttentionLines.startLine}
+      data-attention-end-line={activeEditorAttentionLines.endLine}
+      style={{
+        "--attention-line-content-top": `${editorLineTop(activeEditorAttentionLines.startLine)}px`,
+        "--attention-line-height": `${(activeEditorAttentionLines.endLine - activeEditorAttentionLines.startLine + 1) * editorLayoutMetrics.lineHeight}px`,
+        ...(editorUsesHighlightScroller ? {} : {
+          "--editor-scroll-top": `${(highlightedEditorScrollRef.current ?? editorRef.current)?.scrollTop ?? activeDocument.scrollTop}px`,
+        }),
+      } as React.CSSProperties}
+    />
+  ) : null;
+
   return (
     <Tooltip.Provider delayDuration={350}>
       <div className="ide-shell">
@@ -7657,6 +7726,7 @@ export function App() {
                     {editorInlineGutter ? null : editorLineRulerElement}
                     {editorUsesHighlightScroller ? null : editorBreakpointLinesElement}
                     {editorUsesHighlightScroller ? null : editorDebugCurrentLineElement}
+                    {editorUsesHighlightScroller ? null : editorAttentionLinesElement}
                     {editorUsesHighlightScroller && activeDocument ? (
                       <div
                         ref={highlightedEditorScrollRef}
@@ -7681,6 +7751,7 @@ export function App() {
                         <div className="highlight-editor__content">
                           {editorBreakpointLinesElement}
                           {editorDebugCurrentLineElement}
+                          {editorAttentionLinesElement}
                           <pre
                             ref={syntaxLayerRef}
                             className="syntax-layer"

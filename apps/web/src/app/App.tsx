@@ -575,6 +575,7 @@ const EDITOR_STATE_CAPTURE_DELAY_MS = 200;
 const EDITOR_NAVIGATION_LOADING_DELAY_MS = 150;
 const EDITOR_NAVIGATION_LOADING_MINIMUM_MS = 350;
 const EDITOR_BUSY_MINIMUM_MS = 300;
+const EXPLORER_DIRECTORY_LOADING_CURSOR_DELAY_MS = 500;
 
 interface ExplorerFilterResultState {
   readonly query: string;
@@ -632,6 +633,8 @@ export function App() {
   const [explorerRevealedHiddenPaths, setExplorerRevealedHiddenPaths] = useState<ReadonlySet<string>>(new Set());
   const [explorerIgnoreResolution, setExplorerIgnoreResolution] = useState<ExplorerIgnoreResolution>();
   const [explorerIgnoreRevision, setExplorerIgnoreRevision] = useState(0);
+  const [explorerLoadingPaths, setExplorerLoadingPaths] = useState<ReadonlySet<string>>(new Set());
+  const [explorerLoadingCursorVisible, setExplorerLoadingCursorVisible] = useState(false);
   const [documents, setDocuments] = useState<readonly OpenDocument[]>([]);
   const [activeDocumentId, setActiveDocumentId] = useState<string | undefined>(initialSession.activeDocumentId);
   const [editorBusyOperation, setEditorBusyOperation] = useState<{
@@ -640,6 +643,19 @@ export function App() {
     readonly label: string;
     readonly startedAt: number;
   }>();
+  const explorerDirectoryLoading = explorerLoadingPaths.size > 0;
+
+  useEffect(() => {
+    if (!explorerDirectoryLoading) {
+      setExplorerLoadingCursorVisible(false);
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setExplorerLoadingCursorVisible(true),
+      EXPLORER_DIRECTORY_LOADING_CURSOR_DELAY_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [explorerDirectoryLoading]);
   const [draggingDocumentId, setDraggingDocumentId] = useState<string>();
   const [dropTargetDocumentId, setDropTargetDocumentId] = useState<string>();
   const [output, setOutput] = useState<string[]>(["tinyIde React shell inicializado."]);
@@ -3043,6 +3059,8 @@ export function App() {
     setOutput([]);
     setExpanded(new Set());
     setExplorerRevealedHiddenPaths(new Set());
+    setExplorerLoadingPaths(new Set());
+    setExplorerLoadingCursorVisible(false);
     setSelectedExplorerPath(undefined);
     setSelectedExplorerPaths(new Set());
     setHighlightedExplorerPath(undefined);
@@ -4082,6 +4100,7 @@ export function App() {
 
   const toggleEntry = async (entry: WorkspaceEntry) => {
     if (entry.kind !== "directory") return;
+    if (explorerLoadingPaths.has(entry.path)) return;
     if (expanded.has(entry.path)) {
       setExpanded((current) => {
         const next = new Set(current);
@@ -4091,19 +4110,34 @@ export function App() {
       return;
     }
 
-    const handle = entry.handle?.kind === "directory"
-      ? entry.handle
-      : workspaceHandle
-        ? await resolveDirectoryHandle(workspaceHandle, entry.path)
-        : undefined;
-    if (!handle) throw new Error("Restaure o acesso ao workspace antes de expandir esta pasta.");
-    const children = await listDirectory(handle, entry.path);
-    const replaceChildren = (items: readonly WorkspaceEntry[]): readonly WorkspaceEntry[] => items.map((item) => {
-      if (item.path === entry.path) return { ...item, handle, children };
-      return item.children ? { ...item, children: replaceChildren(item.children) } : item;
-    });
-    setEntries((current) => replaceChildren(current));
-    setExpanded((current) => new Set(current).add(entry.path));
+    if (entry.children) {
+      setExpanded((current) => new Set(current).add(entry.path));
+      return;
+    }
+
+    setExplorerLoadingPaths((current) => new Set(current).add(entry.path));
+    try {
+      const handle = entry.handle?.kind === "directory"
+        ? entry.handle
+        : workspaceHandle
+          ? await resolveDirectoryHandle(workspaceHandle, entry.path)
+          : undefined;
+      if (!handle) throw new Error("Restaure o acesso ao workspace antes de expandir esta pasta.");
+      const children = await listDirectory(handle, entry.path);
+      const replaceChildren = (items: readonly WorkspaceEntry[]): readonly WorkspaceEntry[] => items.map((item) => {
+        if (item.path === entry.path) return { ...item, handle, children };
+        return item.children ? { ...item, children: replaceChildren(item.children) } : item;
+      });
+      setEntries((current) => replaceChildren(current));
+      setExpanded((current) => new Set(current).add(entry.path));
+    } finally {
+      setExplorerLoadingPaths((current) => {
+        if (!current.has(entry.path)) return current;
+        const next = new Set(current);
+        next.delete(entry.path);
+        return next;
+      });
+    }
   };
 
   const updateDocument = (textarea: HTMLTextAreaElement) => {
@@ -6889,9 +6923,10 @@ export function App() {
 
               {view === "explorer" ? (
                 <div
-                  className={`sidebar-content explorer-content${dropTargetExplorerPath === "" ? " is-root-drop-target" : ""}`}
+                  className={`sidebar-content explorer-content${dropTargetExplorerPath === "" ? " is-root-drop-target" : ""}${explorerLoadingCursorVisible ? " is-directory-loading" : ""}`}
                   tabIndex={-1}
                   aria-label="Arquivos do Explorer"
+                  aria-busy={explorerDirectoryLoading}
                   onPointerDown={(event) => {
                     const target = event.target as HTMLElement;
                     if (target.closest("input, textarea, select, button, [contenteditable='true']")) return;

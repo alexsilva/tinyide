@@ -25,7 +25,11 @@ function files(count: number): WorkspaceEntry[] {
   }));
 }
 
-function renderTree(entries: readonly WorkspaceEntry[], selectedPath?: string) {
+function renderTree(
+  entries: readonly WorkspaceEntry[],
+  selectedPath?: string,
+  options: { readonly showIgnored?: boolean; readonly pendingIgnoredPaths?: ReadonlySet<string> } = {},
+) {
   host = document.createElement("div");
   host.style.height = "400px";
   host.style.overflowY = "auto";
@@ -38,8 +42,9 @@ function renderTree(entries: readonly WorkspaceEntry[], selectedPath?: string) {
       parentPath="many"
       expanded={new Set()}
       showHidden
-      showIgnored
+      showIgnored={options.showIgnored ?? true}
       ignoredPaths={new Set()}
+      {...(options.pendingIgnoredPaths ? { pendingIgnoredPaths: options.pendingIgnoredPaths } : {})}
       revealHidden
       revealedHiddenPaths={new Set()}
       filterVisiblePaths={undefined}
@@ -89,6 +94,20 @@ describe("Explorer large directory virtualization", () => {
     const container = renderTree(files(5_000), target);
     expect(container.querySelector(`[data-explorer-path="${target}"]`)).not.toBeNull();
     expect(container.querySelectorAll(".tree-entry-row").length).toBeLessThan(200);
+  });
+
+  it("does not render a path while ignore classification is pending", () => {
+    const entries: WorkspaceEntry[] = [
+      { name: "generated", path: "generated", kind: "directory" },
+      { name: "main.py", path: "main.py", kind: "file" },
+    ];
+    const container = renderTree(entries, undefined, {
+      showIgnored: false,
+      pendingIgnoredPaths: new Set(["generated"]),
+    });
+
+    expect(container.querySelector('[data-explorer-path="generated"]')).toBeNull();
+    expect(container.querySelector('[data-explorer-path="main.py"]')).not.toBeNull();
   });
 
   it("opens an unselected file context menu before scheduling the selection rerender", () => {

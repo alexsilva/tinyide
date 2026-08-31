@@ -161,6 +161,13 @@ import {
 
 type ExplorerClipboardEntry = Pick<WorkspaceEntry, "path" | "name" | "kind">;
 
+interface ExplorerIgnoreResolution {
+  readonly workspaceKey: string;
+  readonly providerKey: string;
+  readonly resolvedPaths: ReadonlySet<string>;
+  readonly ignoredPaths: ReadonlySet<string>;
+}
+
 function explorerPasteLabel(entries: readonly ExplorerClipboardEntry[]): string {
   if (entries.length === 1) {
     return `Colar ${entries[0]?.kind === "directory" ? "pasta" : "arquivo"}`;
@@ -623,7 +630,7 @@ export function App() {
   const [explorerShowHidden, setExplorerShowHidden] = useState(initialSession.explorerShowHidden);
   const [explorerShowIgnored, setExplorerShowIgnored] = useState(initialSession.explorerShowIgnored);
   const [explorerRevealedHiddenPaths, setExplorerRevealedHiddenPaths] = useState<ReadonlySet<string>>(new Set());
-  const [explorerIgnoredPaths, setExplorerIgnoredPaths] = useState<ReadonlySet<string>>(new Set());
+  const [explorerIgnoreResolution, setExplorerIgnoreResolution] = useState<ExplorerIgnoreResolution>();
   const [explorerIgnoreRevision, setExplorerIgnoreRevision] = useState(0);
   const [documents, setDocuments] = useState<readonly OpenDocument[]>([]);
   const [activeDocumentId, setActiveDocumentId] = useState<string | undefined>(initialSession.activeDocumentId);
@@ -4980,18 +4987,43 @@ export function App() {
     return () => subscriptions.forEach((subscription) => subscription.dispose());
   }, [explorerIgnoreProviders]);
 
-  useEffect(() => {
-    if (!explorerIgnoreProviders.length || workspaceName === "Sem workspace") {
-      setExplorerIgnoredPaths(new Set());
-      return;
-    }
+  const explorerIgnoreProviderKey = explorerIgnoreProviders
+    .map((provider) => `${provider.pluginId ?? ""}:${provider.id}`)
+    .join("\u0000");
+  const explorerIgnoreWorkspaceKey = workspaceRoot ?? `name:${workspaceName}`;
+  const explorerIgnorePaths = useMemo(() => {
     const collect = (items: readonly WorkspaceEntry[]): readonly string[] => items.flatMap((entry) => [
       entry.path,
       ...(entry.children ? collect(entry.children) : []),
     ]);
-    const paths = collect(entries);
+    return collect(entries);
+  }, [entries]);
+  const currentExplorerIgnoreResolution = explorerIgnoreResolution
+    && explorerIgnoreResolution.workspaceKey === explorerIgnoreWorkspaceKey
+    && explorerIgnoreResolution.providerKey === explorerIgnoreProviderKey
+      ? explorerIgnoreResolution
+      : undefined;
+  const explorerIgnoredPaths = currentExplorerIgnoreResolution?.ignoredPaths ?? new Set<string>();
+  const explorerPendingIgnoredPaths = useMemo(() => {
+    if (explorerShowIgnored || !explorerIgnoreProviders.length) return new Set<string>();
+    const resolvedPaths = currentExplorerIgnoreResolution?.resolvedPaths ?? new Set<string>();
+    const unresolved = explorerIgnorePaths.filter((path) => !resolvedPaths.has(path));
+    return unresolved.length ? new Set(unresolved) : new Set<string>();
+  }, [currentExplorerIgnoreResolution, explorerIgnorePaths, explorerIgnoreProviders.length, explorerShowIgnored]);
+
+  useEffect(() => {
+    if (!explorerIgnoreProviders.length || workspaceName === "Sem workspace") {
+      setExplorerIgnoreResolution(undefined);
+      return;
+    }
+    const paths = explorerIgnorePaths;
     if (!paths.length) {
-      setExplorerIgnoredPaths(new Set());
+      setExplorerIgnoreResolution({
+        workspaceKey: explorerIgnoreWorkspaceKey,
+        providerKey: explorerIgnoreProviderKey,
+        resolvedPaths: new Set(),
+        ignoredPaths: new Set(),
+      });
       return;
     }
     const requestedPaths = new Set(paths);
@@ -5004,10 +5036,22 @@ export function App() {
       }
     })).then((results) => {
       if (cancelled) return;
-      setExplorerIgnoredPaths(new Set(results.flatMap((result) => result.paths).filter((path) => requestedPaths.has(path))));
+      setExplorerIgnoreResolution({
+        workspaceKey: explorerIgnoreWorkspaceKey,
+        providerKey: explorerIgnoreProviderKey,
+        resolvedPaths: requestedPaths,
+        ignoredPaths: new Set(results.flatMap((result) => result.paths).filter((path) => requestedPaths.has(path))),
+      });
     });
     return () => { cancelled = true; };
-  }, [entries, explorerIgnoreProviders, explorerIgnoreRevision, workspaceName, workspaceRoot]);
+  }, [
+    explorerIgnorePaths,
+    explorerIgnoreProviderKey,
+    explorerIgnoreProviders,
+    explorerIgnoreRevision,
+    explorerIgnoreWorkspaceKey,
+    workspaceName,
+  ]);
 
   useEffect(() => {
     const query = explorerFilterQuery.trim();
@@ -7008,6 +7052,7 @@ export function App() {
                       showHidden={explorerShowHidden || explorerFilterActive}
                       showIgnored={explorerShowIgnored || explorerFilterActive}
                       ignoredPaths={explorerIgnoredPaths}
+                      pendingIgnoredPaths={explorerPendingIgnoredPaths}
                       revealHidden={explorerShowHidden || explorerFilterActive}
                       revealedHiddenPaths={explorerRevealedHiddenPaths}
                       filterVisiblePaths={explorerFilterResult?.visiblePaths}

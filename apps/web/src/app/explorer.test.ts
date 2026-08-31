@@ -90,18 +90,18 @@ describe("explorer model", () => {
   });
 
   it("treats project-ignored entries separately from dot-hidden entries", () => {
-    const ignoredPaths = new Set(["__pycache__", "node_modules"]);
-    const pycache = { name: "__pycache__", path: "__pycache__", kind: "directory" } satisfies WorkspaceEntry;
+    const ignoredPaths = new Set(["generated", "vendor"]);
+    const generated = { name: "generated", path: "generated", kind: "directory" } satisfies WorkspaceEntry;
     const dotCache = { name: ".cache", path: ".cache", kind: "directory" } satisfies WorkspaceEntry;
     const source = { name: "src", path: "src", kind: "directory" } satisfies WorkspaceEntry;
 
-    expect(explorerEntryVisible(pycache, false, false, ignoredPaths)).toBe(false);
-    expect(explorerEntryVisible(pycache, false, true, ignoredPaths)).toBe(true);
+    expect(explorerEntryVisible(generated, false, false, ignoredPaths)).toBe(false);
+    expect(explorerEntryVisible(generated, false, true, ignoredPaths)).toBe(true);
     expect(explorerEntryVisible(dotCache, false, true, ignoredPaths)).toBe(false);
     expect(explorerEntryVisible(source, false, false, ignoredPaths)).toBe(true);
-    expect(explorerDirectoryEmptyState([pycache], false, false, ignoredPaths)).toBe("ignored-only");
-    expect(explorerDirectoryEmptyState([dotCache, pycache], false, false, ignoredPaths)).toBe("filtered-only");
-    expect(ignoredExplorerEntryCount([pycache, source], ignoredPaths)).toBe(1);
+    expect(explorerDirectoryEmptyState([generated], false, false, ignoredPaths)).toBe("ignored-only");
+    expect(explorerDirectoryEmptyState([dotCache, generated], false, false, ignoredPaths)).toBe("filtered-only");
+    expect(ignoredExplorerEntryCount([generated, source], ignoredPaths)).toBe(1);
   });
 
   it("positions virtual creations using the same directory-first ordering as real entries", () => {

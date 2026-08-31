@@ -22,11 +22,13 @@ describe("diagnóstico de rede do desktop", () => {
   it("registra o código do Chromium e a rota de cada falha", async () => {
     const webRequest = webRequestStub();
     const write = vi.fn(async () => undefined);
+    const onEntry = vi.fn();
     const diagnostics = installNetworkDiagnostics({
       webRequest,
       runtimeOrigin: "http://127.0.0.1:42329",
       logPath: "/tmp/tinyide/network-errors.log",
       write,
+      onEntry,
       timestamp: () => "2026-08-26T13:00:00.000Z",
     });
 
@@ -45,6 +47,7 @@ describe("diagnóstico de rede do desktop", () => {
       url: "/w/projeto-1/core-api/execution/processes/abc/output?cursor=10",
       resourceType: "xhr",
     }]);
+    expect(onEntry).toHaveBeenCalledWith(diagnostics.recent()[0]);
     expect(write).toHaveBeenCalledOnce();
     expect(JSON.parse(write.mock.calls[0][0]).error).toBe("net::ERR_INSUFFICIENT_RESOURCES");
   });

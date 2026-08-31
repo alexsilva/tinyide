@@ -18,6 +18,7 @@ function installNetworkDiagnostics(options) {
   const {webRequest, runtimeOrigin, logPath} = options;
   if (!webRequest?.onErrorOccurred || !runtimeOrigin || !logPath) return {dispose() {}};
   const write = options.write ?? defaultWriter(logPath);
+  const onEntry = typeof options.onEntry === "function" ? options.onEntry : undefined;
   const timestamp = options.timestamp ?? (() => new Date().toISOString());
   const recent = [];
 
@@ -32,6 +33,7 @@ function installNetworkDiagnostics(options) {
     };
     recent.push(entry);
     if (recent.length > 50) recent.shift();
+    onEntry?.(entry);
     void write(`${JSON.stringify(entry)}\n`);
   });
 

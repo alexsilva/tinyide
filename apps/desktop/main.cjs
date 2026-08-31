@@ -5,6 +5,7 @@ const { basename, dirname, join, resolve } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { openInSystemFileManager } = require("./file-manager.cjs");
 const { copyExternalEntries, readFileClipboard, writeFileClipboard } = require("./file-clipboard.cjs");
+const { createFileLogger, installConsoleFileLogging, installWindowFileLogging } = require("./file-logger.cjs");
 const { allowedExternalUrl, safeWorkspacePath: resolveSafeWorkspacePath, sameOriginUrl } = require("./security.cjs");
 const {
   applyLoginShellEnvironment,
@@ -25,6 +26,8 @@ let runtime;
 let mainWindow;
 let browserExtensionGuard;
 let networkDiagnostics;
+let fileLogger;
+let processFileLogging;
 const workspaceRegistry = createWorkspaceRegistry({
   startWatcher: (root, extraIgnoredDirectories) => startWorkspaceWatcher(root, extraIgnoredDirectories),
 });
@@ -32,6 +35,45 @@ const workspaceRegistry = createWorkspaceRegistry({
 // ponteiro de restauração: qual projeto cada janela reabre é decidido pelo
 // escopo na URL e, na falta dele, pelo ponteiro por host do runtime.
 const WORKSPACE_PICKER_STATE_KEY = "workspace-picker-directory";
+
+function installApplicationFileLogging() {
+  const logger = createFileLogger({
+    logPath: join(app.getPath("userData"), "logs", "tinyide.log"),
+    onError(error) {
+      try {
+        process.stderr.write(`[tinyIde] Falha ao gravar log: ${error?.stack ?? error}\n`);
+      } catch {
+        // Falha de diagnóstico não pode impedir a IDE de iniciar.
+      }
+    },
+  });
+  const consoleLogging = installConsoleFileLogging(logger);
+  const onUncaughtException = (error, origin) => {
+    logger.error("process", `Exceção não capturada (${origin}).`, error);
+    void logger.flush();
+  };
+  const onWarning = (warning) => logger.warn("process", warning);
+  const onChildProcessGone = (_event, details) => logger.error("electron-child", "Processo auxiliar encerrado.", details);
+  process.on("uncaughtExceptionMonitor", onUncaughtException);
+  process.on("warning", onWarning);
+  app.on("child-process-gone", onChildProcessGone);
+  logger.info("lifecycle", "TinyIDE iniciando.", {
+    version: app.getVersion(),
+    packaged: app.isPackaged,
+    platform: process.platform,
+    arch: process.arch,
+  });
+  return {
+    logger,
+    consoleLogging,
+    dispose() {
+      process.removeListener("uncaughtExceptionMonitor", onUncaughtException);
+      process.removeListener("warning", onWarning);
+      app.removeListener("child-process-gone", onChildProcessGone);
+      consoleLogging.dispose();
+    },
+  };
+}
 
 function desktopStateRoot() {
   return join(app.getPath("userData"), "state");
@@ -86,6 +128,7 @@ async function registerDesktopWorkspace(rootPath, { persist = true, owner } = {}
   if (persist) {
     await writeDesktopState(desktopStateRoot(), WORKSPACE_PICKER_STATE_KEY, { path: root });
   }
+  fileLogger?.info("workspace", "Workspace registrado.", { root, owner, persist });
   return { token, name: basename(root), path: root };
 }
 
@@ -263,6 +306,11 @@ async function startRuntime() {
   const { startTinyIdeRuntime } = await import(runtimeModuleUrl);
   const selectedPort = Number(process.env.TINYIDE_RUNTIME_PORT);
   const initialWorkspace = initialWorkspaceRoot();
+  fileLogger?.info("runtime", "Iniciando runtime local.", {
+    appRoot,
+    initialWorkspace,
+    requestedPort: Number.isInteger(selectedPort) && selectedPort > 0 ? selectedPort : 0,
+  });
   const runtime = await startTinyIdeRuntime({
     hostRoot: appRoot,
     webRoot: join(appRoot, "apps/web/dist"),
@@ -279,6 +327,7 @@ async function startRuntime() {
     host: "127.0.0.1",
     port: Number.isInteger(selectedPort) && selectedPort > 0 ? selectedPort : 0,
   });
+  fileLogger?.info("runtime", "Runtime local disponível.", { url: runtime.url });
   console.log(`[tinyIde] Runtime disponível em ${runtime.url}`);
   return runtime;
 }
@@ -315,6 +364,8 @@ function createWindow(url) {
       webviewTag: false,
     },
   });
+  const windowFileLogging = fileLogger ? installWindowFileLogging(window, fileLogger) : { dispose() {} };
+  fileLogger?.info("window", "Janela criada.", { id: window.id, url });
 
   const productionHardening = installProductionWindowHardening(window, { packaged: app.isPackaged });
 
@@ -336,6 +387,8 @@ function createWindow(url) {
   ipcMain.on("tinyide:renderer:ready", rendererReady);
   const owner = window.webContents.id;
   window.on("closed", () => {
+    fileLogger?.info("window", "Janela fechada.", { id: window.id });
+    windowFileLogging.dispose();
     productionHardening.dispose();
     ipcMain.removeListener("tinyide:renderer:ready", rendererReady);
     if (mainWindow === window) mainWindow = undefined;
@@ -351,8 +404,12 @@ configureProductionChromium(app);
 const isPrimaryInstance = installSingleInstanceGuard(app, () => mainWindow);
 
 if (isPrimaryInstance) {
+  processFileLogging = installApplicationFileLogging();
+  fileLogger = processFileLogging.logger;
+  console.log(`[tinyIde] Log da aplicação: ${fileLogger.logPath}`);
   applyLoginShellEnvironment();
   app.whenReady().then(async () => {
+    fileLogger.info("lifecycle", "Electron pronto.");
     browserExtensionGuard = disableBrowserExtensions(session.defaultSession);
     installDesktopFileSystemHandlers();
     runtime = await startRuntime();
@@ -360,13 +417,17 @@ if (isPrimaryInstance) {
       webRequest: session.defaultSession.webRequest,
       runtimeOrigin: runtime.url,
       logPath: join(app.getPath("userData"), "logs", "network-errors.log"),
+      onEntry(entry) {
+        fileLogger.warn("network", "Falha de rede entre renderer e runtime.", entry);
+      },
     });
     mainWindow = createWindow(mainWindowUrl());
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow(mainWindowUrl());
     });
-  }).catch((error) => {
+  }).catch(async (error) => {
     console.error(error);
+    await fileLogger.flush();
     app.exit(1);
   });
 
@@ -375,9 +436,12 @@ if (isPrimaryInstance) {
   });
 
   installGracefulShutdown(app, async () => {
+    fileLogger.info("lifecycle", "TinyIDE encerrando.");
     browserExtensionGuard?.dispose();
     networkDiagnostics?.dispose();
     await workspaceRegistry.closeAll();
     if (runtime) await runtime.close();
+    await fileLogger.close();
+    processFileLogging?.dispose();
   });
 }

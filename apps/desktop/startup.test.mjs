@@ -155,6 +155,16 @@ describe("desktop startup", () => {
     expect(window.webContents.listenerCount("devtools-opened")).toBe(0);
   });
 
+  it("keeps development windows and sessions untouched", () => {
+    const window = createWindow();
+    const hardening = installProductionWindowHardening(window, {packaged: false});
+    const extensionGuard = disableBrowserExtensions(undefined);
+
+    expect(() => hardening.dispose()).not.toThrow();
+    expect(() => extensionGuard.dispose()).not.toThrow();
+    expect(window.webContents.listenerCount("before-input-event")).toBe(0);
+  });
+
   it("disposes packaged window hardening after BrowserWindow destruction", () => {
     const window = createWindow();
     const webContents = window.webContents;
@@ -229,6 +239,26 @@ describe("desktop startup", () => {
 
     releaseCleanup();
     await shutdown();
+    expect(application.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("logs cleanup failures and still exits the desktop process", async () => {
+    const application = new EventEmitter();
+    application.exit = vi.fn();
+    const logger = {error: vi.fn()};
+    const shutdown = installGracefulShutdown(
+      application,
+      vi.fn(async () => { throw new Error("cleanup failed"); }),
+      {logger},
+    );
+
+    application.emit("before-quit", {preventDefault: vi.fn()});
+    await shutdown();
+
+    expect(logger.error).toHaveBeenCalledWith(
+      "[tinyIde] Falha ao encerrar recursos:",
+      expect.objectContaining({message: "cleanup failed"}),
+    );
     expect(application.exit).toHaveBeenCalledWith(0);
   });
 

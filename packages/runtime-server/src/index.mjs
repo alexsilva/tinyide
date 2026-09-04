@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { createExecutionBackend } from "./execution-backend.mjs";
 import { createPluginBackendProxy } from "./plugin-backend-proxy.mjs";
+import { createPluginBackendResolver, createPluginManifestSnapshot } from "./plugin-runtime-cache.mjs";
 import { createUserDataBackend, defaultTinyIdeUserDataRoot } from "./user-data-backend.mjs";
 import {
   assertWorkspaceScopeId,
@@ -31,50 +32,18 @@ const CONTENT_TYPES = {
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const MAX_WORKSPACE_RESOURCE_BYTES = 128 * 1024 * 1024;
 const MANIFEST_CACHE_TTL_MS = 1000;
-const CDN_ORIGIN = "https://cdn.jsdelivr.net";
 // Prefixo que carrega a identidade do workspace na própria URL. Toda chamada de
 // API feita com um projeto aberto passa por `/w/<scopeId>/…`: o escopo deixa de
 // depender de um header que qualquer janela pode omitir e passa a ser visível no
 // devtools, no log de acesso e no histórico do navegador.
 const WORKSPACE_SCOPE_PREFIX = "/w/";
 
-function validInlineScriptHashes(hashes) {
-  if (!Array.isArray(hashes)) return [];
-  return hashes.filter((hash) => /^'sha(?:256|384|512)-[A-Za-z0-9+/]+={0,2}'$/.test(hash));
-}
-
-function contentSecurityPolicy(pluginDescriptors, inlineScriptHashes = []) {
-  const permissions = new Set(
-    pluginDescriptors.flatMap(({ manifest }) => Array.isArray(manifest.permissions) ? manifest.permissions : []),
-  );
-  const scriptSources = ["'self'", ...validInlineScriptHashes(inlineScriptHashes)];
-  const connectSources = ["'self'", "ws:"];
-
-  if (permissions.has("runtime.wasm")) scriptSources.push("'wasm-unsafe-eval'");
-  if (permissions.has("network.cdn")) {
-    scriptSources.push(CDN_ORIGIN);
-    connectSources.push(CDN_ORIGIN);
-  }
-
-  return [
-    "default-src 'self'",
-    `script-src ${scriptSources.join(" ")}`,
-    "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
-    "font-src 'self' data:",
-    `connect-src ${connectSources.join(" ")}`,
-    "object-src 'none'",
-    "base-uri 'none'",
-    "frame-ancestors 'none'",
-  ].join("; ");
-}
-
-function applySecurityHeaders(response, pluginDescriptors, inlineScriptHashes) {
+function applySecurityHeaders(response, policy) {
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader("X-Frame-Options", "DENY");
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-  response.setHeader("Content-Security-Policy", contentSecurityPolicy(pluginDescriptors, inlineScriptHashes));
+  response.setHeader("Content-Security-Policy", policy);
 }
 
 function writeJson(response, status, payload) {
@@ -193,14 +162,17 @@ export function createTinyIdeRuntime(options) {
     if (typeof handler?.dispose === "function") await handler.dispose(reason ? {reason} : undefined);
   }
   async function disposeCachedBackends(context, reason) {
+    const resolutions = [...context.backendResolutions.values()];
+    context.backendResolutions.clear();
+    await Promise.allSettled(resolutions);
     const handlers = [...new Set([...context.backendHandlers.values()].map((entry) => entry.handler))];
     context.backendHandlers.clear();
     await Promise.allSettled(handlers.map((handler) => disposeBackendHandler(handler, reason)));
   }
-  let manifestCache = { expiresAt: 0, descriptors: [] };
-  function cachedPluginDescriptors() {
+  let manifestCache = { expiresAt: 0, descriptors: [], byId: new Map(), policy: "" };
+  function cachedPluginState() {
     const now = Date.now();
-    if (manifestCache.expiresAt > now) return manifestCache.descriptors;
+    if (manifestCache.expiresAt > now) return manifestCache;
     const descriptors = [];
     for (const directory of manifestDirectories(pluginsRoot)) {
       try {
@@ -210,9 +182,14 @@ export function createTinyIdeRuntime(options) {
         // Invalid manifests are ignored here and reported by the plugin host when explicitly loaded.
       }
     }
-    manifestCache = { expiresAt: now + MANIFEST_CACHE_TTL_MS, descriptors };
-    return descriptors;
+    manifestCache = {
+      expiresAt: now + MANIFEST_CACHE_TTL_MS,
+      ...createPluginManifestSnapshot(descriptors, options.inlineScriptHashes),
+    };
+    return manifestCache;
   }
+
+  function cachedPluginDescriptors() { return cachedPluginState().descriptors; }
 
   // Um contexto por workspace, nunca por janela. Duas janelas do mesmo projeto
   // compartilham processos e backends — que é o comportamento correto, já que
@@ -233,6 +210,7 @@ export function createTinyIdeRuntime(options) {
       scopeId,
       workspaceRoot: scopeId === initialScopeId ? initialWorkspaceRoot : undefined,
       backendHandlers: new Map(),
+      backendResolutions: new Map(),
       executionBackend: undefined,
       // Janelas que declararam estar neste escopo. Sem isso não há como
       // distinguir "ninguém está mais neste projeto" de "outra janela continua
@@ -262,6 +240,7 @@ export function createTinyIdeRuntime(options) {
     scopeId: undefined,
     workspaceRoot: undefined,
     backendHandlers: new Map(),
+    backendResolutions: new Map(),
     executionBackend: createExecutionBackend({ workspaceRoot: () => undefined }),
   };
 
@@ -455,32 +434,19 @@ export function createTinyIdeRuntime(options) {
     return candidate;
   }
 
-  async function resolveBackend(context, pluginId) {
+  const resolvePluginBackend = createPluginBackendResolver({
+    backendPathFor({directory, manifest}) {
+      return safeFile(directory, manifest.entrypoints.backend);
+    },
+    statBackend: stat,
+    createBackendProxy: createPluginBackendProxy,
+    disposeBackend: disposeBackendHandler,
+  });
+
+  function resolveBackend(context, pluginId) {
     const activeWorkspaceRoot = context.workspaceRoot;
-    if (!activeWorkspaceRoot) throw new Error("Abra um workspace antes de usar este plugin.");
-    for (const { directory, manifest } of cachedPluginDescriptors()) {
-      if (manifest.id !== pluginId || !manifest.entrypoints?.backend) continue;
-      const backendPath = safeFile(directory, manifest.entrypoints.backend);
-      if (!backendPath || !existsSync(backendPath) || !statSync(backendPath).isFile()) {
-        throw new Error(`Caminho de backend inválido para o plugin: ${pluginId}`);
-      }
-      const backendMtime = statSync(backendPath).mtimeMs;
-      const cacheKey = `${pluginId}:${activeWorkspaceRoot}`;
-      const cached = context.backendHandlers.get(cacheKey);
-      if (cached?.mtime === backendMtime) return cached.handler;
-      if (cached) {
-        context.backendHandlers.delete(cacheKey);
-        await disposeBackendHandler(cached.handler);
-      }
-      const handler = createPluginBackendProxy({
-        backendPath,
-        workspaceRoot: activeWorkspaceRoot,
-        pluginId,
-      });
-      context.backendHandlers.set(cacheKey, {mtime: backendMtime, handler});
-      return handler;
-    }
-    return undefined;
+    if (!activeWorkspaceRoot) return Promise.reject(new Error("Abra um workspace antes de usar este plugin."));
+    return resolvePluginBackend(context, pluginId, activeWorkspaceRoot, cachedPluginState().byId);
   }
 
   function serveFile(response, absolutePath) {
@@ -499,7 +465,7 @@ export function createTinyIdeRuntime(options) {
     response.statusCode = 404;
     response.end("Not found.");
   }) => {
-    applySecurityHeaders(response, cachedPluginDescriptors(), options.inlineScriptHashes);
+    applySecurityHeaders(response, cachedPluginState().policy);
     const rawUrl = new URL(request.url ?? "/", "http://localhost");
     let scopeId;
     let pathname;
@@ -885,7 +851,9 @@ export function createTinyIdeRuntime(options) {
       return Promise.allSettled([...workspaceContexts.values(), unscopedContext]
         .map((context) => disposeCachedBackends(context)));
     },
-    clearManifestCache() { manifestCache = { expiresAt: 0, descriptors: [] }; },
+    clearManifestCache() {
+      manifestCache = { expiresAt: 0, descriptors: [], byId: new Map(), policy: "" };
+    },
     async dispose() {
       for (const timer of pendingClientReleases.values()) clearTimeout(timer);
       pendingClientReleases.clear();

@@ -154,6 +154,23 @@ describe("runtime server hardening", () => {
     expect((await select(unknownWorkspace)).status).toBe(400);
   });
 
+  it("finds a workspace by name when the web host omits its absolute path", async () => {
+    const {runtime, root} = await fixture();
+    const container = join(root, "projects");
+    const workspace = join(container, "named-workspace");
+    await mkdir(container);
+    await mkdir(workspace);
+
+    const selected = await fetch(`${runtime.url}/core-api/workspace`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify({name: "named-workspace"}),
+    });
+
+    expect(selected.status).toBe(200);
+    await expect(selected.json()).resolves.toMatchObject({workspaceRoot: workspace});
+  });
+
   it("rejects cross-origin API calls while accepting the runtime origin", async () => {
     const { runtime, workspaceRoot } = await fixture();
     const blocked = await fetch(`${runtime.url}/core-api/workspace`, {
@@ -434,10 +451,14 @@ describe("runtime server hardening", () => {
     `);
     runtime.clearManifestCache();
 
-    const first = await fetch(scoped("/plugin-api/sample/ping")).then((response) => response.json());
-    const second = await fetch(scoped("/plugin-api/sample/ping")).then((response) => response.json());
-    expect(first).toMatchObject({ path: "/ping", requests: 1 });
-    expect(second).toMatchObject({ path: "/ping", requests: 2 });
+    const concurrent = await Promise.all([
+      fetch(scoped("/plugin-api/sample/ping")).then((response) => response.json()),
+      fetch(scoped("/plugin-api/sample/ping")).then((response) => response.json()),
+    ]);
+    expect(concurrent.map((result) => result.requests).sort()).toEqual([1, 2]);
+    expect(concurrent[0]).toMatchObject({ path: "/ping" });
+    const third = await fetch(scoped("/plugin-api/sample/ping")).then((response) => response.json());
+    expect(third).toMatchObject({ path: "/ping", requests: 3 });
   });
 
   it("restarts only the changed plugin backend in an isolated worker", async () => {

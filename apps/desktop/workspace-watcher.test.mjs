@@ -113,6 +113,34 @@ describe("desktop workspace watcher", () => {
     expect(batches.some((path) => path.startsWith("media/"))).toBe(false);
   });
 
+  it("entrega lotes periódicos durante uma rajada contínua de eventos", async () => {
+    vi.useFakeTimers();
+    const watcher = new EventEmitter();
+    watcher.close = vi.fn(async () => undefined);
+    const onChanges = vi.fn();
+    const subscription = createWorkspaceWatcher("/workspace", onChanges, {
+      watch: () => watcher,
+      debounceMs: 100,
+      maxWaitMs: 500,
+    });
+
+    // Eventos a cada 50 ms: o debounce puro (100 ms) nunca dispararia.
+    for (let index = 0; index < 20; index += 1) {
+      watcher.emit("all", "change", join("/workspace", "src", `file-${index}.ts`));
+      await vi.advanceTimersByTimeAsync(50);
+    }
+    expect(onChanges).toHaveBeenCalledTimes(1);
+    expect(onChanges.mock.calls[0][0]).toHaveLength(11);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(onChanges).toHaveBeenCalledTimes(2);
+    const delivered = onChanges.mock.calls.flatMap(([paths]) => paths);
+    expect(new Set(delivered).size).toBe(20);
+
+    await subscription.close();
+    vi.useRealTimers();
+  });
+
   it("batches external file changes and stops cleanly", async () => {
     vi.useFakeTimers();
     const watcher = new EventEmitter();

@@ -26,8 +26,37 @@ const IGNORED_DIRECTORIES = new Set([
   "venv",
 ]);
 
+const resolvedRoots = new Map();
+
+function resolvedRoot(root) {
+  let entry = resolvedRoots.get(root);
+  if (!entry) {
+    const resolved = resolve(root);
+    entry = {resolved, prefix: resolved.endsWith(sep) ? resolved : `${resolved}${sep}`};
+    resolvedRoots.set(root, entry);
+    // Poucos roots convivem (um por janela); o limite só evita crescer sem fim.
+    if (resolvedRoots.size > 32) resolvedRoots.delete(resolvedRoots.keys().next().value);
+  }
+  return entry;
+}
+
 function workspaceRelativePath(root, changedPath) {
-  const path = relative(resolve(root), resolve(changedPath));
+  const {resolved, prefix} = resolvedRoot(root);
+  // Caminho rápido: o chokidar entrega caminhos absolutos montados a partir do
+  // root; basta cortar o prefixo quando não sobra segmento relativo (".", "..").
+  if (changedPath.startsWith(prefix)) {
+    const rest = changedPath.slice(prefix.length);
+    const segments = rest.split(sep);
+    let plain = rest.length > 0;
+    for (const segment of segments) {
+      if (!segment || segment === "." || segment === "..") {
+        plain = false;
+        break;
+      }
+    }
+    if (plain) return sep === "/" ? rest : segments.join("/");
+  }
+  const path = relative(resolved, resolve(changedPath));
   if (!path || path === ".." || path.startsWith(`..${sep}`)) return "";
   return path.split(sep).join("/");
 }
@@ -37,9 +66,28 @@ function globToRegExp(pattern) {
   return new RegExp(`^${escaped}$`);
 }
 
-function matchesIgnoredName(segment, name) {
-  if (!name.includes("*")) return segment === name;
-  return globToRegExp(name).test(segment);
+const EMPTY_EXTRA_MATCHERS = {literals: undefined, patterns: undefined};
+const extraMatcherCache = new WeakMap();
+
+/**
+ * Compila a lista de nomes extras uma única vez por conjunto: o filtro roda
+ * para cada entrada do scan e recompilar o curinga por segmento dominava o
+ * custo. O conjunto é tratado como imutável — quem muda a configuração recria
+ * o conjunto (e o watcher).
+ */
+function extraIgnoredMatchers(extraIgnored) {
+  if (!extraIgnored) return EMPTY_EXTRA_MATCHERS;
+  const cached = extraMatcherCache.get(extraIgnored);
+  if (cached) return cached;
+  let literals;
+  let patterns;
+  for (const name of extraIgnored) {
+    if (name.includes("*")) (patterns ??= []).push(globToRegExp(name));
+    else (literals ??= new Set()).add(name);
+  }
+  const matchers = {literals, patterns};
+  extraMatcherCache.set(extraIgnored, matchers);
+  return matchers;
 }
 
 const ANY_DEPTH = "\u0000";
@@ -121,19 +169,24 @@ function createGitignoreFilter(root, options = {}) {
     invalidate() {
       cache.clear();
     },
-    ignores(path) {
+    ignores(path, segments) {
       if (!path) return false;
-      const segments = path.split("/");
+      const parts = segments ?? path.split("/");
       let ignored = false;
+      // Comprimento do prefixo `parts[0..depth)` dentro de `path`, mantido de
+      // forma incremental para não reconstruir strings por profundidade.
+      let prefixLength = 0;
       // Do `.gitignore` mais externo para o mais interno: o mais próximo do
       // arquivo decide, inclusive para reverter uma exclusão com `!`.
-      for (let depth = 0; depth < segments.length; depth += 1) {
-        const rules = rulesFor(segments.slice(0, depth).join("/"));
-        if (rules.length === 0) continue;
-        const candidate = segments.slice(depth).join("/");
-        for (const rule of rules) {
-          if (rule.expression.test(candidate)) ignored = !rule.negated;
+      for (let depth = 0; depth < parts.length; depth += 1) {
+        const rules = rulesFor(depth === 0 ? "" : path.slice(0, prefixLength));
+        if (rules.length > 0) {
+          const candidate = depth === 0 ? path : path.slice(prefixLength + 1);
+          for (const rule of rules) {
+            if (rule.expression.test(candidate)) ignored = !rule.negated;
+          }
         }
+        prefixLength += (depth === 0 ? 0 : 1) + parts[depth].length;
       }
       return ignored;
     },
@@ -142,32 +195,44 @@ function createGitignoreFilter(root, options = {}) {
 
 function ignoredWorkspacePath(root, changedPath, extraIgnored, gitignore) {
   const path = workspaceRelativePath(root, changedPath);
-  const ignoredByName = path.split("/").some(
-    (segment) =>
-      IGNORED_DIRECTORIES.has(segment) ||
-      [...(extraIgnored ?? [])].some((name) => matchesIgnoredName(segment, name)),
-  );
-  if (ignoredByName) return true;
-  return gitignore ? gitignore.ignores(path) : false;
+  if (!path) return false;
+  const segments = path.split("/");
+  const {literals, patterns} = extraIgnoredMatchers(extraIgnored);
+  for (const segment of segments) {
+    if (IGNORED_DIRECTORIES.has(segment)) return true;
+    if (literals !== undefined && literals.has(segment)) return true;
+    if (patterns !== undefined) {
+      for (const pattern of patterns) {
+        if (pattern.test(segment)) return true;
+      }
+    }
+  }
+  return gitignore ? gitignore.ignores(path, segments) : false;
 }
 
 function createWorkspaceWatcher(root, onChanges, options = {}) {
   const watch = options.watch ?? chokidar.watch;
   const debounceMs = options.debounceMs ?? 120;
+  const maxWaitMs = options.maxWaitMs ?? 1000;
   const schedule = options.schedule ?? setTimeout;
   const cancel = options.cancel ?? clearTimeout;
   const extraIgnored = new Set(
-    (options.extraIgnoredDirectories ?? []).filter((name) => typeof name === "string" && name.trim()),
+    (options.extraIgnoredDirectories ?? [])
+      .filter((name) => typeof name === "string" && name.trim())
+      .map((name) => name.trim()),
   );
   const gitignore = options.gitignore === false
     ? undefined
     : options.gitignore ?? createGitignoreFilter(root);
   const pending = new Set();
   let timer;
+  let firstPendingAt;
   let closed = false;
 
   const flush = () => {
+    if (timer !== undefined) cancel(timer);
     timer = undefined;
+    firstPendingAt = undefined;
     if (closed || pending.size === 0) return;
     const paths = [...pending].sort();
     pending.clear();
@@ -188,6 +253,14 @@ function createWorkspaceWatcher(root, onChanges, options = {}) {
     // poda continuaria valendo pelas regras antigas até reabrir o projeto.
     if (path === ".gitignore" || path.endsWith("/.gitignore")) gitignore?.invalidate();
     pending.add(path);
+    const now = Date.now();
+    if (firstPendingAt === undefined) firstPendingAt = now;
+    // Uma rajada contínua (build, checkout de branch) reiniciaria o debounce
+    // para sempre; o teto garante lotes periódicos para a UI durante a rajada.
+    if (now - firstPendingAt >= maxWaitMs) {
+      flush();
+      return;
+    }
     if (timer !== undefined) cancel(timer);
     timer = schedule(flush, debounceMs);
   });

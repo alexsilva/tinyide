@@ -4,6 +4,7 @@ import {
   orderPluginsByDependencies,
   pluginBackend,
   readStoredPlugins,
+  refreshStoredPluginSources,
   rebaseLoopbackPluginUrl,
   type StoredPlugin,
   writeStoredPlugins,
@@ -107,6 +108,42 @@ describe("plugin state persistence", () => {
       "https://plugins.example.com/python/plugin.json",
       "http://127.0.0.1:43990/",
     )).toBe("https://plugins.example.com/python/plugin.json");
+  });
+});
+
+describe("plugin source refresh", () => {
+  it("busca manifestos em paralelo e preserva a ordem persistida", async () => {
+    const stored = [storedPlugin("alpha", true), storedPlugin("beta", false), storedPlugin("gamma", true)];
+    let active = 0;
+    let maximumActive = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const request = vi.fn(async (url: string) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await gate;
+      active -= 1;
+      const id = /plugin\/([^/]+)/.exec(url)?.[1] ?? "missing";
+      return new Response(JSON.stringify(plugin(id, id).manifest), {status: 200});
+    });
+
+    const pending = refreshStoredPluginSources(stored, "http://127.0.0.1/", request);
+    expect(maximumActive).toBe(3);
+    release();
+    const refreshed = await pending;
+
+    expect(refreshed.map((entry) => entry.manifest.id)).toEqual(["alpha", "beta", "gamma"]);
+  });
+
+  it("mantém o manifesto persistido quando a origem está indisponível", async () => {
+    const stored = [storedPlugin("offline", true)];
+    const refreshed = await refreshStoredPluginSources(
+      stored,
+      "http://127.0.0.1/",
+      async () => { throw new Error("offline"); },
+    );
+
+    expect(refreshed).toEqual(stored);
   });
 });
 

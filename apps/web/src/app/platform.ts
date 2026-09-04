@@ -305,6 +305,33 @@ function pluginSourceUrl(manifest: PluginManifest, manifestUrl: string): string 
   return sourceUrl.href;
 }
 
+type PluginManifestRequest = (url: string, init: RequestInit) => Promise<Response>;
+
+/** Atualiza fontes independentes em paralelo; instalação e ativação continuam ordenadas. */
+export async function refreshStoredPluginSources(
+  entries: readonly StoredPlugin[],
+  currentUrl: string,
+  request: PluginManifestRequest = fetch,
+): Promise<readonly StoredPlugin[]> {
+  return await Promise.all(entries.map(async (entry) => {
+    let manifest = entry.manifest;
+    const manifestUrl = rebaseLoopbackPluginUrl(entry.manifestUrl, currentUrl);
+    let sourceUrl = rebaseLoopbackPluginUrl(entry.sourceUrl, currentUrl);
+    try {
+      const response = await request(manifestUrl, {headers: {Accept: "application/json"}, cache: "no-store"});
+      if (response.ok) {
+        const refreshedManifest = (await response.json()) as PluginManifest;
+        const refreshedSourceUrl = pluginSourceUrl(refreshedManifest, manifestUrl);
+        manifest = refreshedManifest;
+        sourceUrl = refreshedSourceUrl;
+      }
+    } catch {
+      // O manifesto persistido mantém o plugin restaurável quando a origem está fora do ar.
+    }
+    return {...entry, manifest, manifestUrl, sourceUrl};
+  }));
+}
+
 export function resolvePluginIconUrl(manifest: PluginManifest, manifestUrl: string): string | undefined {
   if (!manifest.icon) return undefined;
   const baseUrl = new URL(manifestUrl, window.location.href);
@@ -593,26 +620,15 @@ export class TinyIdePlatform {
 
   async #restore(): Promise<void> {
     const stored = await readStoredPlugins();
+    const prepared = await refreshStoredPluginSources(stored, window.location.href);
 
     const restored: StoredPlugin[] = [];
-    for (const entry of stored) {
+    for (const entry of prepared) {
       try {
-        let manifest = entry.manifest;
-        let manifestUrl = rebaseLoopbackPluginUrl(entry.manifestUrl, window.location.href);
-        let sourceUrl = rebaseLoopbackPluginUrl(entry.sourceUrl, window.location.href);
-        try {
-          const response = await fetch(manifestUrl, { headers: { Accept: "application/json" }, cache: "no-store" });
-          if (response.ok) {
-            manifest = (await response.json()) as PluginManifest;
-            sourceUrl = pluginSourceUrl(manifest, manifestUrl);
-          }
-        } catch {
-          // Installed plugins remain restorable when their original source is temporarily unavailable.
-        }
-        await this.plugins.install(manifest);
-        this.#sourceUrls.set(manifest.id, sourceUrl);
-        this.#manifestUrls.set(manifest.id, manifestUrl);
-        restored.push({ manifest, manifestUrl, sourceUrl, enabled: entry.enabled });
+        await this.plugins.install(entry.manifest);
+        this.#sourceUrls.set(entry.manifest.id, entry.sourceUrl);
+        this.#manifestUrls.set(entry.manifest.id, entry.manifestUrl);
+        restored.push(entry);
       } catch (error) {
         console.warn(`Não foi possível restaurar o plugin ${entry.manifest.id}.`, error);
       }

@@ -1,6 +1,19 @@
 const {randomUUID} = require("node:crypto");
 const {resolve} = require("node:path");
 
+function effectiveIgnoredDirectories(list) {
+  const names = [...(list ?? [])]
+    .filter((name) => typeof name === "string" && name.trim())
+    .map((name) => name.trim());
+  return [...new Set(names)].sort();
+}
+
+function sameIgnoredDirectories(current, next) {
+  const left = effectiveIgnoredDirectories(current);
+  const right = effectiveIgnoredDirectories(next);
+  return left.length === right.length && left.every((name, index) => name === right[index]);
+}
+
 /**
  * Registro dos workspaces que o processo principal aceita servir.
  *
@@ -75,12 +88,21 @@ function createWorkspaceRegistry(options = {}) {
 
     isRegistered(rootPath) {
       const root = resolve(rootPath);
-      return [...new Set(tokens.values())].some((candidate) => candidate === root);
+      for (const candidate of tokens.values()) {
+        if (candidate === root) return true;
+      }
+      return false;
     },
 
     async configureIgnores(rootPath, extraIgnoredDirectories) {
       const root = resolve(rootPath);
+      // Recriar o watcher repete a varredura completa da árvore. A janela
+      // recém-aberta aplica as settings logo após o registro — quase sempre com
+      // a mesma lista efetiva —, então uma lista equivalente mantém o watcher.
+      const unchanged = watchers.has(root)
+        && sameIgnoredDirectories(ignores.get(root), extraIgnoredDirectories);
       ignores.set(root, extraIgnoredDirectories);
+      if (unchanged) return;
       const existing = watchers.get(root);
       if (existing) {
         await existing.close();

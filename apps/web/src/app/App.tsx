@@ -243,6 +243,7 @@ import {
   writeSession,
   type PersistedSidebarView,
 } from "./persistence";
+import { createCoalescedWriter } from "./coalesced-writer";
 import { resolveSyntaxHighlighter, type SyntaxHighlighter } from "./generic-syntax";
 import { resolveEnvironmentSelections, selectedEnvironmentForProvider } from "./environment-selection";
 import {
@@ -930,6 +931,10 @@ export function App() {
   });
   const explorerFilterExpansionBackupRef = useRef<ReadonlySet<string> | undefined>(undefined);
   const snapshotTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const sessionWriter = useMemo(
+    () => createCoalescedWriter({delayMs: 250, write: writeSession}),
+    [],
+  );
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const workspaceExternalSyncTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const explorerHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -2317,6 +2322,16 @@ export function App() {
     return () => subscriptions.forEach((subscription) => subscription.dispose());
   }, [platformSnapshot.plugins]);
 
+  // Chave estável do conjunto de documentos sujos: o array `documents` ganha
+  // identidade nova a cada tecla, mas o sweep de decorações da árvore inteira
+  // só precisa rodar quando ESTE conjunto muda (sujar, salvar, fechar).
+  const dirtyDocumentPathsKey = useMemo(() => documents
+    .filter((document) => document.path && document.kind === "text" && document.content !== document.savedContent)
+    .map((document) => document.path as string)
+    .sort()
+    .map((path) => JSON.stringify(path))
+    .join(","), [documents]);
+
   useEffect(() => {
     const providers = resourceDecorationProviders();
     if (!providers.length || workspaceName === "Sem workspace") {
@@ -2328,9 +2343,9 @@ export function App() {
       entry,
       ...(entry.children ? collect(entry.children) : []),
     ]);
-    const dirtyPaths = new Set(documents
-      .filter((document) => document.path && document.kind === "text" && document.content !== document.savedContent)
-      .map((document) => document.path as string));
+    const dirtyPaths = new Set<string>(
+      dirtyDocumentPathsKey ? JSON.parse(`[${dirtyDocumentPathsKey}]`) : [],
+    );
     const allEntries = collect(entries);
     const resolveDecoration = async (entry: WorkspaceEntry) => {
       const resource: ResourceContext = {
@@ -2348,26 +2363,12 @@ export function App() {
       const decoration = decorations.sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0))[0];
       return decoration ? [entry.path, decoration] as const : undefined;
     };
-    const dirtyEntries = allEntries.filter((entry) => entry.kind === "file" && dirtyPaths.has(entry.path));
-    if (dirtyEntries.length) {
-      void Promise.all(dirtyEntries.map(resolveDecoration)).then((items) => {
-        if (cancelled) return;
-        setResourceDecorations((current) => {
-          const next = new Map(current);
-          dirtyEntries.forEach((entry) => next.delete(entry.path));
-          items.forEach((item) => {
-            if (item) next.set(item[0], item[1]);
-          });
-          return next;
-        });
-      });
-    }
     void Promise.all(allEntries.map(resolveDecoration)).then((items) => {
       if (cancelled) return;
       setResourceDecorations(new Map(items.filter((item): item is readonly [string, ResourceDecoration] => Boolean(item))));
     });
     return () => { cancelled = true; };
-  }, [entries, documents, workspaceName, workspaceRoot, resourceDecorationRevision, platformSnapshot.plugins]);
+  }, [entries, dirtyDocumentPathsKey, workspaceName, workspaceRoot, resourceDecorationRevision, platformSnapshot.plugins]);
 
   useEffect(() => {
     if (activeDocument?.kind !== "text" || activeResourceEditorProvider || !activeDocument.path || !workspaceRoot) {
@@ -3104,7 +3105,7 @@ export function App() {
 
   useEffect(() => {
     if (!restorationComplete) return;
-    writeSession({
+    const session = {
       sidebarView,
       sidebarVisible,
       sidebarWidth: verticalPanelWidths.left,
@@ -3126,8 +3127,24 @@ export function App() {
       explorerShowIgnored,
       activityButtonPlacements,
       sidebarViewsBySide,
-    });
-  }, [restorationComplete, sidebarView, sidebarVisible, sidebarViewsBySide, verticalPanelWidths, panelVisible, panelHeight, panelTab, problemsVisible, toolWindowVisible, toolWindowHeight, activeToolWindowId, workspaceName, workspaceRoot, activeDocumentId, expanded, explorerShowHidden, explorerShowIgnored, activityButtonPlacements]);
+    };
+    // Arrastar um divisor atualiza estes estados a cada pointermove; gravar de
+    // imediato viraria um PUT de sessão por movimento. O write espera uma pausa
+    // e é descartado quando o estado volta ao último valor persistido.
+    sessionWriter.schedule(session, JSON.stringify(session));
+  }, [restorationComplete, sidebarView, sidebarVisible, sidebarViewsBySide, verticalPanelWidths, panelVisible, panelHeight, panelTab, problemsVisible, toolWindowVisible, toolWindowHeight, activeToolWindowId, workspaceName, workspaceRoot, activeDocumentId, expanded, explorerShowHidden, explorerShowIgnored, activityButtonPlacements, sessionWriter]);
+
+  useEffect(() => {
+    // Fechar a janela dentro da janela de debounce não pode perder o último
+    // layout: o flush grava o pendente imediatamente (best effort no unload).
+    const flushPendingSessionWrite = () => sessionWriter.flush();
+    // Captura roda antes do listener normal que libera o workspace no runtime.
+    window.addEventListener("pagehide", flushPendingSessionWrite, {capture: true});
+    return () => {
+      window.removeEventListener("pagehide", flushPendingSessionWrite, {capture: true});
+      sessionWriter.dispose();
+    };
+  }, [sessionWriter]);
 
   useEffect(() => {
     if (!restoredRef.current) return;

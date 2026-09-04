@@ -79,6 +79,25 @@ describe("registro de workspaces do desktop", () => {
     expect(started.at(-1)).toEqual({root: "/projetos/a", ignores: ["build-*"]});
   });
 
+  it("mantém o watcher quando a lista de ignorados não muda de fato", async () => {
+    const {instance, closed, started} = registry();
+
+    await instance.register("/projetos/a", {owner: 1});
+    // A janela recém-aberta aplica as settings padrão: lista efetiva vazia,
+    // igual ao estado inicial — recriar aqui repetiria a varredura da árvore.
+    await instance.configureIgnores("/projetos/a", []);
+    expect(closed).toEqual([]);
+    expect(started).toHaveLength(1);
+
+    await instance.configureIgnores("/projetos/a", ["build-*", "", "build-*"]);
+    expect(closed).toEqual(["/projetos/a"]);
+    expect(started).toHaveLength(2);
+
+    // Mesma lista efetiva (duplicatas e vazios não contam): nada a recriar.
+    await instance.configureIgnores("/projetos/a", [" build-* "]);
+    expect(started).toHaveLength(2);
+  });
+
   it("registro sem janela dona sobrevive à troca de projeto de outra janela", async () => {
     const {instance, closed} = registry();
 

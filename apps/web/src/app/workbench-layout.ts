@@ -117,6 +117,24 @@ export function retainMountedToolWindows(
   return next;
 }
 
+/**
+ * Ao destacar uma tool window para janela do SO, a retenção acima inverte de
+ * benefício para defeito: o host oculto continuaria como segundo cliente do
+ * mesmo PTY, acumulando frames desenhados para a largura da outra janela, e no
+ * reanexo o cache de dimensões suprimiria o resize que faria a TUI redesenhar.
+ * A superfície mora em um lugar por vez: destacou, desmonta; reanexar remonta
+ * pelo mesmo caminho de reconexão de um reload.
+ */
+export function releaseMountedToolWindow(
+  previous: ReadonlySet<string>,
+  id: string,
+): ReadonlySet<string> {
+  if (!previous.has(id)) return previous;
+  const next = new Set(previous);
+  next.delete(id);
+  return next;
+}
+
 export function reconcileToolWindowLayout(input: {
   readonly initialized: boolean;
   readonly availableIds: readonly string[];

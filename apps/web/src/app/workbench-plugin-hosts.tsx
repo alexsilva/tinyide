@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { ExternalLink, Minimize2, X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -174,18 +174,31 @@ export function WorkbenchToolWindowHost({
   visible,
   height,
   viewRequest,
+  windowMode = false,
   onClose,
+  onDetach,
+  onReattach,
   onResize,
   onResetHeight,
 }: {
   readonly provider: WorkbenchToolWindowContribution;
   readonly state: WorkbenchStateApi;
   readonly visible: boolean;
-  readonly height: number;
+  readonly height?: number;
   readonly viewRequest?: WorkbenchToolWindowViewRequest;
+  /** Em janela de painel o host ocupa a janela toda: sem redimensionar dock. */
+  readonly windowMode?: boolean;
   readonly onClose: () => void;
-  readonly onResize: (event: ReactPointerEvent<HTMLDivElement>) => void;
-  readonly onResetHeight: () => void;
+  /** Presente apenas quando o host pode abrir esta superfície como janela do SO. */
+  readonly onDetach?: () => void;
+  /**
+   * Presente apenas na janela de painel: devolve a superfície aos docks da
+   * janela que a abriu, carregando a aba que está aberta agora — reanexar não
+   * pode voltar para a aba com que a janela nasceu.
+   */
+  readonly onReattach?: (viewId?: string) => void;
+  readonly onResize?: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  readonly onResetHeight?: () => void;
 }) {
   const headerContainerRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -230,24 +243,44 @@ export function WorkbenchToolWindowHost({
 
   return (
     <section
-      className={`tool-window-panel${visible ? "" : " tool-window-panel--hidden"}`}
-      style={{ height }}
+      className={`tool-window-panel${visible ? "" : " tool-window-panel--hidden"}${windowMode ? " tool-window-panel--window" : ""}`}
+      style={windowMode ? undefined : { height }}
       data-tool-window-id={provider.id}
     >
-      <div
-        className="resize-handle resize-handle--panel"
-        role="separator"
-        aria-label={`Redimensionar ${provider.label}`}
-        onPointerDown={onResize}
-        onDoubleClick={onResetHeight}
-      />
+      {windowMode ? null : (
+        <div
+          className="resize-handle resize-handle--panel"
+          role="separator"
+          aria-label={`Redimensionar ${provider.label}`}
+          onPointerDown={onResize}
+          onDoubleClick={onResetHeight}
+        />
+      )}
       <div className="panel-heading tool-window-heading">
         <div className="tool-window-header-content" ref={headerContainerRef} />
+        {onDetach ? (
+          <button
+            className="icon-button small"
+            type="button"
+            aria-label={`Abrir ${provider.label} em janela separada`}
+            title="Abrir em janela separada"
+            onClick={onDetach}
+          ><ExternalLink size={14} /></button>
+        ) : null}
+        {onReattach ? (
+          <button
+            className="icon-button small"
+            type="button"
+            aria-label={`Reanexar ${provider.label} à janela principal`}
+            title="Reanexar à janela principal"
+            onClick={() => onReattach(tabsRef.current?.activeId())}
+          ><Minimize2 size={14} /></button>
+        ) : null}
         <button
           className="icon-button small"
           type="button"
-          aria-label={`Ocultar painel ${provider.label}`}
-          title="Ocultar painel"
+          aria-label={windowMode ? `Fechar janela de ${provider.label}` : `Ocultar painel ${provider.label}`}
+          title={windowMode ? "Fechar janela" : "Ocultar painel"}
           onClick={close}
         ><X size={14} /></button>
       </div>

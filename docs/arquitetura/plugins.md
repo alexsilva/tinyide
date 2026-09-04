@@ -458,6 +458,8 @@ export function init(context) {
 
 O app controla posição, altura, visibilidade, montagem e desmontagem. O plugin controla o conteúdo da sua região.
 
+A apresentação também é decisão do app: no desktop empacotado, tool windows, painéis e sidebars podem ser abertos como **janelas reais do sistema** ("Abrir em janela separada"). A janela auxiliar carrega o mesmo workspace (`/w/<scopeId>/?tinyidePanelWindow=<tipo>:<id>`), ativa os plugins normalmente e monta a contribuição no host correspondente ocupando a janela inteira — o `mount` recebe o mesmo contrato de sempre e o plugin não sabe (nem precisa saber) se o container vive num dock ou numa janela do SO. No navegador esse destaque não existe e o comportamento permanece o atual. Janelas de painel nunca gravam a sessão visual (`ui-session`), o snapshot da aplicação ou o ponteiro de "último workspace" do host: esses estados pertencem às janelas completas.
+
 ## Como implementar um backend de plugin
 
 Use um backend quando a funcionalidade exigir APIs indisponíveis no navegador, como processos, PTY, inspeção de executáveis ou acesso controlado ao sistema de arquivos.

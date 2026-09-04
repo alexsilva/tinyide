@@ -20,6 +20,7 @@ import {
   isActivityButtonPlacement,
   type ActivityButtonPlacements,
 } from "./activity-layout";
+import { isPanelWindow, type PanelWindowReference } from "./panel-window";
 import { hasActiveWorkspaceScope } from "./project-session";
 import { isVirtualDocumentId } from "./virtual-documents";
 
@@ -244,6 +245,40 @@ export function readSession(): SessionState {
   return defaultSession();
 }
 
+/**
+ * Estado visual de uma janela de painel: só a superfície declarada na URL fica
+ * aberta. Isso não é cosmético — o snapshot do workbench entregue aos plugins
+ * nasce deste estado, e um terminal que se acredita oculto deixa de ajustar o
+ * próprio layout.
+ */
+export function panelWindowSession(
+  base: SessionState,
+  reference: PanelWindowReference,
+): SessionState {
+  const { activeToolWindowId: _closedToolWindow, ...rest } = base;
+  const common: SessionState = {
+    ...rest,
+    sidebarVisible: false,
+    sidebarViewsBySide: {},
+    panelVisible: false,
+    problemsVisible: false,
+    toolWindowVisible: false,
+  };
+  switch (reference.kind) {
+    case "tool-window":
+      return { ...common, toolWindowVisible: true, activeToolWindowId: reference.id };
+    case "panel":
+      return { ...common, panelVisible: true, panelTab: reference.id };
+    case "sidebar":
+      return {
+        ...common,
+        sidebarVisible: true,
+        sidebarView: reference.id,
+        sidebarViewsBySide: { left: reference.id },
+      };
+  }
+}
+
 export async function readPersistedSession(): Promise<SessionState> {
   if (!hasActiveWorkspaceScope()) return defaultSession();
   try {
@@ -256,7 +291,10 @@ export async function readPersistedSession(): Promise<SessionState> {
 }
 
 export function writeSession(session: SessionState): void {
-  if (!hasActiveWorkspaceScope()) return;
+  // Uma janela de painel compartilha o workspace com a janela completa, mas o
+  // layout dela é degenerado (uma superfície só): gravá-lo destruiria a sessão
+  // visual que a janela principal restaura no próximo boot.
+  if (!hasActiveWorkspaceScope() || isPanelWindow()) return;
   void writeStoredState(SESSION_STATE_KEY, session).catch((error) => {
     console.warn("Não foi possível persistir a sessão visual.", error);
   });
@@ -419,6 +457,8 @@ export async function writeReactSnapshot(input: {
   // FileSystemHandle exige structured clone (IndexedDB). Como a persistência da
   // IDE agora é exclusivamente em arquivos do host, o snapshot deve ser JSON
   // serializável e nunca depender de browser storage.
-  if (!hasActiveWorkspaceScope()) return;
+  // Janela de painel não abre documentos: seu snapshot vazio apagaria as abas
+  // que a janela principal reabre.
+  if (!hasActiveWorkspaceScope() || isPanelWindow()) return;
   await writeApplicationSnapshot(base);
 }

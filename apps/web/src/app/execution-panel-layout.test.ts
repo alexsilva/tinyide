@@ -63,8 +63,9 @@ describe("execution panel layout", () => {
     );
     expect(toggle).toContain("setToolWindowVisible((visible) => !visible)");
     expect(appSource).toContain("onClose={closeToolWindow}");
-    expect(pluginHostsSource).toContain('aria-label={`Ocultar painel ${provider.label}`}');
-    expect(pluginHostsSource).toContain('title="Ocultar painel"');
+    // No dock o botão oculta o painel; numa janela de painel ele fecha a janela.
+    expect(pluginHostsSource).toContain('windowMode ? `Fechar janela de ${provider.label}` : `Ocultar painel ${provider.label}`');
+    expect(pluginHostsSource).toContain('windowMode ? "Fechar janela" : "Ocultar painel"');
     expect(activityBarSource).not.toContain('const disabled = pluginItem.kind === "toolWindow" && active;');
     expect(activityBarSource).not.toContain('disabled={disabled}');
     expect(activityBarSource).toContain('`Ocultar ${pluginItem.label}`');

@@ -270,6 +270,16 @@
 .tool-window-header-content { display: flex; align-items: stretch; min-width: 0; height: 100%; flex: 1; overflow: hidden; }
 .tool-window-panel > .plugin-panel-host { min-height: 0; }
 
+/* Janela de painel: uma única superfície ocupando a janela inteira do SO. */
+.panel-window-shell { grid-template-rows: minmax(0, 1fr); }
+.panel-window-shell > .tool-window-panel,
+.tool-window-panel--window { height: 100%; min-height: 0; border-top: 0; }
+.panel-window-surface { display: grid; grid-template-rows: 30px minmax(0, 1fr); height: 100%; min-height: 0; background: var(--surface-panel); overflow: hidden; }
+.panel-window-surface__label { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.panel-window-shell > .sidebar { grid-column: auto; border-right: 0; border-left: 0; }
+.panel-window-missing { display: grid; height: 100%; align-content: center; justify-items: center; gap: 4px; padding: 24px; color: var(--muted); text-align: center; }
+.panel-window-missing p { margin: 0; }
+
 .statusbar { display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--border); background: var(--surface-statusbar); color: var(--text-inverse); padding: 0 8px; font-size: 10px; }
 .statusbar button { color: inherit; font-size: 10px; }
 .statusbar-external-sync { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }

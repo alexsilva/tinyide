@@ -41,6 +41,9 @@ export interface TinyIdeDesktopApi {
   pickDirectory?(defaultPath?: string): Promise<DesktopWorkspaceDescriptor | undefined>;
   restoreDirectory?(path: string): Promise<DesktopWorkspaceDescriptor | undefined>;
   openProjectWindow?(path: string): Promise<boolean>;
+  openPanelWindow?(path: string, panelWindow: string, panelView?: string): Promise<boolean>;
+  reattachPanelWindow?(panelWindow: string, panelView?: string): Promise<boolean>;
+  subscribePanelWindowReattach?(listener: (request: unknown) => void): () => void;
   listDirectory?(token: string, path: string): Promise<readonly DesktopWorkspaceEntryDescriptor[]>;
   ensureFile?(token: string, path: string, create: boolean): Promise<boolean>;
   ensureDirectory?(token: string, path: string, create: boolean): Promise<boolean>;
@@ -440,6 +443,50 @@ export async function openDesktopProjectWindow(path: string): Promise<boolean> {
   const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
   if (!desktop?.openProjectWindow) return false;
   return desktop.openProjectWindow(path);
+}
+
+/**
+ * Abrir painéis como janelas do SO só existe no app empacotado. A checagem é do
+ * método específico — um bridge antigo, sem ele, continua sendo desktop válido
+ * para todo o resto e apenas não oferece o destaque de painéis.
+ */
+export function supportsDesktopPanelWindows(): boolean {
+  return isDesktopHost() && typeof window.tinyideDesktop?.openPanelWindow === "function";
+}
+
+export async function openDesktopPanelWindow(
+  path: string,
+  panelWindow: string,
+  panelView?: string,
+): Promise<boolean> {
+  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
+  if (!desktop?.openPanelWindow) return false;
+  return desktop.openPanelWindow(path, panelWindow, panelView);
+}
+
+/**
+ * Reanexar é o caminho de volta do destaque e vale a mesma checagem por método:
+ * um bridge que abre painéis mas não sabe devolvê-los continua válido e apenas
+ * não oferece a ação.
+ */
+export function supportsDesktopPanelWindowReattach(): boolean {
+  return isDesktopHost() && typeof window.tinyideDesktop?.reattachPanelWindow === "function";
+}
+
+export async function reattachDesktopPanelWindow(
+  panelWindow: string,
+  panelView?: string,
+): Promise<boolean> {
+  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
+  if (!desktop?.reattachPanelWindow) return false;
+  return desktop.reattachPanelWindow(panelWindow, panelView);
+}
+
+/** Assinatura da janela completa: é ela quem reapresenta a superfície no dock. */
+export function subscribeDesktopPanelWindowReattach(listener: (request: unknown) => void): () => void {
+  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
+  if (!desktop?.subscribePanelWindowReattach) return () => {};
+  return desktop.subscribePanelWindowReattach(listener);
 }
 
 function parentPath(path: string): string | undefined {

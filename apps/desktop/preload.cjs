@@ -26,6 +26,17 @@ contextBridge.exposeInMainWorld("tinyideDesktop", {
   openProjectWindow(path) {
     return ipcRenderer.invoke("tinyide:workspace:open-window", path);
   },
+  openPanelWindow(path, panelWindow, panelView) {
+    return ipcRenderer.invoke("tinyide:workspace:open-panel-window", path, panelWindow, panelView);
+  },
+  reattachPanelWindow(panelWindow, panelView) {
+    return ipcRenderer.invoke("tinyide:workspace:reattach-panel-window", panelWindow, panelView);
+  },
+  subscribePanelWindowReattach(listener) {
+    const handleReattach = (_event, request) => listener(request);
+    ipcRenderer.on("tinyide:workspace:panel-window-reattached", handleReattach);
+    return () => ipcRenderer.removeListener("tinyide:workspace:panel-window-reattached", handleReattach);
+  },
   listDirectory(token, path) {
     return ipcRenderer.invoke("tinyide:workspace:list", token, path);
   },

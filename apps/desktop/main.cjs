@@ -20,7 +20,8 @@ const { readDesktopState, removeDesktopState, writeDesktopState } = require("./s
 const { createWorkspaceWatcher, DEFAULT_IGNORED_DIRECTORIES } = require("./workspace-watcher.cjs");
 const { createWorkspaceRegistry } = require("./workspace-registry.cjs");
 const { installNetworkDiagnostics } = require("./network-diagnostics.cjs");
-const { desktopWindowUrl } = require("./window-session.cjs");
+const { assertPanelWindowReference, panelViewId, desktopWindowUrl } = require("./window-session.cjs");
+const { createPanelWindowTracker, panelWindowKey } = require("./panel-windows.cjs");
 
 let runtime;
 let mainWindow;
@@ -31,6 +32,10 @@ let processFileLogging;
 const workspaceRegistry = createWorkspaceRegistry({
   startWatcher: (root, extraIgnoredDirectories) => startWorkspaceWatcher(root, extraIgnoredDirectories),
 });
+const panelWindows = createPanelWindowTracker();
+// Painéis são janelas de apoio: nascem menores que a IDE e aceitam encolher
+// mais, porque um terminal ou um painel de alterações não precisa de 900px.
+const PANEL_WINDOW_BOUNDS = { width: 1040, height: 700, minWidth: 520, minHeight: 340 };
 // Guarda apenas onde o diálogo nativo de "abrir workspace" deve começar. Não é
 // ponteiro de restauração: qual projeto cada janela reabre é decidido pelo
 // escopo na URL e, na falta dele, pelo ponteiro por host do runtime.
@@ -198,6 +203,54 @@ function installDesktopFileSystemHandlers() {
     return true;
   });
 
+  ipcMain.handle("tinyide:workspace:open-panel-window", async (event, rootPath, panelWindow, panelView) => {
+    if (typeof rootPath !== "string" || !rootPath.trim()) throw new Error("O caminho do projeto é obrigatório.");
+    const reference = assertPanelWindowReference(panelWindow);
+    // Como em `open-window`: o registro sem dono mantém o workspace vivo até a
+    // janela nova reivindicá-lo ao restaurar o handle no próprio boot.
+    const descriptor = await registerDesktopWorkspace(rootPath.trim(), { persist: false });
+    const scopeId = runtime.workspaceScopeId(descriptor.path);
+    const url = desktopWindowUrl(runtime.url, {
+      scopeId,
+      panelWindow: reference,
+      ...(typeof panelView === "string" ? { panelView } : {}),
+    });
+    const opened = panelWindows.open({
+      key: panelWindowKey(scopeId, reference),
+      opener: BrowserWindow.fromWebContents(event.sender) ?? undefined,
+      create: () => createWindow(url, PANEL_WINDOW_BOUNDS),
+    });
+    fileLogger?.info("window", "Janela de painel solicitada.", {
+      scopeId,
+      panelWindow: reference,
+      created: opened.created,
+    });
+    return true;
+  });
+
+  /**
+   * Reanexar é o caminho de volta do destaque: a superfície reaparece nos docks
+   * da janela que a abriu e a janela auxiliar deixa de existir. O main não
+   * escolhe destino — entrega o pedido a quem tem o layout de onde o painel
+   * saiu, senão o painel voltaria para uma janela que nunca o teve.
+   */
+  ipcMain.handle("tinyide:workspace:reattach-panel-window", async (event, panelWindow, panelView) => {
+    const reference = assertPanelWindowReference(panelWindow);
+    const source = BrowserWindow.fromWebContents(event.sender);
+    const target = source ? panelWindows.openerOf(source) : undefined;
+    if (!target) throw new Error("A janela que abriu este painel não está mais disponível.");
+    const view = panelViewId(panelView);
+    target.webContents.send("tinyide:workspace:panel-window-reattached", {
+      panelWindow: reference,
+      ...(view ? { panelView: view } : {}),
+    });
+    if (target.isMinimized()) target.restore();
+    target.focus();
+    source.close();
+    fileLogger?.info("window", "Painel reanexado à janela de origem.", { panelWindow: reference, panelView: view });
+    return true;
+  });
+
   ipcMain.handle("tinyide:workspace:list", async (_event, token, workspacePath) => {
     const directory = await safeWorkspacePath(token, workspacePath);
     const entries = await readdir(directory, { withFileTypes: true });
@@ -344,12 +397,13 @@ function mainWindowUrl() {
   });
 }
 
-function createWindow(url) {
+function createWindow(url, bounds = {}) {
   const window = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 900,
     minHeight: 600,
+    ...bounds,
     backgroundColor: "#0e1116",
     show: false,
     autoHideMenuBar: true,

@@ -40,6 +40,8 @@ import {
   StepForward,
   CornerDownRight,
   CornerUpRight,
+  ExternalLink,
+  Minimize2,
   Terminal,
   Trash2,
   Undo2,
@@ -231,6 +233,7 @@ import {
 import {
   DEFAULT_LAYOUT,
   deserializeEntries,
+  panelWindowSession,
   readPersistedSession,
   readReactSnapshot,
   readSession,
@@ -297,10 +300,23 @@ import {
   pasteSystemResourcesIntoWorkspace,
   pickWorkspaceDirectory,
   restoreDesktopWorkspaceHandle,
+  openDesktopPanelWindow,
+  reattachDesktopPanelWindow,
   runtimeWorkspaceHandle,
+  subscribeDesktopPanelWindowReattach,
+  supportsDesktopPanelWindows,
+  supportsDesktopPanelWindowReattach,
   supportsSystemResourceClipboard,
   workspaceRootHintForHandle,
 } from "./workspace-host";
+import {
+  activePanelWindowReference,
+  activePanelWindowViewId,
+  panelWindowDocumentTitle,
+  parsePanelWindowReattachRequest,
+  serializePanelWindowReference,
+  type PanelWindowReference,
+} from "./panel-window";
 import {
   classifyOpenedDirectory,
   readProjectOpenPreference,
@@ -338,6 +354,7 @@ import {
   moveOpenSidebar,
   openSidebarViewForSide,
   reconcileToolWindowLayout,
+  releaseMountedToolWindow,
   retainMountedToolWindows,
   sidebarActivityKey,
   sidebarViewFromActivityKey,
@@ -593,7 +610,20 @@ interface ActiveWorkbenchDialog {
 }
 
 export function App() {
-  const initialSession = useMemo(() => readSession(), []);
+  /**
+   * Quando presente, esta janela apresenta uma única superfície de plugin como
+   * janela real do SO (desktop). É identidade, não estado: vem da URL e não
+   * muda durante a vida da janela.
+   */
+  const panelWindowReference = useMemo(() => activePanelWindowReference(), []);
+  /** View interna com que esta janela de painel nasceu (ex.: "git.history"). */
+  const panelWindowViewId = useMemo(() => (
+    panelWindowReference?.kind === "tool-window" ? activePanelWindowViewId() : undefined
+  ), [panelWindowReference]);
+  const initialSession = useMemo(() => {
+    const session = readSession();
+    return panelWindowReference ? panelWindowSession(session, panelWindowReference) : session;
+  }, [panelWindowReference]);
   const [platformSnapshot, setPlatformSnapshot] = useState(() => platform.snapshot());
   const [sidebarView, setSidebarView] = useState<SidebarView>(initialSession.sidebarView);
   const [sidebarVisible, setSidebarVisible] = useState(initialSession.sidebarVisible);
@@ -613,9 +643,13 @@ export function App() {
   const [activeToolWindowId, setActiveToolWindowId] = useState<string | undefined>(initialSession.activeToolWindowId);
   const [activityButtonPlacements, setActivityButtonPlacements] = useState(initialSession.activityButtonPlacements);
   const [draggingActivityButtonKey, setDraggingActivityButtonKey] = useState<string>();
-  const [toolWindowViewRequest, setToolWindowViewRequest] = useState<WorkbenchToolWindowViewRequest>();
+  const [toolWindowViewRequest, setToolWindowViewRequest] = useState<WorkbenchToolWindowViewRequest | undefined>(() => (
+    panelWindowReference && panelWindowViewId
+      ? { toolWindowId: panelWindowReference.id, viewId: panelWindowViewId, sequence: 1 }
+      : undefined
+  ));
   const [mountedToolWindowIds, setMountedToolWindowIds] = useState<ReadonlySet<string>>(new Set());
-  const toolWindowViewRequestSequenceRef = useRef(0);
+  const toolWindowViewRequestSequenceRef = useRef(toolWindowViewRequest ? 1 : 0);
   // A região inferior mostra apenas um painel horizontal por vez: abrir a saída de
   // execução/debug oculta a tool window ativa (e vice-versa).
   const revealExecutionPanel = useCallback((tabId?: string) => {
@@ -1403,6 +1437,44 @@ export function App() {
     ?? activityLayoutItems.find((item) => item.key === key)?.defaultSide
     ?? "left"
   );
+  /**
+   * Apresenta uma superfície de plugin nos docks desta janela. É o caminho
+   * único de "mostrar isto aqui": serve ao `workbench.open*` dos plugins e ao
+   * pedido de reanexar vindo de uma janela de painel. Devolve `false` quando a
+   * contribuição não existe nesta janela — o plugin pode estar desativado ou a
+   * janela já ter trocado de projeto.
+   */
+  const revealWorkbenchSurface = (reference: PanelWindowReference, viewId?: string): boolean => {
+    if (reference.kind === "sidebar") {
+      if (!workbenchSidebars.some((sidebar) => sidebar.id === reference.id)) return false;
+      const side = activitySideFor(`sidebar:${reference.id}`);
+      setSidebarViewsBySide((current) => openSidebarViewForSide(current, side, reference.id));
+      setSidebarView(reference.id);
+      setSidebarVisible(true);
+      return true;
+    }
+    if (reference.kind === "tool-window") {
+      if (!workbenchToolWindows.some((toolWindow) => toolWindow.id === reference.id)) return false;
+      setToolWindowViewRequest(viewId ? {
+        toolWindowId: reference.id,
+        viewId,
+        sequence: ++toolWindowViewRequestSequenceRef.current,
+      } : undefined);
+      setActiveToolWindowId(reference.id);
+      setPanelVisible(false);
+      setToolWindowVisible(true);
+      return true;
+    }
+    if (!workbenchPanels.some((panel) => panel.id === reference.id)) return false;
+    revealExecutionPanel(reference.id);
+    return true;
+  };
+  // O bind do workbench e a assinatura de reanexar são efeitos de longa vida
+  // com dependências próprias; o ref mantém os dois sobre a versão atual das
+  // contribuições em vez da capturada quando o efeito rodou.
+  const revealWorkbenchSurfaceRef = useRef(revealWorkbenchSurface);
+  revealWorkbenchSurfaceRef.current = revealWorkbenchSurface;
+
   const problemsDockSide = activitySideFor("builtin:problems");
   const leftDockWidth = problemsVisible && problemsDockSide === "left"
     ? Math.min(640, Math.max(220, verticalPanelWidths.left))
@@ -1911,6 +1983,16 @@ export function App() {
   }, [workspaceName, workspaceRoot, sidebarView, sidebarVisible, panelTab, panelVisible, activeToolWindowId, toolWindowVisible, selectedEnvironmentId, selectedEnvironmentIds, resolvedPluginSettings]);
 
   useEffect(() => {
+    if (!panelWindowReference) return;
+    const surface = panelWindowReference.kind === "tool-window"
+      ? workbenchToolWindows.find((toolWindow) => toolWindow.id === panelWindowReference.id)
+      : panelWindowReference.kind === "panel"
+        ? workbenchPanels.find((panel) => panel.id === panelWindowReference.id)
+        : workbenchSidebars.find((sidebar) => sidebar.id === panelWindowReference.id);
+    document.title = panelWindowDocumentTitle(surface?.label ?? panelWindowReference.id, workspaceName);
+  }, [panelWindowReference, workbenchToolWindows, workbenchPanels, workbenchSidebars, workspaceName]);
+
+  useEffect(() => {
     const snapshot = executionSnapshot();
     for (const listener of executionStateListenersRef.current) listener(snapshot);
   }, [profilesState, environments, selectedEnvironmentId, profileExecutions, debugSessions]);
@@ -1935,6 +2017,68 @@ export function App() {
     }
   }, [platformSnapshot.plugins, restorationComplete]);
 
+  /**
+   * Apresenta uma superfície como janela real do SO — decisão de apresentação
+   * do host: o plugin continua montando no container que recebe, sem saber onde
+   * ele vive. `closeDock` recolhe a apresentação local quando o destaque parte
+   * de um dock aberto na janela completa.
+   */
+  const detachPanelToWindow = useCallback(async (
+    reference: PanelWindowReference,
+    viewId?: string,
+    closeDock?: () => void,
+  ) => {
+    try {
+      if (!workspaceRoot) throw new Error("Abra um projeto antes de mover painéis para uma janela.");
+      const opened = await openDesktopPanelWindow(
+        workspaceRoot,
+        serializePanelWindowReference(reference),
+        viewId,
+      );
+      if (!opened) throw new Error("Este host não abre painéis em janelas separadas.");
+      closeDock?.();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [workspaceRoot]);
+
+  // Destacar painéis é apresentação do app empacotado; no navegador os docks e
+  // modais continuam como estão. Uma janela de painel não destaca a si mesma.
+  const canDetachPanels = !panelWindowReference && Boolean(workspaceRoot) && supportsDesktopPanelWindows();
+
+  /**
+   * Devolve esta janela de painel para os docks de quem a abriu. Fechar a
+   * janela continua existindo e significa outra coisa — dispensar a superfície;
+   * reanexar é movê-la de volta, sem obrigar o usuário a reabrir o painel.
+   */
+  const reattachPanelToMainWindow = useCallback(async (viewId?: string) => {
+    if (!panelWindowReference) return;
+    try {
+      const reattached = await reattachDesktopPanelWindow(
+        serializePanelWindowReference(panelWindowReference),
+        viewId ?? panelWindowViewId,
+      );
+      if (!reattached) throw new Error("Este host não reanexa painéis à janela principal.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [panelWindowReference, panelWindowViewId]);
+
+  // A janela de painel some depois de pedir; a apresentação de volta é feita
+  // aqui, na janela completa, que é quem tem docks e layout.
+  const canReattachPanel = Boolean(panelWindowReference) && supportsDesktopPanelWindowReattach();
+
+  useEffect(() => {
+    if (panelWindowReference) return;
+    return subscribeDesktopPanelWindowReattach((payload) => {
+      const request = parsePanelWindowReattachRequest(payload);
+      if (!request) return;
+      if (!revealWorkbenchSurfaceRef.current(request.reference, request.viewId)) {
+        setError(`O painel ${request.reference.id} não está disponível nesta janela.`);
+      }
+    });
+  }, [panelWindowReference]);
+
   useEffect(() => platform.workbench.bind({
     notifyError(message) {
       setPluginNotificationError(message);
@@ -1943,23 +2087,25 @@ export function App() {
       if (!workbenchSidebars.some((sidebar) => sidebar.id === id)) {
         throw new Error(`Sidebar não registrada: ${id}`);
       }
-      const side = activitySideFor(`sidebar:${id}`);
-      setSidebarViewsBySide((current) => openSidebarViewForSide(current, side, id));
-      setSidebarView(id);
-      setSidebarVisible(true);
+      // Numa janela de painel só existe uma superfície: abrir outra superfície
+      // é abrir (ou focar) outra janela de painel.
+      if (panelWindowReference) {
+        if (panelWindowReference.kind !== "sidebar" || panelWindowReference.id !== id) {
+          void detachPanelToWindow({ kind: "sidebar", id });
+        }
+        return;
+      }
+      revealWorkbenchSurfaceRef.current({ kind: "sidebar", id });
     },
     openToolWindow(id, viewId) {
       if (!workbenchToolWindows.some((toolWindow) => toolWindow.id === id)) {
         throw new Error(`Tool window não registrada: ${id}`);
       }
-      setToolWindowViewRequest(viewId ? {
-        toolWindowId: id,
-        viewId,
-        sequence: ++toolWindowViewRequestSequenceRef.current,
-      } : undefined);
-      setActiveToolWindowId(id);
-      setPanelVisible(false);
-      setToolWindowVisible(true);
+      if (panelWindowReference && (panelWindowReference.kind !== "tool-window" || panelWindowReference.id !== id)) {
+        void detachPanelToWindow({ kind: "tool-window", id }, viewId);
+        return;
+      }
+      revealWorkbenchSurfaceRef.current({ kind: "tool-window", id }, viewId);
     },
     openDialog(contribution) {
       const token = Symbol(contribution.id);
@@ -2448,6 +2594,10 @@ export function App() {
   }, [replaceWorkspaceSettings]);
 
   const applyPersistedVisualSession = useCallback((session: ReturnType<typeof readSession>) => {
+    // O layout persistido pertence às janelas completas. A janela de painel já
+    // nasceu com a única superfície dela aberta — aplicar a sessão do workspace
+    // aqui esconderia o painel ou reabriria docks que ela não renderiza.
+    if (panelWindowReference) return;
     setSidebarView(session.sidebarView);
     setSidebarVisible(session.sidebarVisible);
     setSidebarViewsBySide(session.sidebarViewsBySide);
@@ -2466,7 +2616,7 @@ export function App() {
     setExpanded(new Set(session.expandedDirectories));
     setExplorerShowHidden(session.explorerShowHidden);
     setExplorerShowIgnored(session.explorerShowIgnored);
-  }, []);
+  }, [panelWindowReference]);
 
   const restorePersistedWorkspaceUi = useCallback(async (
     workspaceRoot: string,
@@ -6917,6 +7067,19 @@ export function App() {
                       </DropdownMenu.Root>
                     </>
                   ) : null}
+                  {pluginSidebar && canDetachPanels ? (
+                    <button
+                      className="icon-button small"
+                      type="button"
+                      aria-label={`Abrir ${pluginSidebar.label} em janela separada`}
+                      title="Abrir em janela separada"
+                      onClick={() => void detachPanelToWindow(
+                        { kind: "sidebar", id: pluginSidebar.id },
+                        undefined,
+                        () => closeVerticalSidebar(side),
+                      )}
+                    ><ExternalLink size={14} /></button>
+                  ) : null}
                   <button className="icon-button small" type="button" onClick={() => closeVerticalSidebar(side)} aria-label="Fechar sidebar"><X size={14} /></button>
                 </div>
               </div>
@@ -7346,6 +7509,180 @@ export function App() {
       } as React.CSSProperties}
     />
   ) : null;
+
+  // Superfícies de diálogo e aviso compartilhadas entre a janela completa e a
+  // janela de painel: plugins abrem diálogos e notificam erros a partir de
+  // qualquer superfície em que estejam montados.
+  const workbenchPluginDialogElement = (
+    <Dialog.Root open={Boolean(workbenchDialog)} onOpenChange={(open) => {
+      if (!open) {
+        const shouldClose = workbenchDialog?.contribution.onCloseRequest?.() !== false;
+        if (shouldClose) setWorkbenchDialog(undefined);
+      }
+    }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="dialog-overlay" />
+        <Dialog.Content className={`workbench-plugin-dialog workbench-plugin-dialog--${workbenchDialog?.size ?? workbenchDialog?.contribution.size ?? "large"}`}>
+          <div className="dialog-heading">
+            <div>
+              {workbenchDialog?.contribution.showPluginLabel === false ? null : <span className="eyebrow">PLUGIN</span>}
+              <Dialog.Title>{workbenchDialog?.contribution.title ?? "Plugin"}</Dialog.Title>
+              {workbenchDialog?.contribution.description ? (
+                <Dialog.Description>{workbenchDialog.contribution.description}</Dialog.Description>
+              ) : null}
+            </div>
+            <Dialog.Close asChild>
+              <button className="icon-button" type="button" aria-label="Fechar"><X size={16} /></button>
+            </Dialog.Close>
+          </div>
+          {workbenchDialog ? (
+            <WorkbenchDialogHost
+              provider={workbenchDialog.contribution}
+              onClose={() => setWorkbenchDialog(undefined)}
+              onSizeChange={(size) => setWorkbenchDialog((current) => current ? { ...current, size } : current)}
+            />
+          ) : null}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+
+  const workbenchContextMenuElement = (
+    <WorkbenchContextMenuHost
+      ref={contextMenuRef}
+      workspaceName={workspaceName}
+      disabled={busy}
+      onDismiss={() => setEditorContextMenuContext(undefined)}
+      onExecute={(item, target) => invoke(() => executeContextMenuItem(item, target))}
+    />
+  );
+
+  const pluginNotificationToastElement = pluginNotificationError ? (
+    <div className="error-toast" role="alert" data-source="plugin-notification">
+      <span>{pluginNotificationError}</span>
+      <button
+        className="icon-button small"
+        type="button"
+        aria-label="Fechar notificação"
+        onClick={() => setPluginNotificationError(undefined)}
+      ><X size={14} /></button>
+    </div>
+  ) : null;
+
+  const errorToastElement = error ? (
+    <div className="error-toast" role="alert">
+      <span>{error}</span>
+      <button className="icon-button small" type="button" aria-label="Fechar erro" onClick={() => setError(undefined)}><X size={14} /></button>
+    </div>
+  ) : null;
+
+  const pluginConfirmDialogElement = pluginConfirm ? (
+    <ConfirmationDialog
+      titleId="plugin-confirm-title"
+      title={pluginConfirm.title}
+      confirmLabel={pluginConfirm.confirmLabel ?? "Confirmar"}
+      cancelLabel={pluginConfirm.cancelLabel ?? "Cancelar"}
+      danger={pluginConfirm.danger !== false}
+      onCancel={() => resolvePluginConfirm(false)}
+      onConfirm={() => resolvePluginConfirm(true)}
+    >
+      <p>{pluginConfirm.message}</p>
+      {pluginConfirm.detail ? <p className="muted">{pluginConfirm.detail}</p> : null}
+    </ConfirmationDialog>
+  ) : null;
+
+  if (panelWindowReference) {
+    const panelWindowMissingElement = (
+      <div className="panel-window-missing" role="status">
+        <p>O painel <code>{panelWindowReference.id}</code> não está disponível neste projeto.</p>
+        <p className="muted">O plugin correspondente pode estar desativado ou desinstalado.</p>
+      </div>
+    );
+    // Superfícies sem abas: nada de view interna a levar de volta, só a
+    // superfície. A tool window usa o botão do próprio host, que sabe qual aba
+    // está aberta.
+    const panelWindowReattachButton = (label: string) => (
+      <button
+        className="icon-button small"
+        type="button"
+        aria-label={`Reanexar ${label} à janela principal`}
+        title="Reanexar à janela principal"
+        onClick={() => void reattachPanelToMainWindow()}
+      ><Minimize2 size={14} /></button>
+    );
+    const panelWindowSurfaceElement = (() => {
+      if (panelWindowReference.kind === "tool-window") {
+        const provider = workbenchToolWindows.find((toolWindow) => toolWindow.id === panelWindowReference.id);
+        if (!provider) return panelWindowMissingElement;
+        return (
+          <WorkbenchToolWindowHost
+            provider={provider}
+            state={workbenchState}
+            visible
+            windowMode
+            {...(toolWindowViewRequest ? { viewRequest: toolWindowViewRequest } : {})}
+            {...(canReattachPanel ? { onReattach: reattachPanelToMainWindow } : {})}
+            onClose={() => window.close()}
+          />
+        );
+      }
+      if (panelWindowReference.kind === "panel") {
+        const provider = workbenchPanels.find((panel) => panel.id === panelWindowReference.id);
+        if (!provider) return panelWindowMissingElement;
+        return (
+          <section className="panel-window-surface" aria-label={provider.label}>
+            <div className="panel-heading">
+              <span className="panel-window-surface__label">{provider.label}</span>
+              <div className="sidebar-heading-actions">
+                {canReattachPanel ? panelWindowReattachButton(provider.label) : null}
+                <button
+                  className="icon-button small"
+                  type="button"
+                  aria-label={`Fechar janela de ${provider.label}`}
+                  title="Fechar janela"
+                  onClick={() => window.close()}
+                ><X size={14} /></button>
+              </div>
+            </div>
+            <WorkbenchPanelHost provider={provider} state={workbenchState} />
+          </section>
+        );
+      }
+      const provider = workbenchSidebars.find((sidebar) => sidebar.id === panelWindowReference.id);
+      if (!provider) return panelWindowMissingElement;
+      return (
+        <aside className="sidebar panel-window-sidebar" aria-label={provider.label}>
+          <div className="sidebar-heading">
+            <span>{provider.label.toLocaleUpperCase()}</span>
+            <div className="sidebar-heading-actions">
+              {canReattachPanel ? panelWindowReattachButton(provider.label) : null}
+              <button
+                className="icon-button small"
+                type="button"
+                aria-label={`Fechar janela de ${provider.label}`}
+                title="Fechar janela"
+                onClick={() => window.close()}
+              ><X size={14} /></button>
+            </div>
+          </div>
+          <WorkbenchSidebarHost provider={provider} state={workbenchState} onClose={() => window.close()} />
+        </aside>
+      );
+    })();
+
+    return (
+      <Tooltip.Provider delayDuration={350}>
+        <div className="ide-shell panel-window-shell" data-panel-window={serializePanelWindowReference(panelWindowReference)}>
+          {panelWindowSurfaceElement}
+          {workbenchPluginDialogElement}
+          {workbenchContextMenuElement}
+          {pluginNotificationToastElement}
+          {errorToastElement}
+          {pluginConfirmDialogElement}
+        </div>
+      </Tooltip.Provider>
+    );
+  }
 
   return (
     <Tooltip.Provider delayDuration={350}>
@@ -8192,6 +8529,24 @@ export function App() {
                       </button>
                     ))}
                   </div>
+                  {(() => {
+                    const activeWorkbenchPanel = canDetachPanels
+                      ? workbenchPanels.find((panel) => panel.id === panelTab)
+                      : undefined;
+                    return activeWorkbenchPanel ? (
+                      <button
+                        className="icon-button small"
+                        type="button"
+                        aria-label={`Abrir ${activeWorkbenchPanel.label} em janela separada`}
+                        title="Abrir em janela separada"
+                        onClick={() => void detachPanelToWindow(
+                          { kind: "panel", id: activeWorkbenchPanel.id },
+                          undefined,
+                          () => setPanelVisible(false),
+                        )}
+                      ><ExternalLink size={14} /></button>
+                    ) : null;
+                  })()}
                   <button className="icon-button small" type="button" aria-label="Fechar painel" onClick={() => setPanelVisible(false)}><X size={14} /></button>
                 </div>
                 {profileOutputTabs.map((tab) => {
@@ -8483,6 +8838,19 @@ export function App() {
                   height={toolWindowHeight}
                   {...(toolWindowViewRequest ? { viewRequest: toolWindowViewRequest } : {})}
                   onClose={closeToolWindow}
+                  {...(canDetachPanels ? {
+                    onDetach: () => void detachPanelToWindow(
+                      { kind: "tool-window", id: toolWindow.id },
+                      undefined,
+                      // Desmonta em vez de só ocultar: o host retido seria um
+                      // segundo cliente do mesmo backend (PTY) com dimensões
+                      // divergentes da janela destacada.
+                      () => {
+                        setToolWindowVisible(false);
+                        setMountedToolWindowIds((previous) => releaseMountedToolWindow(previous, toolWindow.id));
+                      },
+                    ),
+                  } : {})}
                   onResize={beginToolWindowResize}
                   onResetHeight={() => setToolWindowHeight(DEFAULT_LAYOUT.toolWindowHeight)}
                 />
@@ -8522,37 +8890,7 @@ export function App() {
           version={import.meta.env.VITE_TINYIDE_APP_VERSION}
         />
 
-        <Dialog.Root open={Boolean(workbenchDialog)} onOpenChange={(open) => {
-          if (!open) {
-            const shouldClose = workbenchDialog?.contribution.onCloseRequest?.() !== false;
-            if (shouldClose) setWorkbenchDialog(undefined);
-          }
-        }}>
-          <Dialog.Portal>
-            <Dialog.Overlay className="dialog-overlay" />
-            <Dialog.Content className={`workbench-plugin-dialog workbench-plugin-dialog--${workbenchDialog?.size ?? workbenchDialog?.contribution.size ?? "large"}`}>
-              <div className="dialog-heading">
-                <div>
-                  {workbenchDialog?.contribution.showPluginLabel === false ? null : <span className="eyebrow">PLUGIN</span>}
-                  <Dialog.Title>{workbenchDialog?.contribution.title ?? "Plugin"}</Dialog.Title>
-                  {workbenchDialog?.contribution.description ? (
-                    <Dialog.Description>{workbenchDialog.contribution.description}</Dialog.Description>
-                  ) : null}
-                </div>
-                <Dialog.Close asChild>
-                  <button className="icon-button" type="button" aria-label="Fechar"><X size={16} /></button>
-                </Dialog.Close>
-              </div>
-              {workbenchDialog ? (
-                <WorkbenchDialogHost
-                  provider={workbenchDialog.contribution}
-                  onClose={() => setWorkbenchDialog(undefined)}
-                  onSizeChange={(size) => setWorkbenchDialog((current) => current ? { ...current, size } : current)}
-                />
-              ) : null}
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
+        {workbenchPluginDialogElement}
 
         <SettingsDialog
           open={settingsOpen}
@@ -8637,13 +8975,7 @@ export function App() {
           onConfirm={() => invoke(confirmEnvironmentBrowser)}
         />
 
-        <WorkbenchContextMenuHost
-          ref={contextMenuRef}
-          workspaceName={workspaceName}
-          disabled={busy}
-          onDismiss={() => setEditorContextMenuContext(undefined)}
-          onExecute={(item, target) => invoke(() => executeContextMenuItem(item, target))}
-        />
+        {workbenchContextMenuElement}
 
         {completionSession ? (
           <CompletionPopup
@@ -8674,24 +9006,9 @@ export function App() {
           />
         ) : null}
 
-        {pluginNotificationError ? (
-          <div className="error-toast" role="alert" data-source="plugin-notification">
-            <span>{pluginNotificationError}</span>
-            <button
-              className="icon-button small"
-              type="button"
-              aria-label="Fechar notificação"
-              onClick={() => setPluginNotificationError(undefined)}
-            ><X size={14} /></button>
-          </div>
-        ) : null}
+        {pluginNotificationToastElement}
 
-        {error ? (
-          <div className="error-toast" role="alert">
-            <span>{error}</span>
-            <button className="icon-button small" type="button" aria-label="Fechar erro" onClick={() => setError(undefined)}><X size={14} /></button>
-          </div>
-        ) : null}
+        {errorToastElement}
 
         {pluginPendingRemoval ? (
           <ConfirmationDialog
@@ -8708,20 +9025,7 @@ export function App() {
           </ConfirmationDialog>
         ) : null}
 
-        {pluginConfirm ? (
-          <ConfirmationDialog
-            titleId="plugin-confirm-title"
-            title={pluginConfirm.title}
-            confirmLabel={pluginConfirm.confirmLabel ?? "Confirmar"}
-            cancelLabel={pluginConfirm.cancelLabel ?? "Cancelar"}
-            danger={pluginConfirm.danger !== false}
-            onCancel={() => resolvePluginConfirm(false)}
-            onConfirm={() => resolvePluginConfirm(true)}
-          >
-            <p>{pluginConfirm.message}</p>
-            {pluginConfirm.detail ? <p className="muted">{pluginConfirm.detail}</p> : null}
-          </ConfirmationDialog>
-        ) : null}
+        {pluginConfirmDialogElement}
 
         {explorerPendingDeletion ? (
           <ConfirmationDialog

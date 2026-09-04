@@ -4,6 +4,7 @@ import {
   maximumSidebarWidth,
   moveOpenSidebar,
   reconcileToolWindowLayout,
+  releaseMountedToolWindow,
   retainMountedToolWindows,
   sidebarActivityKey,
   openSidebarViewForSide,
@@ -163,5 +164,33 @@ describe("mounted tool window retention", () => {
       toolWindowVisible: true,
       availableIds: ["terminal", "database"],
     })).toBe(previous);
+  });
+});
+
+describe("released tool windows (detached to an OS window)", () => {
+  it("unmounts the detached tool window and keeps the others", () => {
+    expect([...releaseMountedToolWindow(new Set(["terminal", "database"]), "terminal")])
+      .toEqual(["database"]);
+  });
+
+  it("returns the same reference when the id is not mounted", () => {
+    const previous = new Set(["database"]);
+    expect(releaseMountedToolWindow(previous, "terminal")).toBe(previous);
+  });
+
+  it("stays unmounted while the region is hidden, and remounts on reattach", () => {
+    const released = releaseMountedToolWindow(new Set(["terminal"]), "terminal");
+    // O detach oculta a região; a retenção não pode ressuscitar o host oculto.
+    expect(retainMountedToolWindows(released, {
+      activeToolWindowId: "terminal",
+      toolWindowVisible: false,
+      availableIds: ["terminal"],
+    }).size).toBe(0);
+    // Reanexar reapresenta a superfície: ativa + visível volta a montar.
+    expect([...retainMountedToolWindows(released, {
+      activeToolWindowId: "terminal",
+      toolWindowVisible: true,
+      availableIds: ["terminal"],
+    })]).toEqual(["terminal"]);
   });
 });

@@ -246,6 +246,35 @@ describe("layout persistence", () => {
     expect(writes.values().next().value).toEqual(session);
   });
 
+  /**
+   * Uma janela de painel compartilha o workspace com a janela completa, mas o
+   * layout dela é uma superfície só e ela não abre documentos. Se gravasse,
+   * destruiria a sessão visual e as abas que a janela principal restaura.
+   */
+  it("a panel window never writes the visual session nor the snapshot", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => new Response(init?.body as string, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    setActiveWorkspaceScope("alpha-0011223344556677");
+    window.history.replaceState(
+      null,
+      "",
+      "/w/alpha-0011223344556677/?tinyidePanelWindow=tool-window:terminal",
+    );
+
+    writeSession({ ...readSession(), workspaceName: "alpha", workspaceRoot: "/workspaces/alpha" });
+    await writeReactSnapshot({
+      workspaceName: "alpha",
+      workspaceRoot: "/workspaces/alpha",
+      workspaceEntries: [],
+      documents: [],
+      diagnostics: [],
+      output: [],
+    });
+    await Promise.resolve();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("restores every open vertical panel", () => {
     expect(normalizeSession({
       sidebarVisible: true,

@@ -36,6 +36,7 @@ import { pluginLanguageProviderFor } from "./generic-syntax";
 import { platform } from "./platform";
 import { getActiveHostWorkspaceRoot, setActiveHostWorkspaceRoot } from "./host-workspace-state";
 import { writeHostWorkspacePointer } from "./host-pointer";
+import { isPanelWindow } from "./panel-window";
 import {
   clearActiveWorkspaceScope,
   hasActiveWorkspaceScope,
@@ -390,8 +391,11 @@ export async function setHostWorkspace(
   // Ponteiro deste host, gravado num só lugar: abrir um projeto é o único
   // evento que muda qual projeto uma janela nova deste host deve reabrir. Não
   // bloqueia a abertura — é um atalho de conveniência, e esta janela já sabe
-  // qual é o seu projeto pelo escopo na URL.
-  void writeHostWorkspacePointer({ path: payload.workspaceRoot, name: workspaceName });
+  // qual é o seu projeto pelo escopo na URL. Janela de painel não vota: ela
+  // acompanha um projeto, não define qual é o "último" do host.
+  if (!isPanelWindow()) {
+    void writeHostWorkspacePointer({ path: payload.workspaceRoot, name: workspaceName });
+  }
   return { workspaceRoot: payload.workspaceRoot, scopeId: payload.scopeId };
 }
 

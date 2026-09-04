@@ -111,6 +111,26 @@ test.describe("conjunto de plugins", () => {
       () => terminal.innerText(),
       { timeout: 30_000, message: "a saída do comando deveria aparecer no terminal" },
     ).toMatch(/tinyide-terminal-ok/);
+
+    // O grid ocupa o host até sobrar menos de uma célula: sobra maior indica
+    // que o fit voltou a reservar espaço (a scrollbar escondida custava 14px
+    // e deixava uma faixa morta à direita das TUIs). E nenhum invólucro do
+    // painel pode exibir scrollbar própria — TUIs desenham a delas.
+    const geometry = await window.evaluate(() => {
+      const host = document.querySelector(".tinyide-terminal-xterm");
+      const screen = host.querySelector(".xterm-screen");
+      const slack = host.getBoundingClientRect().right - screen.getBoundingClientRect().right;
+      const scrollbars = [...document.querySelector(".tinyide-terminal-panel").querySelectorAll("*")]
+        .filter((el) => {
+          const style = getComputedStyle(el);
+          const scrollable = /auto|scroll/.test(style.overflowY + style.overflowX);
+          return scrollable && (el.offsetWidth - el.clientWidth > 0 || el.offsetHeight - el.clientHeight > 0);
+        })
+        .map((el) => el.className);
+      return { slack, scrollbars };
+    });
+    expect(geometry.slack).toBeLessThanOrEqual(8);
+    expect(geometry.scrollbars).toEqual([]);
   });
 
   test("banco de dados abre o painel de conexões", async () => {

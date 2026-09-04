@@ -105,6 +105,62 @@ test.describe("painéis em janelas do sistema", () => {
     }
   });
 
+  test("preserva teclado e mouse de TUI após truncar o histórico e destacar", async () => {
+    const ide = await launchIde(project.root, { pickerPath: project.root });
+    try {
+      await openProject(ide.window);
+      await ide.window.getByLabel("Exibir TERMINAL").first().click();
+      const dockedTerminal = ide.window.locator(".xterm-screen").first();
+      await dockedTerminal.waitFor({ timeout: 30_000 });
+
+      // Simula uma TUI que usa tela alternativa, mouse SGR e redraw sincronizado.
+      // O volume remove as sequências de ativação do scrollback bruto do backend,
+      // exatamente como ocorreu com uma sessão longa do Quimera.
+      const tuiProgram = Buffer.from(`
+        process.stdin.setRawMode(true);
+        process.stdin.resume();
+        process.stdin.on("data", (data) => {
+          process.stdout.write("\\x1b[?2026h\\x1b[1;1HINPUT:" + data.toString("hex") + "\\x1b[K\\x1b[?2026l");
+        });
+        process.stdout.write("\\x1b[?1049h\\x1b[?1000h\\x1b[?1006h");
+        for (let index = 0; index < 1_100; index += 1) {
+          process.stdout.write("\\x1b[?2026h\\x1b[1;1H" + "x".repeat(2_048) + "\\x1b[1;1HFRAME:" + index + "\\x1b[K\\x1b[?2026l");
+        }
+      `).toString("base64");
+      await dockedTerminal.click();
+      await ide.window.keyboard.type(`node -e "eval(Buffer.from('${tuiProgram}','base64').toString())"`);
+      await ide.window.keyboard.press("Enter");
+      await expect.poll(() => ide.window.evaluate(async () => {
+        const sessions = await fetch("plugin-api/tinyide.terminal/sessions").then((response) => response.json());
+        const sessionId = sessions.sessions?.[0]?.id;
+        if (!sessionId) return 0;
+        const snapshot = await fetch(`plugin-api/tinyide.terminal/sessions/${sessionId}?offset=0&wait=0`)
+          .then((response) => response.json());
+        return snapshot.offset ?? 0;
+      }), { timeout: 30_000 }).toBeGreaterThan(2_000_000);
+
+      const panelWindowEvent = ide.application.waitForEvent("window");
+      await ide.window.getByLabel("Abrir TERMINAL em janela separada").click();
+      const panelWindow = await panelWindowEvent;
+      await panelWindow.waitForLoadState("domcontentloaded");
+      const panelTerminal = panelWindow.locator(".panel-window-shell .xterm-screen").first();
+      await panelTerminal.waitFor({ timeout: 45_000 });
+      await expect.poll(() => panelTerminal.innerText(), { timeout: 30_000 }).toContain("FRAME:1099");
+
+      // A classe é aplicada pelo próprio xterm somente quando o modo de mouse foi
+      // reconstruído. Sem o replay de modos, a roda fica presa no viewport local.
+      await expect(panelWindow.locator(".panel-window-shell .xterm.enable-mouse-events")).toBeVisible();
+      await panelTerminal.click();
+      await panelWindow.keyboard.type("z");
+      await expect.poll(() => panelTerminal.innerText(), { timeout: 30_000 }).toContain("INPUT:7a");
+      await panelTerminal.hover();
+      await panelWindow.mouse.wheel(0, -120);
+      await expect.poll(() => panelTerminal.innerText(), { timeout: 30_000 }).toMatch(/INPUT:1b5b3c/);
+    } finally {
+      await ide.close();
+    }
+  });
+
   test("destaca a sidebar de alterações do Git para uma janela própria", async () => {
     const ide = await launchIde(project.root, { pickerPath: project.root });
     try {

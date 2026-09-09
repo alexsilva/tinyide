@@ -45,7 +45,7 @@ export function ProjectOpenDialog({
           <legend>Abrir em</legend>
           <label><input type="radio" name="project-open-target" checked={target === "current"} onChange={() => onTargetChange("current")} /> Tela atual</label>
           <label><input type="radio" name="project-open-target" checked={target === "new"} onChange={() => onTargetChange("new")} /> {newTargetLabel}</label>
-          <label className="project-open-target__remember"><input type="checkbox" checked={rememberChoice} onChange={(event) => onRememberChoiceChange(event.target.checked)} /> Usar esta opção como padrão</label>
+          <label className="project-open-target__remember"><input className="checkbox-sm" type="checkbox" checked={rememberChoice} onChange={(event) => onRememberChoiceChange(event.target.checked)} /> Usar esta opção como padrão</label>
         </fieldset>
 
         <button className="button primary project-open-dialog__choose" type="button" disabled={busy} onClick={onChooseProject}>

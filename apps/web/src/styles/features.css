@@ -709,10 +709,10 @@
 .project-open-dialog__header > div { min-width:0; flex:1; }
 .project-open-dialog__header h2 { margin:0; font-size:17px; }
 .project-open-dialog__header p { margin:5px 0 0; color:#8f9bad; font-size:12px; }
-.project-open-target { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 14px; margin:18px 0 12px; border:1px solid #2d3746; border-radius:6px; padding:12px; }
+.project-open-target { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto; gap:14px; margin:18px 0 12px; border:1px solid #2d3746; border-radius:6px; padding:12px; }
 .project-open-target legend { padding:0 6px; color:#aab4c3; font-size:11px; }
 .project-open-target label { display:flex; align-items:center; gap:7px; font-size:12px; }
-.project-open-target__remember { grid-column:1/-1; padding-top:6px; border-top:1px solid #28313f; color:#9da8b8; }
+.project-open-target__remember { color:#9da8b8; white-space:nowrap; }
 .project-open-dialog__choose { width:100%; justify-content:center; }
 .project-open-recents__heading { display:flex; align-items:center; gap:7px; margin:18px 0 8px; font-size:12px; }
 .project-open-recents { display:flex; flex-direction:column; gap:6px; }

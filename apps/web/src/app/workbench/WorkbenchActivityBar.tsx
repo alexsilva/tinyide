@@ -153,3 +153,15 @@ export function WorkbenchActivityBar({
     </>
   );
 }
+
+export function WorkbenchActivityRail(props: WorkbenchActivityBarProps) {
+  const { side } = props;
+  return (
+    <aside
+      className={side === "left" ? "activity-bar" : "right-activity-bar"}
+      {...(side === "right" ? { "aria-label": "Barra lateral direita" } : {})}
+    >
+      <WorkbenchActivityBar {...props} />
+    </aside>
+  );
+}

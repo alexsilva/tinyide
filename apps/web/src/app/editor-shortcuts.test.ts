@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+const searchSource = readFileSync(new URL("./editor/EditorSearchBox.tsx", import.meta.url), "utf8");
 const workbenchStyles = readFileSync(new URL("../styles/workbench.css", import.meta.url), "utf8");
 
 describe("editor shortcuts", () => {
@@ -11,17 +12,17 @@ describe("editor shortcuts", () => {
     expect(appSource.match(/if \(openEditorSearch\(value\.slice\(selectionStart, selectionEnd\)\)\) event\.preventDefault\(\);/g)).toHaveLength(1);
     expect(appSource).toContain("input?.focus({ preventScroll: true });");
     expect(appSource).toContain("input?.select();");
-    expect(appSource).toContain("event.currentTarget.select();");
+    expect(searchSource).toContain("event.currentTarget.select();");
     expect(appSource).toContain("openEditorSearch(value.slice(selectionStart, selectionEnd))");
     expect(appSource).toContain("if (selectedText) {");
-    expect(appSource).toContain("onClick={() => openEditorSearch()}");
+    expect(appSource).toContain("onOpenSearch: () => openEditorSearch()");
   });
 
   it("opens local replacement with Ctrl+H", () => {
     expect(appSource).toContain("const openEditorReplace = useCallback(");
     expect(appSource.match(/key === "h" && !event\.shiftKey && !event\.altKey/g)).toHaveLength(1);
     expect(appSource).toContain("if (openEditorReplace()) event.preventDefault();");
-    expect(appSource).toContain("editor-search__replace-row");
+    expect(searchSource).toContain("editor-search__replace-row");
   });
 
   it("floats replacement below search without increasing the toolbar height", () => {

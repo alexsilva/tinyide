@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const appSource = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
+const scrollerSource = readFileSync(new URL("./EditorHighlightScroller.tsx", import.meta.url), "utf8");
+const textareaSource = readFileSync(new URL("./CodeEditorTextarea.tsx", import.meta.url), "utf8");
 const foldingSource = readFileSync(new URL("./folding.ts", import.meta.url), "utf8");
 const pointerSource = readFileSync(new URL("./pointer-mapping.ts", import.meta.url), "utf8");
 
@@ -25,15 +27,18 @@ describe("folded editor pointer mapping", () => {
   it("renders a projected caret instead of the native full-document caret while folded", () => {
     expect(pointerSource).toContain("function editorProjectedOffsetFromSourceOffset(");
     expect(pointerSource).toContain("function editorMirrorCaretRectAtTextOffset(");
-    expect(appSource).toContain('className={`code-editor code-editor--highlighted${activeFoldProjection ? " code-editor--folded" : ""}`}');
-    expect(appSource).toContain('className="editor-projected-caret"');
+    expect(appSource).toContain("folded={Boolean(activeFoldProjection)}");
+    expect(appSource).toContain("foldCaretRef={foldedEditorCaretRef}");
+    expect(textareaSource).toContain('`code-editor code-editor--highlighted${folded ? " code-editor--folded" : ""}`');
+    expect(scrollerSource).toContain('className="editor-projected-caret"');
   });
 
   it("renders projected selections and resolves double-click words from the folded visual layer", () => {
     expect(pointerSource).toContain("function editorMirrorRectsAtTextRange(");
     expect(appSource).toContain('import { editorContextMenuTargetRange, editorWordRangeAtOffset } from "./editor/context-target"');
     expect(appSource).toContain("onDoubleClick={selectFoldedEditorWordAtPointer}");
-    expect(appSource).toContain('className="editor-projected-selection"');
+    expect(appSource).toContain("foldSelectionRef={foldedEditorSelectionRef}");
+    expect(scrollerSource).toContain('className="editor-projected-selection"');
   });
 
   it("remaps folds after visible edits instead of clearing every fold", () => {
@@ -52,14 +57,16 @@ describe("folded editor pointer mapping", () => {
     expect(appSource).toContain("const projection = revealFoldsForFileLine(activeDocument.id, matchFileLine)");
     expect(appSource).toContain("scrollEditorToLine(foldSearchVisibleLine(projection, matchFileLine))");
     expect(appSource).toContain("const remainingFolds = foldsRevealingFileLine(currentFolds, fileLine)");
-    expect(appSource).toContain("{...(activeEditorSearchHighlight ? { highlight: activeEditorSearchHighlight } : {})}");
+    expect(appSource).toContain("searchHighlight={activeEditorSearchHighlight}");
+    expect(scrollerSource).toContain("...(searchHighlight ? { highlight: searchHighlight } : {})");
     expect(appSource).not.toContain("activeEditorSearchMatch && !activeFoldProjection ? { highlight: activeEditorSearchMatch }");
   });
 
   it("projects the context menu target highlight through the folded layer", () => {
     expect(appSource).toContain("const range = editorContextMenuTargetRange(activeEditorContent, context.selectionStart, context.selectionEnd)");
     expect(appSource).toContain("if (!foldSearchMatchVisible(activeEditorContent, activeFoldProjection, range)) return undefined;");
-    expect(appSource).toContain("{...(editorContextTargetHighlight ? { contextTarget: editorContextTargetHighlight } : {})}");
+    expect(appSource).toContain("contextTarget={editorContextTargetHighlight}");
+    expect(scrollerSource).toContain("...(contextTarget ? { contextTarget } : {})");
   });
 
   it("remaps folds for programmatic replacements such as line-diff undo", () => {

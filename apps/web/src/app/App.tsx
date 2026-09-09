@@ -1,55 +1,4 @@
-import * as Dialog from "@radix-ui/react-dialog";
-import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import * as Tabs from "@radix-ui/react-tabs";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import {
-  ArrowLeft,
-  Bug,
-  ArrowRight,
-  ArrowUpCircle,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  CircleAlert,
-  Code2,
-  EyeOff,
-  File,
-  FileWarning,
-  FilePlus2,
-  Files,
-  Folder,
-  FolderOpen,
-  Hash,
-  History,
-  Image as ImageIcon,
-  LocateFixed,
-  MoreVertical,
-  Package,
-  PackageCheck,
-  Pause,
-  Play,
-  Plug,
-  Plus,
-  RotateCw,
-  RefreshCw,
-  Redo2,
-  Save,
-  Search,
-  Square,
-  StepForward,
-  CornerDownRight,
-  CornerUpRight,
-  ExternalLink,
-  Minimize2,
-  Terminal,
-  Trash2,
-  Undo2,
-  UserRound,
-  WrapText,
-  Eraser,
-  X,
-} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -59,22 +8,17 @@ import {
   useState,
 } from "react";
 import { formatCommandLineArguments, parseCommandLineArguments } from "@tinyide/core";
-import { WorkbenchDialogHost } from "./workbench-dialog-host";
 import { ProjectOpenDialog } from "./ProjectOpenDialog";
 import {
   ExecutionViewHost,
   readOpenDocumentBlob,
-  ResourceEditorHost,
   WorkbenchPanelHost,
   WorkbenchSidebarHost,
-  WorkbenchStatusbarHost,
-  WorkbenchToolWindowHost,
   type WorkbenchToolWindowViewRequest,
 } from "./workbench-plugin-hosts";
 import { scrollOutputToEnd } from "./output-follow";
 import {
   ExternalFileNotice,
-  WorkspaceExternalSyncIndicator,
   type ExternalFileNoticeState,
   type WorkspaceExternalSyncState,
 } from "./editor/ExternalFileNotice";
@@ -240,10 +184,10 @@ import {
   restoreWorkspaceDocuments,
   type ApplicationSnapshot,
   writeReactSnapshot,
-  writeSession,
   type PersistedSidebarView,
+  type SessionState,
 } from "./persistence";
-import { createCoalescedWriter } from "./coalesced-writer";
+import { useWorkbenchSessionPersistence } from "./use-workbench-session-persistence";
 import { resolveSyntaxHighlighter, type SyntaxHighlighter } from "./generic-syntax";
 import { resolveEnvironmentSelections, selectedEnvironmentForProvider } from "./environment-selection";
 import {
@@ -400,9 +344,23 @@ import {
   shouldAutoRequestCompletion,
   type CompletionSession,
 } from "./editor/completion-session";
+import { WorkbenchSidebar } from "./workbench/WorkbenchSidebar";
+import { ExplorerToolbar } from "./explorer/ExplorerToolbar";
+import { ExplorerSidebarContent, type ExplorerFilterResultState } from "./explorer/ExplorerSidebarContent";
 import { EntryTree } from "./explorer/ExplorerTree";
-import { DebugVariableNode } from "./debug/DebugVariableNode";
-import { DiagnosticLayer, EditorLineDiffPeek, HighlightedSource } from "./editor/editor-components";
+import { DebugSessionView } from "./debug/DebugSessionView";
+import { WorkbenchEditorTabs } from "./editor/WorkbenchEditorTabs";
+import { WorkbenchEditorToolbar } from "./editor/WorkbenchEditorToolbar";
+import { WorkbenchWelcomeView } from "./workbench/WorkbenchWelcomeView";
+import { EditorLineDiffPeek } from "./editor/editor-components";
+import { EditorHighlightScroller } from "./editor/EditorHighlightScroller";
+import { CodeEditorTextarea } from "./editor/CodeEditorTextarea";
+import {
+  EditorExecutionLayers,
+  EditorFoldOverlay,
+  EditorFoldPreview,
+  EditorOperationMask,
+} from "./editor/EditorSurfaceParts";
 import {
   collapseFolds,
   foldedDiagnostics,
@@ -424,11 +382,10 @@ import {
 import { EditorLineRuler } from "./editor/EditorLineRuler";
 import { hydrateExpandedEntries, hydrateExplorerPath } from "./explorer/hydration";
 import { defaultLintSettings } from "./workspace/legacy-state";
-import { WindowedHighlightedSource } from "./editor/WindowedHighlightedSource";
 import {
   createEditorViewportStore,
 } from "./editor/editor-viewport";
-import { NativeImageEditor, UnsupportedBinaryEditor } from "./editor/resource-editors";
+import { EditorDocumentSurface } from "./editor/EditorDocumentSurface";
 import { resolveTextEditorNavigation } from "./editor/navigation";
 import {
   createEditorLocationHistory,
@@ -452,7 +409,7 @@ import { editorContextMenuTargetRange, editorWordRangeAtOffset } from "./editor/
 import { ProfileDialog } from "./execution/ProfileDialog";
 import { EnvironmentManagerSidebar } from "./execution/EnvironmentManagerSidebar";
 import { EnvironmentBrowserDialog } from "./execution/EnvironmentBrowserDialog";
-import { FollowedExecutionOutput } from "./execution/FollowedExecutionOutput";
+import { ExecutionPanel } from "./execution/ExecutionPanel";
 import { appendExecutionOutput } from "./execution/execution-output-buffer";
 import { tryAcquireHostProcessMonitor } from "./execution/process-monitor";
 import {
@@ -466,13 +423,23 @@ import {
   type TextContextMenuDetail,
 } from "./text-context-menu";
 import { ButtonTooltip, WorkbenchActivityIconView, WorkbenchIcon } from "./workbench/activity-components";
-import { WorkbenchActivityBar } from "./workbench/WorkbenchActivityBar";
+import {
+  WorkbenchActivityRail,
+  type WorkbenchActivityBarProps,
+} from "./workbench/WorkbenchActivityBar";
+import { PanelWindowShell } from "./workbench/PanelWindowShell";
+import { WorkbenchStatusBar } from "./workbench/WorkbenchStatusBar";
+import {
+  WorkbenchSharedOverlays,
+  type ActiveWorkbenchDialog,
+} from "./workbench/WorkbenchOverlays";
 import { PluginManagerSidebar } from "./workbench/PluginManagerSidebar";
-import { ProblemsPanel } from "./workbench/ProblemsPanel";
-import { ConfirmationDialog } from "./workbench/ConfirmationDialog";
+import { WorkbenchProblemsDock } from "./workbench/WorkbenchProblemsDock";
+import { WorkbenchToolWindowDock } from "./workbench/WorkbenchToolWindowDock";
+import { PluginRemovalDialog } from "./workbench/PluginRemovalDialog";
+import { ExplorerDeletionDialog } from "./explorer/ExplorerDeletionDialog";
 import { WorkbenchTitlebar } from "./workbench/WorkbenchTitlebar";
 import {
-  WorkbenchContextMenuHost,
   type WorkbenchContextMenuHandle,
 } from "./workbench/WorkbenchContextMenuHost";
 import type { WorkbenchContextMenuTarget } from "./workbench/context-menu";
@@ -595,20 +562,6 @@ const EDITOR_NAVIGATION_LOADING_MINIMUM_MS = 350;
 const EDITOR_BUSY_MINIMUM_MS = 300;
 const EXPLORER_DIRECTORY_LOADING_CURSOR_DELAY_MS = 500;
 
-interface ExplorerFilterResultState {
-  readonly query: string;
-  readonly visiblePaths: ReadonlySet<string>;
-  readonly expandedPaths: ReadonlySet<string>;
-  readonly matchCount: number;
-  readonly truncated: boolean;
-  readonly error?: string;
-}
-
-interface ActiveWorkbenchDialog {
-  readonly token: symbol;
-  readonly contribution: WorkbenchDialogContribution;
-  readonly size?: WorkbenchDialogContribution["size"];
-}
 
 export function App() {
   /**
@@ -695,7 +648,6 @@ export function App() {
   const [dropTargetDocumentId, setDropTargetDocumentId] = useState<string>();
   const [output, setOutput] = useState<string[]>(["tinyIde React shell inicializado."]);
   const [diagnostics, setDiagnostics] = useState<readonly TextDiagnostic[]>([]);
-  const [hoveredDiagnosticLine, setHoveredDiagnosticLine] = useState<number>();
   const [environments, setEnvironments] = useState<readonly ExecutionEnvironment[]>([]);
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<string | undefined>();
   const [environmentBusy, setEnvironmentBusy] = useState(false);
@@ -931,10 +883,6 @@ export function App() {
   });
   const explorerFilterExpansionBackupRef = useRef<ReadonlySet<string> | undefined>(undefined);
   const snapshotTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const sessionWriter = useMemo(
-    () => createCoalescedWriter({delayMs: 250, write: writeSession}),
-    [],
-  );
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const workspaceExternalSyncTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const explorerHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -1398,19 +1346,6 @@ export function App() {
     tab.execution?.status === "running"
     || Boolean(tab.debugSession && !["stopped", "completed", "failed"].includes(tab.debugSession.status))
   )).length;
-  const executionViewToolbarIcon = (action: WorkbenchExecutionViewToolbarAction) => {
-    switch (action.icon) {
-      case "run":
-        return <WorkbenchIcon icon="play" size={14} />;
-      case "stop":
-        return <WorkbenchIcon icon="stop" size={13} />;
-      case "refresh":
-        return <WorkbenchIcon icon="refresh" size={13} />;
-      case "rerun":
-      default:
-        return <WorkbenchIcon icon="rerun" size={13} />;
-    }
-  };
   const activeExecutionTab = profileExecutionPanelTab(panelTab);
   const executionPanelActive = panelVisible
     && Boolean(activeExecutionTab && openProfileTabIds.includes(panelTab));
@@ -1688,7 +1623,10 @@ export function App() {
   );
   const editorMetrics = editorDocumentIndexValue;
   useLayoutEffect(() => {
-    if (activeDocument?.kind !== "text") return;
+    // O documento pode ser restaurado enquanto o App ainda mostra a boot screen. Nesse estado
+    // não existe `.syntax-layer` para medir. A conclusão da restauração precisa disparar uma nova
+    // medição depois que a superfície real do editor foi montada.
+    if (!restorationComplete || activeDocument?.kind !== "text") return;
     let cancelled = false;
     const measure = () => {
       const layer = syntaxLayerRef.current;
@@ -1706,10 +1644,16 @@ export function App() {
         ? windowElement.getBoundingClientRect().height / windowLines
         : Number.NaN;
       const measuredHeight = layer.scrollHeight - (Number.isFinite(paddingTop) ? paddingTop : 0) - (Number.isFinite(paddingBottom) ? paddingBottom : 0);
-      const measuredLineHeight = Number.isFinite(windowLineHeight) && windowLineHeight > 8
-        ? windowLineHeight
-        : windowElement
-          ? declaredLineHeight
+      // `getBoundingClientRect()` do bloco virtualizado não é uma fonte confiável para altura
+      // de linha: spans block usados como espaçadores introduzem line boxes próprios e podem
+      // produzir uma média menor que o `line-height` efetivo do editor. Quando isso acontece a
+      // régua termina antes do texto (ex.: números param em 108, mas o scroller ainda continua).
+      // O line-height computado do próprio layer é o contrato CSS compartilhado por texto,
+      // textarea e régua; só medimos geometria como fallback se esse valor for inválido.
+      const measuredLineHeight = Number.isFinite(declaredLineHeight) && declaredLineHeight > 8
+        ? declaredLineHeight
+        : Number.isFinite(windowLineHeight) && windowLineHeight > 8
+          ? windowLineHeight
           : editorMetrics.lineCount > 1 ? measuredHeight / editorMetrics.lineCount : declaredLineHeight;
       const lineHeight = Number.isFinite(measuredLineHeight) && measuredLineHeight > 8
         ? measuredLineHeight
@@ -1728,7 +1672,7 @@ export function App() {
       cancelled = true;
       window.cancelAnimationFrame(frame);
     };
-  }, [activeDocument?.id, activeDocument?.kind, activeEditorDisplayContent, editorMetrics.lineCount, activeEditorFont, fontPreferences.editorFontSize]);
+  }, [restorationComplete, activeDocument?.id, activeDocument?.kind, activeEditorDisplayContent, editorMetrics.lineCount, activeEditorFont, fontPreferences.editorFontSize, activeSyntaxHighlighter?.id]);
   // Usado só pela virtualização dos toggles de fold; a régua deriva a própria faixa do store.
   const editorRulerRange = editorVisibleLineRange(
     editorMetrics.lineCount,
@@ -3103,9 +3047,7 @@ export function App() {
     };
   }, [resumedProcessId]);
 
-  useEffect(() => {
-    if (!restorationComplete) return;
-    const session = {
+  const persistedSession = useMemo<SessionState>(() => ({
       sidebarView,
       sidebarVisible,
       sidebarWidth: verticalPanelWidths.left,
@@ -3127,24 +3069,8 @@ export function App() {
       explorerShowIgnored,
       activityButtonPlacements,
       sidebarViewsBySide,
-    };
-    // Arrastar um divisor atualiza estes estados a cada pointermove; gravar de
-    // imediato viraria um PUT de sessão por movimento. O write espera uma pausa
-    // e é descartado quando o estado volta ao último valor persistido.
-    sessionWriter.schedule(session, JSON.stringify(session));
-  }, [restorationComplete, sidebarView, sidebarVisible, sidebarViewsBySide, verticalPanelWidths, panelVisible, panelHeight, panelTab, problemsVisible, toolWindowVisible, toolWindowHeight, activeToolWindowId, workspaceName, workspaceRoot, activeDocumentId, expanded, explorerShowHidden, explorerShowIgnored, activityButtonPlacements, sessionWriter]);
-
-  useEffect(() => {
-    // Fechar a janela dentro da janela de debounce não pode perder o último
-    // layout: o flush grava o pendente imediatamente (best effort no unload).
-    const flushPendingSessionWrite = () => sessionWriter.flush();
-    // Captura roda antes do listener normal que libera o workspace no runtime.
-    window.addEventListener("pagehide", flushPendingSessionWrite, {capture: true});
-    return () => {
-      window.removeEventListener("pagehide", flushPendingSessionWrite, {capture: true});
-      sessionWriter.dispose();
-    };
-  }, [sessionWriter]);
+    }), [sidebarView, sidebarVisible, sidebarViewsBySide, verticalPanelWidths, panelVisible, panelHeight, panelTab, problemsVisible, toolWindowVisible, toolWindowHeight, activeToolWindowId, workspaceName, workspaceRoot, activeDocumentId, expanded, explorerShowHidden, explorerShowIgnored, activityButtonPlacements]);
+  useWorkbenchSessionPersistence({ enabled: restorationComplete, session: persistedSession });
 
   useEffect(() => {
     if (!restoredRef.current) return;
@@ -3219,7 +3145,6 @@ export function App() {
     setDocuments([]);
     setActiveDocumentId(undefined);
     setDiagnostics([]);
-    setHoveredDiagnosticLine(undefined);
     setEditorLineDecorations([]);
     editorDiffPreview.close();
     setResourceDecorations(new Map());
@@ -6987,6 +6912,26 @@ export function App() {
     }));
   };
 
+  const activityBarCommonProps = {
+    pluginItems: activityButtons,
+    toolWindowVisible,
+    activeToolWindowId,
+    draggingKey: draggingActivityButtonKey,
+    environmentLabel: "Ambientes de execução",
+    environmentIcon: "box",
+    executionCount: profileOutputTabs.length,
+    runningExecutionCount: runningProfileOutputCount,
+    executionActive: executionPanelActive,
+    diagnosticsCount: diagnostics.length,
+    problemsVisible,
+    onPluginActivate: (item) => item.kind === "sidebar" ? togglePluginSidebar(item.id) : toggleToolWindow(item.id),
+    onBuiltinSidebarActivate: toggleBuiltinSidebar,
+    onExecutionsActivate: toggleExecutionPanel,
+    onProblemsActivate: toggleProblemsPanel,
+    onMove: repositionActivityButton,
+    onDragStateChange: setDraggingActivityButtonKey,
+  } satisfies Omit<WorkbenchActivityBarProps, "side" | "items" | "activeSidebarId">;
+
   if (!restorationComplete) {
     return <div className="boot-screen">Inicializando tinyIde...</div>;
   }
@@ -6994,272 +6939,72 @@ export function App() {
   const renderVerticalSidebar = (side: ActivityBarSide, view: string) => {
     const pluginSidebar = workbenchSidebars.find((candidate) => candidate.id === view);
     return (
-      <>
-            <aside
-              className={`sidebar sidebar--${side}`}
-              style={{ gridColumn: side === "left" ? 2 : 6 }}
-            >
-              <div className="sidebar-heading">
-                <span>{pluginSidebar?.label.toLocaleUpperCase() ?? (view === "explorer" ? "EXPLORER" : view === "plugins" ? "PLUGINS" : "AMBIENTES")}</span>
-                <div className="sidebar-heading-actions">
-                  {view === "explorer" ? (
-                    <>
-                      <button
-                        className="icon-button small"
-                        type="button"
-                        aria-label="Buscar arquivos no Explorer"
-                        aria-pressed={explorerFilterOpen}
-                        disabled={!explorerFilterProvider || !workspaceHandle}
-                        onClick={() => setExplorerFilterOpen(true)}
-                      ><WorkbenchIcon icon="search" size={15} /></button>
-                      <button
-                        className="icon-button small"
-                        type="button"
-                        aria-label="Localizar arquivo aberto no Explorer"
-                        disabled={!activeDocument?.path || !workspaceHandle}
-                        onClick={() => invoke(revealActiveDocumentInExplorer)}
-                      ><LocateFixed size={15} /></button>
-                      <DropdownMenu.Root>
-                        <DropdownMenu.Trigger asChild>
-                          <button className="icon-button small" type="button" aria-label="Ações do Explorer"><MoreVertical size={15} /></button>
-                        </DropdownMenu.Trigger>
-                        <DropdownMenu.Portal>
-                          <DropdownMenu.Content className="menu-content" align="end" sideOffset={6}>
-                            {workspaceFileCreationOptions.length ? (
-                              <DropdownMenu.Sub>
-                                <DropdownMenu.SubTrigger className="menu-item" disabled={!workspaceHandle}>
-                                  <WorkbenchIcon icon="plus" size={15} /> Novo arquivo <ChevronRight className="menu-item__submenu-arrow" size={14} />
-                                </DropdownMenu.SubTrigger>
-                                <DropdownMenu.Portal>
-                                  <DropdownMenu.SubContent className="menu-content" sideOffset={6} alignOffset={-5}>
-                                    {fileCreationOptions(workspaceFileCreationOptions).map((option) => (
-                                      <DropdownMenu.Item
-                                        className="menu-item"
-                                        key={`${option.id}:${option.extension}`}
-                                        onSelect={() => invoke(() => startExplorerCreation("file", undefined, option))}
-                                      >
-                                        {option.icon ? (
-                                          <span
-                                            className="resource-icon resource-icon--menu"
-                                            title={option.icon.title}
-                                            style={{
-                                              color: option.icon.foreground ?? "currentColor",
-                                              background: option.icon.background ?? "transparent",
-                                            }}
-                                          >{option.icon.label}</span>
-                                        ) : <WorkbenchIcon icon="file" size={15} />}
-                                        <span>{option.label}</span>
-                                        <span className="menu-item__hint">{option.extension}</span>
-                                      </DropdownMenu.Item>
-                                    ))}
-                                  </DropdownMenu.SubContent>
-                                </DropdownMenu.Portal>
-                              </DropdownMenu.Sub>
-                            ) : (
-                              <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(() => startExplorerCreation("file"))}>
-                                <WorkbenchIcon icon="plus" size={15} /> Novo arquivo
-                              </DropdownMenu.Item>
-                            )}
-                            <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(() => startExplorerCreation("directory"))}>
-                              <WorkbenchIcon icon="folder-open" size={15} /> Nova pasta
-                            </DropdownMenu.Item>
-                            <DropdownMenu.Separator className="menu-separator" />
-                            <DropdownMenu.Item className="menu-item" disabled={!explorerHistory.undo.length} onSelect={() => invoke(undoExplorerOperation)}>
-                              <WorkbenchIcon icon="undo" size={15} /> {explorerUndoLabel(explorerHistory) ?? "Desfazer"}
-                            </DropdownMenu.Item>
-                            <DropdownMenu.Item className="menu-item" disabled={!explorerHistory.redo.length} onSelect={() => invoke(redoExplorerOperation)}>
-                              <Redo2 size={15} /> {explorerRedoLabel(explorerHistory) ?? "Refazer"}
-                            </DropdownMenu.Item>
-                            <DropdownMenu.Separator className="menu-separator" />
-                            <DropdownMenu.Item className="menu-item" disabled={!workspaceHandle} onSelect={() => invoke(refreshExplorer)}>
-                              <WorkbenchIcon icon="refresh" size={15} /> Atualizar
-                            </DropdownMenu.Item>
-                            <DropdownMenu.Separator className="menu-separator" />
-                            <DropdownMenu.Item className="menu-item" onSelect={toggleExplorerSpecialEntries}>
-                              <WorkbenchIcon icon="preview" size={15} />
-                              {explorerSpecialEntriesVisible ? "Ocultar arquivos ignorados" : "Exibir arquivos ocultos"}
-                            </DropdownMenu.Item>
-                          </DropdownMenu.Content>
-                        </DropdownMenu.Portal>
-                      </DropdownMenu.Root>
-                    </>
-                  ) : null}
-                  {pluginSidebar && canDetachPanels ? (
-                    <button
-                      className="icon-button small"
-                      type="button"
-                      aria-label={`Abrir ${pluginSidebar.label} em janela separada`}
-                      title="Abrir em janela separada"
-                      onClick={() => void detachPanelToWindow(
-                        { kind: "sidebar", id: pluginSidebar.id },
-                        undefined,
-                        () => closeVerticalSidebar(side),
-                      )}
-                    ><ExternalLink size={14} /></button>
-                  ) : null}
-                  <button className="icon-button small" type="button" onClick={() => closeVerticalSidebar(side)} aria-label="Fechar sidebar"><X size={14} /></button>
-                </div>
-              </div>
-
+      <WorkbenchSidebar
+        side={side}
+        label={pluginSidebar?.label.toLocaleUpperCase() ?? (view === "explorer" ? "EXPLORER" : view === "plugins" ? "PLUGINS" : "AMBIENTES")}
+        onClose={() => closeVerticalSidebar(side)}
+        onResize={(event) => beginSidebarResize(event, side, view)}
+        onResetWidth={() => setVerticalPanelWidths((current) => (
+          updateVerticalPanelWidth(current, side, DEFAULT_LAYOUT.sidebarWidth)
+        ))}
+        {...(pluginSidebar && canDetachPanels ? {
+          detachLabel: pluginSidebar.label,
+          onDetach: () => void detachPanelToWindow(
+            { kind: "sidebar", id: pluginSidebar.id }, undefined, () => closeVerticalSidebar(side),
+          ),
+        } : {})}
+        actions={view === "explorer" ? (
+          <ExplorerToolbar
+            filterOpen={explorerFilterOpen}
+            canFilter={Boolean(explorerFilterProvider && workspaceHandle)}
+            canRevealFile={Boolean(activeDocument?.path && workspaceHandle)}
+            workspaceAvailable={Boolean(workspaceHandle)}
+            creationOptions={workspaceFileCreationOptions}
+            undoLabel={explorerUndoLabel(explorerHistory)}
+            redoLabel={explorerRedoLabel(explorerHistory)}
+            specialEntriesVisible={explorerSpecialEntriesVisible}
+            onOpenFilter={() => setExplorerFilterOpen(true)}
+            onRevealFile={() => invoke(revealActiveDocumentInExplorer)}
+            onCreate={(kind, option) => invoke(() => startExplorerCreation(kind, undefined, option))}
+            onUndo={() => invoke(undoExplorerOperation)}
+            onRedo={() => invoke(redoExplorerOperation)}
+            onRefresh={() => invoke(refreshExplorer)}
+            onToggleSpecialEntries={toggleExplorerSpecialEntries}
+          />
+        ) : null}
+      >
               {view === "explorer" ? (
-                <div
-                  className={`sidebar-content explorer-content${dropTargetExplorerPath === "" ? " is-root-drop-target" : ""}${explorerLoadingCursorVisible ? " is-directory-loading" : ""}`}
-                  tabIndex={-1}
-                  aria-label="Arquivos do Explorer"
-                  aria-busy={explorerDirectoryLoading}
-                  onPointerDown={(event) => {
-                    const target = event.target as HTMLElement;
-                    if (target.closest("input, textarea, select, button, [contenteditable='true']")) return;
-                    event.currentTarget.focus({ preventScroll: true });
+                <ExplorerSidebarContent
+                  workspace={{
+                    name: workspaceName,
+                    access: workspaceAccess,
+                    available: Boolean(workspaceHandle),
+                    selected: selectedExplorerPath === "",
+                    canCollapse: Boolean(expanded.size),
                   }}
-                  onKeyDown={(event) => {
-                    if (!explorerFilterProvider || !workspaceHandle) return;
-                    const target = event.target as HTMLElement;
-                    const isTextControl = target.matches("input, textarea, [contenteditable='true']");
-                    if (isTextControl || event.ctrlKey || event.metaKey || event.altKey) return;
-                    if (event.key === "Escape" && explorerFilterOpen) {
-                      event.preventDefault();
-                      setExplorerFilterOpen(false);
-                      setExplorerFilterQuery("");
-                      return;
-                    }
-                    if (event.key.length !== 1 || event.key.trim() === "") return;
-                    event.preventDefault();
-                    setExplorerFilterOpen(true);
-                    setExplorerFilterQuery((current) => `${current}${event.key}`);
+                  filter={{
+                    provider: explorerFilterProvider,
+                    open: explorerFilterOpen,
+                    query: explorerFilterQuery,
+                    result: explorerFilterResult,
+                    inputRef: explorerFilterInputRef,
+                    onOpen: () => setExplorerFilterOpen(true),
+                    onClose: () => { setExplorerFilterOpen(false); setExplorerFilterQuery(""); },
+                    onQueryChange: setExplorerFilterQuery,
                   }}
-                  onDragOver={(event) => {
-                    const target = (event.target as Element).closest<HTMLElement>("[data-explorer-path]");
-                    if (target?.dataset.explorerKind === "directory") return;
-                    const containingDirectoryPath = (event.target as Element)
-                      .closest<HTMLElement>("[data-explorer-directory-path]")
-                      ?.dataset.explorerDirectoryPath ?? "";
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = "move";
-                    setDropTargetExplorerPath(explorerDropTargetDirectory(
-                      target?.dataset.explorerPath,
-                      target?.dataset.explorerKind as WorkspaceEntry["kind"] | undefined,
-                      containingDirectoryPath,
-                    ));
-                  }}
-                  onDragLeave={(event) => {
-                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTargetExplorerPath(undefined);
-                  }}
-                  onDrop={(event) => {
-                    const target = (event.target as Element).closest<HTMLElement>("[data-explorer-path]");
-                    if (target?.dataset.explorerKind === "directory") return;
-                    const containingDirectoryPath = (event.target as Element)
-                      .closest<HTMLElement>("[data-explorer-directory-path]")
-                      ?.dataset.explorerDirectoryPath ?? "";
-                    event.preventDefault();
-                    const sourcePath = event.dataTransfer.getData("application/x-tinyide-workspace-path");
-                    const targetDirectoryPath = explorerDropTargetDirectory(
-                      target?.dataset.explorerPath,
-                      target?.dataset.explorerKind as WorkspaceEntry["kind"] | undefined,
-                      containingDirectoryPath,
-                    );
-                    setDropTargetExplorerPath(undefined);
-                    if (sourcePath && workspacePathParent(sourcePath) !== targetDirectoryPath) {
-                      invoke(() => moveExplorerEntry(sourcePath, targetDirectoryPath));
-                    }
-                  }}
+                  dropTargetPath={dropTargetExplorerPath}
+                  loadingCursorVisible={explorerLoadingCursorVisible}
+                  directoryLoading={explorerDirectoryLoading}
+                  hasEntries={Boolean(entries.length || (explorerCreation && explorerCreationParentPath === ""))}
+                  onDropTargetChange={setDropTargetExplorerPath}
+                  onMove={(sourcePath, targetPath) => invoke(() => moveExplorerEntry(sourcePath, targetPath))}
+                  onSelectRoot={() => { setSelectedExplorerPath(""); setSelectedExplorerPaths(new Set()); }}
+                  onRootContextMenu={(x, y) => invoke(() => openRootMenu(x, y))}
+                  onExpand={() => invoke(expandExplorerLevel)}
+                  onCollapse={() => invoke(collapseExplorerLevel)}
+                  onReconnect={() => invoke(reconnectWorkspace)}
+                  onOpenProject={() => invoke(openProjectDialog)}
                 >
-                  {explorerFilterProvider && workspaceHandle && explorerFilterOpen ? (
-                    <div className="explorer-filter" data-explorer-filter={explorerFilterProvider.id}>
-                      <WorkbenchIcon icon="search" size={13} className="explorer-filter__icon" />
-                      <input
-                        ref={explorerFilterInputRef}
-                        className="explorer-filter__input"
-                        type="search"
-                        value={explorerFilterQuery}
-                        aria-label="Filtrar arquivos do Explorer"
-                        placeholder={explorerFilterProvider.placeholder ?? "Filtrar arquivos"}
-                        onChange={(event) => setExplorerFilterQuery(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Escape") {
-                            event.preventDefault();
-                            setExplorerFilterOpen(false);
-                            setExplorerFilterQuery("");
-                          }
-                        }}
-                      />
-                      <button
-                        className="icon-button small"
-                        type="button"
-                        aria-label="Fechar busca do Explorer"
-                        onClick={() => {
-                          setExplorerFilterOpen(false);
-                          setExplorerFilterQuery("");
-                        }}
-                      ><X size={12} /></button>
-                    </div>
-                  ) : null}
-                  {explorerFilterResult ? (
-                    <div className="explorer-filter-summary" role="status">
-                      {explorerFilterResult.error
-                        ? explorerFilterResult.error
-                        : explorerFilterResult.matchCount === 0
-                          ? "Nenhum arquivo corresponde ao filtro."
-                          : `${explorerFilterResult.matchCount} ${explorerFilterResult.matchCount === 1 ? "arquivo" : "arquivos"}${explorerFilterResult.truncated ? " (parcial)" : ""}`}
-                    </div>
-                  ) : null}
-                  {workspaceName !== "Sem workspace" ? (
-                    <div
-                      className={`workspace-name${selectedExplorerPath === "" ? " is-selected" : ""}`}
-                      data-explorer-root
-                      role="treeitem"
-                      tabIndex={0}
-                      aria-selected={selectedExplorerPath === ""}
-                      onClick={(event) => {
-                        if ((event.target as Element).closest("button")) return;
-                        setSelectedExplorerPath("");
-                        setSelectedExplorerPaths(new Set());
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter" && event.key !== " ") return;
-                        event.preventDefault();
-                        setSelectedExplorerPath("");
-                        setSelectedExplorerPaths(new Set());
-                      }}
-                      onContextMenu={(event) => {
-                        event.preventDefault();
-                        setSelectedExplorerPath("");
-                        setSelectedExplorerPaths(new Set());
-                        invoke(() => openRootMenu(event.clientX, event.clientY));
-                      }}
-                    >
-                      <span className="workspace-name__label"><WorkbenchIcon icon="folder" size={14} /> {workspaceName}</span>
-                      <span className="workspace-name__actions">
-                        <button
-                          className="icon-button small"
-                          type="button"
-                          aria-label="Expandir próximo nível"
-                          disabled={!workspaceHandle}
-                          onClick={() => invoke(expandExplorerLevel)}
-                        ><ChevronDown size={14} /></button>
-                        <button
-                          className="icon-button small"
-                          type="button"
-                          aria-label="Recolher nível mais profundo"
-                          disabled={!expanded.size}
-                          onClick={() => invoke(collapseExplorerLevel)}
-                        ><ChevronUp size={14} /></button>
-                      </span>
-                    </div>
-                  ) : null}
-                  {workspaceAccess !== "ready" ? (
-                    <div className="empty-sidebar">
-                      <p>{workspaceAccess === "permission-required"
-                        ? "O acesso ao workspace precisa ser restaurado."
-                        : "O workspace salvo não está mais disponível."}</p>
-                      {workspaceAccess === "permission-required" && workspaceHandle
-                        ? <button className="button primary compact" type="button" onClick={() => invoke(reconnectWorkspace)}>Reconectar projeto</button>
-                        : null}
-                      {workspaceAccess === "missing"
-                        ? <button className="button primary compact" type="button" onClick={() => invoke(openProjectDialog)}>Reabrir projeto</button>
-                        : null}
-                    </div>
-                  ) : entries.length || (explorerCreation && explorerCreationParentPath === "") ? (
                     <EntryTree
                       entries={entries}
                       parentPath=""
@@ -7313,12 +7058,7 @@ export function App() {
                       workspaceName={workspaceName}
                       {...(workspaceRoot ? { workspaceRoot } : {})}
                     />
-                  ) : (
-                    <div className="empty-sidebar">
-                      <p>Nenhum projeto aberto.</p>
-                    </div>
-                  )}
-                </div>
+                </ExplorerSidebarContent>
               ) : null}
 
               {view === "plugins" ? (
@@ -7402,53 +7142,22 @@ export function App() {
                   onClose={() => closeVerticalSidebar(side)}
                 />
               ) : null}
-            </aside>
-
-        <div
-          className={`resize-handle ${side === "left" ? "resize-handle--sidebar" : "resize-handle--problems"}`}
-          role="separator"
-          aria-label="Redimensionar painel lateral"
-          onPointerDown={(event) => beginSidebarResize(event, side, view)}
-          onDoubleClick={() => setVerticalPanelWidths((current) => (
-            updateVerticalPanelWidth(current, side, DEFAULT_LAYOUT.sidebarWidth)
-          ))}
-        />
-      </>
+      </WorkbenchSidebar>
     );
   };
 
-  const editorFoldOverlayElement = foldControlLines.length ? (
-    <div
-      ref={editorFoldOverlayRef}
-      className={`editor-fold-overlay${editorInlineGutter ? " editor-fold-overlay--inline" : ""}`}
-      style={editorInlineGutter
-        ? undefined
-        : { "--editor-scroll-top": `${editorViewport.scrollTop}px` } as React.CSSProperties}
-    >
-      {foldControlLines.map(({ line, folded }) => (
-        <button
-          key={line}
-          className={`editor-fold-toggle${folded ? " is-folded" : ""}`}
-          type="button"
-          title={folded ? "Expandir bloco" : "Recolher bloco"}
-          aria-label={folded ? `Expandir bloco, linha ${line}` : `Recolher bloco, linha ${line}`}
-          style={{ "--fold-line-top": `${editorLineTop(line)}px` } as React.CSSProperties}
-          onMouseDown={(event) => event.preventDefault()}
-          onMouseEnter={() => { if (folded) openFoldPreview(line); else scheduleFoldPreviewClose(); }}
-          onFocus={() => { if (folded) openFoldPreview(line); else scheduleFoldPreviewClose(); }}
-          onMouseLeave={(event) => {
-            if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".editor-fold-preview")) return;
-            scheduleFoldPreviewClose();
-          }}
-          onBlur={(event) => {
-            if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".editor-fold-preview")) return;
-            scheduleFoldPreviewClose();
-          }}
-          onClick={() => toggleFold(line)}
-        >{folded ? "+" : "-"}</button>
-      ))}
-    </div>
-  ) : null;
+  const editorFoldOverlayElement = (
+    <EditorFoldOverlay
+      controls={foldControlLines}
+      inline={editorInlineGutter}
+      scrollTop={editorViewport.scrollTop}
+      overlayRef={editorFoldOverlayRef}
+      lineTop={editorLineTop}
+      onOpenPreview={openFoldPreview}
+      onSchedulePreviewClose={scheduleFoldPreviewClose}
+      onToggleFold={toggleFold}
+    />
+  );
 
   const editorLineRulerElement = showEditorGutter ? (
     <EditorLineRuler
@@ -7474,230 +7183,90 @@ export function App() {
     </EditorLineRuler>
   ) : null;
 
-  const editorBreakpointLinesElement = activeDocument && breakpointVisibleLines.length > 0 ? (
-    <div
-      ref={editorBreakpointLinesRef}
-      className={`editor-breakpoint-lines${editorUsesHighlightScroller ? " editor-breakpoint-lines--inline" : ""}`}
-      aria-hidden="true"
-      style={editorUsesHighlightScroller
-        ? undefined
-        : {
-          "--editor-scroll-top": `${(highlightedEditorScrollRef.current ?? editorRef.current)?.scrollTop ?? activeDocument.scrollTop}px`,
-        } as React.CSSProperties}
-    >
-      {breakpointVisibleLines.map((line) => (
-        <div
-          key={line}
-          className="editor-breakpoint-line"
-          style={{ "--breakpoint-line-top": `${editorLineTop(line)}px` } as React.CSSProperties}
-        />
-      ))}
-    </div>
-  ) : null;
-
-  const editorDebugCurrentLineElement = activeDocument && activeDebugLine && activeDebugVisibleLine ? (
-    <div
-      ref={editorDebugCurrentLineRef}
-      className={`editor-debug-current-line${editorUsesHighlightScroller ? " editor-debug-current-line--inline" : ""}`}
-      aria-hidden="true"
-      data-debug-line={activeDebugLine}
-      data-debug-visible-line={activeDebugVisibleLine}
-      style={{
-        "--debug-line-content-top": `${editorLineTop(activeDebugVisibleLine)}px`,
-        ...(editorUsesHighlightScroller ? {} : {
-          "--editor-scroll-top": `${(highlightedEditorScrollRef.current ?? editorRef.current)?.scrollTop ?? activeDocument.scrollTop}px`,
-        }),
-      } as React.CSSProperties}
+  const editorExecutionLayersElement = activeDocument ? (
+    <EditorExecutionLayers
+      breakpointLines={breakpointVisibleLines}
+      {...(activeDebugLine ? { activeDebugLine } : {})}
+      {...(activeDebugVisibleLine ? { activeDebugVisibleLine } : {})}
+      {...(activeEditorAttentionLines ? { attentionLines: activeEditorAttentionLines } : {})}
+      inline={editorUsesHighlightScroller}
+      scrollTop={(highlightedEditorScrollRef.current ?? editorRef.current)?.scrollTop ?? activeDocument.scrollTop}
+      lineHeight={editorLayoutMetrics.lineHeight}
+      lineTop={editorLineTop}
+      breakpointLinesRef={editorBreakpointLinesRef}
+      debugCurrentLineRef={editorDebugCurrentLineRef}
     />
   ) : null;
 
-  const editorAttentionLinesElement = activeDocument && activeEditorAttentionLines ? (
-    <div
-      className={`editor-attention-lines${editorUsesHighlightScroller ? " editor-attention-lines--inline" : ""}`}
-      aria-hidden="true"
-      data-attention-start-line={activeEditorAttentionLines.startLine}
-      data-attention-end-line={activeEditorAttentionLines.endLine}
-      style={{
-        "--attention-line-content-top": `${editorLineTop(activeEditorAttentionLines.startLine)}px`,
-        "--attention-line-height": `${(activeEditorAttentionLines.endLine - activeEditorAttentionLines.startLine + 1) * editorLayoutMetrics.lineHeight}px`,
-        ...(editorUsesHighlightScroller ? {} : {
-          "--editor-scroll-top": `${(highlightedEditorScrollRef.current ?? editorRef.current)?.scrollTop ?? activeDocument.scrollTop}px`,
-        }),
-      } as React.CSSProperties}
+  const renderCodeEditorTextarea = (highlighted: boolean) => (
+    <CodeEditorTextarea
+      editorRef={editorRef}
+      highlighted={highlighted}
+      folded={Boolean(activeFoldProjection)}
+      value={activeEditorContent}
+      readOnly={activeDocument?.readOnly}
+      highlightedScrollRef={highlightedEditorScrollRef}
+      onChange={handleEditorChange}
+      onKeyDown={handleEditorKeyDown}
+      onMouseDown={handleEditorAuxiliaryNavigation}
+      onMouseUp={correctFoldedEditorPointerSelection}
+      onDoubleClick={selectFoldedEditorWordAtPointer}
+      onCaptureState={scheduleEditorStateCapture}
+      onNavigate={(editor) => {
+        if (!activeDocument) return;
+        invoke(() => navigateFromEditor(activeDocument, editor));
+      }}
+      onOpenContextMenu={(editor, clientX, clientY, scrollContainer) => {
+        if (!activeDocument) return;
+        const preparedSelection = prepareEditorContextMenu(editor, clientX, clientY, scrollContainer);
+        invoke(() => openEditorMenu(
+          activeDocument,
+          editor,
+          clientX,
+          clientY,
+          preparedSelection,
+        ));
+      }}
+      onScroll={(editor) => {
+        syncEditorLineRuler(editor.scrollTop);
+        syncEditorViewportOnScroll(editor);
+        scheduleEditorStateCapture(editor);
+      }}
     />
-  ) : null;
-
-  // Superfícies de diálogo e aviso compartilhadas entre a janela completa e a
-  // janela de painel: plugins abrem diálogos e notificam erros a partir de
-  // qualquer superfície em que estejam montados.
-  const workbenchPluginDialogElement = (
-    <Dialog.Root open={Boolean(workbenchDialog)} onOpenChange={(open) => {
-      if (!open) {
-        const shouldClose = workbenchDialog?.contribution.onCloseRequest?.() !== false;
-        if (shouldClose) setWorkbenchDialog(undefined);
-      }
-    }}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="dialog-overlay" />
-        <Dialog.Content className={`workbench-plugin-dialog workbench-plugin-dialog--${workbenchDialog?.size ?? workbenchDialog?.contribution.size ?? "large"}`}>
-          <div className="dialog-heading">
-            <div>
-              {workbenchDialog?.contribution.showPluginLabel === false ? null : <span className="eyebrow">PLUGIN</span>}
-              <Dialog.Title>{workbenchDialog?.contribution.title ?? "Plugin"}</Dialog.Title>
-              {workbenchDialog?.contribution.description ? (
-                <Dialog.Description>{workbenchDialog.contribution.description}</Dialog.Description>
-              ) : null}
-            </div>
-            <Dialog.Close asChild>
-              <button className="icon-button" type="button" aria-label="Fechar"><X size={16} /></button>
-            </Dialog.Close>
-          </div>
-          {workbenchDialog ? (
-            <WorkbenchDialogHost
-              provider={workbenchDialog.contribution}
-              onClose={() => setWorkbenchDialog(undefined)}
-              onSizeChange={(size) => setWorkbenchDialog((current) => current ? { ...current, size } : current)}
-            />
-          ) : null}
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
   );
 
-  const workbenchContextMenuElement = (
-    <WorkbenchContextMenuHost
-      ref={contextMenuRef}
+  const workbenchSharedOverlaysElement = (
+    <WorkbenchSharedOverlays
+      dialog={workbenchDialog}
+      onDialogChange={setWorkbenchDialog}
+      contextMenuRef={contextMenuRef}
       workspaceName={workspaceName}
-      disabled={busy}
-      onDismiss={() => setEditorContextMenuContext(undefined)}
-      onExecute={(item, target) => invoke(() => executeContextMenuItem(item, target))}
+      contextMenuDisabled={busy}
+      onContextMenuDismiss={() => setEditorContextMenuContext(undefined)}
+      onContextMenuExecute={(item, target) => invoke(() => executeContextMenuItem(item, target))}
+      pluginNotification={pluginNotificationError}
+      onDismissPluginNotification={() => setPluginNotificationError(undefined)}
+      error={error}
+      onDismissError={() => setError(undefined)}
+      confirmRequest={pluginConfirm}
+      onResolveConfirm={resolvePluginConfirm}
     />
   );
-
-  const pluginNotificationToastElement = pluginNotificationError ? (
-    <div className="error-toast" role="alert" data-source="plugin-notification">
-      <span>{pluginNotificationError}</span>
-      <button
-        className="icon-button small"
-        type="button"
-        aria-label="Fechar notificação"
-        onClick={() => setPluginNotificationError(undefined)}
-      ><X size={14} /></button>
-    </div>
-  ) : null;
-
-  const errorToastElement = error ? (
-    <div className="error-toast" role="alert">
-      <span>{error}</span>
-      <button className="icon-button small" type="button" aria-label="Fechar erro" onClick={() => setError(undefined)}><X size={14} /></button>
-    </div>
-  ) : null;
-
-  const pluginConfirmDialogElement = pluginConfirm ? (
-    <ConfirmationDialog
-      titleId="plugin-confirm-title"
-      title={pluginConfirm.title}
-      confirmLabel={pluginConfirm.confirmLabel ?? "Confirmar"}
-      cancelLabel={pluginConfirm.cancelLabel ?? "Cancelar"}
-      danger={pluginConfirm.danger !== false}
-      onCancel={() => resolvePluginConfirm(false)}
-      onConfirm={() => resolvePluginConfirm(true)}
-    >
-      <p>{pluginConfirm.message}</p>
-      {pluginConfirm.detail ? <p className="muted">{pluginConfirm.detail}</p> : null}
-    </ConfirmationDialog>
-  ) : null;
 
   if (panelWindowReference) {
-    const panelWindowMissingElement = (
-      <div className="panel-window-missing" role="status">
-        <p>O painel <code>{panelWindowReference.id}</code> não está disponível neste projeto.</p>
-        <p className="muted">O plugin correspondente pode estar desativado ou desinstalado.</p>
-      </div>
-    );
-    // Superfícies sem abas: nada de view interna a levar de volta, só a
-    // superfície. A tool window usa o botão do próprio host, que sabe qual aba
-    // está aberta.
-    const panelWindowReattachButton = (label: string) => (
-      <button
-        className="icon-button small"
-        type="button"
-        aria-label={`Reanexar ${label} à janela principal`}
-        title="Reanexar à janela principal"
-        onClick={() => void reattachPanelToMainWindow()}
-      ><Minimize2 size={14} /></button>
-    );
-    const panelWindowSurfaceElement = (() => {
-      if (panelWindowReference.kind === "tool-window") {
-        const provider = workbenchToolWindows.find((toolWindow) => toolWindow.id === panelWindowReference.id);
-        if (!provider) return panelWindowMissingElement;
-        return (
-          <WorkbenchToolWindowHost
-            provider={provider}
-            state={workbenchState}
-            visible
-            windowMode
-            {...(toolWindowViewRequest ? { viewRequest: toolWindowViewRequest } : {})}
-            {...(canReattachPanel ? { onReattach: reattachPanelToMainWindow } : {})}
-            onClose={() => window.close()}
-          />
-        );
-      }
-      if (panelWindowReference.kind === "panel") {
-        const provider = workbenchPanels.find((panel) => panel.id === panelWindowReference.id);
-        if (!provider) return panelWindowMissingElement;
-        return (
-          <section className="panel-window-surface" aria-label={provider.label}>
-            <div className="panel-heading">
-              <span className="panel-window-surface__label">{provider.label}</span>
-              <div className="sidebar-heading-actions">
-                {canReattachPanel ? panelWindowReattachButton(provider.label) : null}
-                <button
-                  className="icon-button small"
-                  type="button"
-                  aria-label={`Fechar janela de ${provider.label}`}
-                  title="Fechar janela"
-                  onClick={() => window.close()}
-                ><X size={14} /></button>
-              </div>
-            </div>
-            <WorkbenchPanelHost provider={provider} state={workbenchState} />
-          </section>
-        );
-      }
-      const provider = workbenchSidebars.find((sidebar) => sidebar.id === panelWindowReference.id);
-      if (!provider) return panelWindowMissingElement;
-      return (
-        <aside className="sidebar panel-window-sidebar" aria-label={provider.label}>
-          <div className="sidebar-heading">
-            <span>{provider.label.toLocaleUpperCase()}</span>
-            <div className="sidebar-heading-actions">
-              {canReattachPanel ? panelWindowReattachButton(provider.label) : null}
-              <button
-                className="icon-button small"
-                type="button"
-                aria-label={`Fechar janela de ${provider.label}`}
-                title="Fechar janela"
-                onClick={() => window.close()}
-              ><X size={14} /></button>
-            </div>
-          </div>
-          <WorkbenchSidebarHost provider={provider} state={workbenchState} onClose={() => window.close()} />
-        </aside>
-      );
-    })();
-
     return (
-      <Tooltip.Provider delayDuration={350}>
-        <div className="ide-shell panel-window-shell" data-panel-window={serializePanelWindowReference(panelWindowReference)}>
-          {panelWindowSurfaceElement}
-          {workbenchPluginDialogElement}
-          {workbenchContextMenuElement}
-          {pluginNotificationToastElement}
-          {errorToastElement}
-          {pluginConfirmDialogElement}
-        </div>
-      </Tooltip.Provider>
+      <PanelWindowShell
+        reference={panelWindowReference}
+        panels={workbenchPanels}
+        sidebars={workbenchSidebars}
+        toolWindows={workbenchToolWindows}
+        state={workbenchState}
+        {...(toolWindowViewRequest ? { viewRequest: toolWindowViewRequest } : {})}
+        canReattach={canReattachPanel}
+        onReattach={reattachPanelToMainWindow}
+        onClose={() => window.close()}
+        overlays={workbenchSharedOverlaysElement}
+      />
     );
   }
 
@@ -7743,30 +7312,12 @@ export function App() {
             gridTemplateColumns: `36px ${leftDockWidth ? `${leftDockWidth}px 5px` : "0 0"} minmax(0, 1fr) ${rightDockWidth ? `5px ${rightDockWidth}px` : "0 0"} 36px`,
           }}
         >
-          <aside className="activity-bar">
-            <WorkbenchActivityBar
-              side="left"
-              items={leftActivityItems}
-              pluginItems={activityButtons}
-              activeSidebarId={sidebarViewsBySide.left}
-              toolWindowVisible={toolWindowVisible}
-              activeToolWindowId={activeToolWindowId}
-              draggingKey={draggingActivityButtonKey}
-              environmentLabel="Ambientes de execução"
-              environmentIcon="box"
-              executionCount={profileOutputTabs.length}
-              runningExecutionCount={runningProfileOutputCount}
-              executionActive={executionPanelActive}
-              diagnosticsCount={diagnostics.length}
-              problemsVisible={problemsVisible}
-              onPluginActivate={(item) => item.kind === "sidebar" ? togglePluginSidebar(item.id) : toggleToolWindow(item.id)}
-              onBuiltinSidebarActivate={toggleBuiltinSidebar}
-              onExecutionsActivate={toggleExecutionPanel}
-              onProblemsActivate={toggleProblemsPanel}
-              onMove={repositionActivityButton}
-              onDragStateChange={setDraggingActivityButtonKey}
-            />
-          </aside>
+          <WorkbenchActivityRail
+            {...activityBarCommonProps}
+            side="left"
+            items={leftActivityItems}
+            activeSidebarId={sidebarViewsBySide.left}
+          />
 
           {sidebarViewsBySide.left ? renderVerticalSidebar("left", sidebarViewsBySide.left) : null}
           {sidebarViewsBySide.right ? renderVerticalSidebar("right", sidebarViewsBySide.right) : null}
@@ -7780,341 +7331,92 @@ export function App() {
           >
             {documents.length ? (
               <>
-                <Tabs.Root className="document-tabs" value={activeDocumentId ?? ""} onValueChange={setActiveDocumentId}>
-                  <Tabs.List className="tabs-list">
-                    {documents.map((document) => (
-                      <Tabs.Trigger
-                        className={`tab-trigger${draggingDocumentId === document.id ? " is-dragging" : ""}${dropTargetDocumentId === document.id ? " is-drop-target" : ""}`}
-                        key={document.id}
-                        value={document.id}
-                        title={document.origin
-                          ?? workspaceAbsolutePath(document.workspaceRoot ?? workspaceRoot, document.path)
-                          ?? document.path
-                          ?? document.name}
-                        draggable
-                        onDragStart={(event) => {
-                          event.dataTransfer.effectAllowed = "move";
-                          event.dataTransfer.setData("application/x-tinyide-document-id", document.id);
-                          setDraggingDocumentId(document.id);
-                        }}
-                        onDragEnd={() => {
-                          setDraggingDocumentId(undefined);
-                          setDropTargetDocumentId(undefined);
-                        }}
-                        onDragOver={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          event.dataTransfer.dropEffect = "move";
-                          setDropTargetDocumentId(document.id);
-                        }}
-                        onDragLeave={(event) => {
-                          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                            setDropTargetDocumentId((current) => current === document.id ? undefined : current);
-                          }
-                        }}
-                        onDrop={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          const encodedId = event.dataTransfer.getData("application/x-tinyide-document-id");
-                          setDropTargetDocumentId(undefined);
-                          if (!encodedId) return;
-                          reorderDocuments(encodedId, document.id);
-                        }}
-                        onContextMenu={(event) => {
-                          event.preventDefault();
-                          invoke(() => openDocumentMenu(document, event.clientX, event.clientY));
-                        }}
-                      >
-                        {document.kind === "image"
-                          ? <ImageIcon size={14} />
-                          : document.kind === "binary"
-                            ? <FileWarning size={14} />
-                            : <File size={14} />}
-                        <span>{document.name}</span>
-                        {document.kind === "text" && document.content !== document.savedContent ? <span className="dirty-dot">●</span> : null}
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          className="tab-close"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            closeDocument(document.id);
-                          }}
-                        ><X size={13} /></span>
-                      </Tabs.Trigger>
-                    ))}
-                  </Tabs.List>
-                </Tabs.Root>
-                <div className="editor-toolbar">
-                  <div className="breadcrumb">{activeDocument?.path ?? activeDocument?.origin ?? activeDocument?.name}</div>
-                  <div className="editor-actions">
-                    <button
-                      className="icon-button small"
-                      type="button"
-                      aria-label="Voltar para posição anterior"
-                      title="Voltar para posição anterior (Alt+Seta esquerda)"
-                      disabled={!editorLocationHistory.back.length}
-                      onClick={() => void navigateEditorLocationHistory("back")}
-                    ><ArrowLeft size={14} /></button>
-                    <button
-                      className="icon-button small"
-                      type="button"
-                      aria-label="Avançar para próxima posição"
-                      title="Avançar para próxima posição (Alt+Seta direita)"
-                      disabled={!editorLocationHistory.forward.length}
-                      onClick={() => void navigateEditorLocationHistory("forward")}
-                    ><ArrowRight size={14} /></button>
-                    {editorSearchOpen ? (
-                      <div className="editor-search" role="search" data-invalid={editorSearchError ? "true" : undefined}>
-                        <div className="editor-search__find-row">
-                        <WorkbenchIcon icon="search" size={13} className="editor-search__icon" />
-                        <input
-                          ref={editorSearchInputRef}
-                          className="editor-search__input"
-                          type="search"
-                          value={editorSearchQuery}
-                          aria-label="Pesquisar no arquivo aberto"
-                          aria-invalid={Boolean(editorSearchError)}
-                          title={editorSearchError}
-                          placeholder="Pesquisar no arquivo"
-                          onChange={(event) => {
-                            setEditorSearchQuery(event.target.value);
-                            setEditorSearchMatchIndex(0);
-                          }}
-                          onKeyDown={(event) => {
-                            const key = event.key.toLocaleLowerCase();
-                            if ((event.ctrlKey || event.metaKey) && key === "f") {
-                              event.preventDefault();
-                              event.currentTarget.select();
-                              return;
-                            }
-                            if ((event.ctrlKey || event.metaKey) && key === "h") {
-                              event.preventDefault();
-                              if (!activeResourceEditorProvider) setEditorSearchReplaceOpen(true);
-                              return;
-                            }
-                            if (event.key === "Escape") {
-                              event.preventDefault();
-                              if (editorSearchReplaceOpen) {
-                                setEditorSearchReplaceOpen(false);
-                                return;
-                              }
-                              setEditorSearchOpen(false);
-                              setEditorSearchQuery("");
-                              setEditorSearchReplaceOpen(false);
-                              setEditorSearchReplacement("");
-                              return;
-                            }
-                            if (event.key === "Enter" && editorSearchMatches.length) {
-                              event.preventDefault();
-                              selectEditorSearchMatch(editorSearchMatchIndex + (event.shiftKey ? -1 : 1));
-                            }
-                          }}
-                        />
-                        <button
-                          className="editor-search__toggle"
-                          type="button"
-                          aria-label="Diferenciar maiúsculas de minúsculas"
-                          aria-pressed={editorSearchCaseSensitive}
-                          title="Diferenciar maiúsculas de minúsculas"
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={() => {
-                            setEditorSearchCaseSensitive((current) => !current);
-                            setEditorSearchMatchIndex(0);
-                          }}
-                        >Aa</button>
-                        <button
-                          className="editor-search__toggle"
-                          type="button"
-                          aria-label="Interpretar como expressão regular"
-                          aria-pressed={editorSearchRegex}
-                          title="Interpretar o termo como expressão regular"
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={() => {
-                            setEditorSearchRegex((current) => !current);
-                            setEditorSearchMatchIndex(0);
-                          }}
-                        >.*</button>
-                        <span className="editor-search__count" aria-live="polite">
-                          {editorSearchError ? "!" : editorSearchMatches.length ? `${editorSearchMatchIndex + 1}/${editorSearchMatches.length}` : "0"}
-                        </span>
-                        {!activeResourceEditorProvider ? (
-                          <button
-                            className="icon-button small"
-                            type="button"
-                            aria-label="Alternar substituição"
-                            aria-expanded={editorSearchReplaceOpen}
-                            title="Substituir (Ctrl+H)"
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={() => setEditorSearchReplaceOpen((current) => !current)}
-                          ><CornerDownRight size={12} /></button>
-                        ) : null}
-                        {editorSearchMatches.length > 1 ? (
-                          <>
-                            <button
-                              className="icon-button small"
-                              type="button"
-                              aria-label="Ocorrência anterior"
-                              title="Ocorrência anterior (Shift+Enter)"
-                              onMouseDown={(event) => event.preventDefault()}
-                              onClick={() => selectEditorSearchMatch(editorSearchMatchIndex - 1)}
-                            ><ChevronUp size={12} /></button>
-                            <button
-                              className="icon-button small"
-                              type="button"
-                              aria-label="Próxima ocorrência"
-                              title="Próxima ocorrência (Enter)"
-                              onMouseDown={(event) => event.preventDefault()}
-                              onClick={() => selectEditorSearchMatch(editorSearchMatchIndex + 1)}
-                            ><ChevronDown size={12} /></button>
-                          </>
-                        ) : null}
-                        <button
-                          className="icon-button small"
-                          type="button"
-                          aria-label="Fechar busca no arquivo"
-                          onClick={() => {
-                            setEditorSearchOpen(false);
-                            setEditorSearchQuery("");
-                            setEditorSearchReplaceOpen(false);
-                            setEditorSearchReplacement("");
-                          }}
-                        ><X size={12} /></button>
-                        </div>
-                        {editorSearchReplaceOpen && !activeResourceEditorProvider ? (
-                          <div className="editor-search__replace-row">
-                            <CornerDownRight className="editor-search__icon" size={13} />
-                            <input
-                              ref={editorSearchReplaceInputRef}
-                              className="editor-search__input"
-                              type="text"
-                              value={editorSearchReplacement}
-                              aria-label="Substituir por"
-                              placeholder="Substituir por"
-                              onChange={(event) => setEditorSearchReplacement(event.target.value)}
-                              onKeyDown={(event) => {
-                                if (event.key === "Escape") {
-                                  event.preventDefault();
-                                  setEditorSearchReplaceOpen(false);
-                                  editorSearchInputRef.current?.focus({ preventScroll: true });
-                                  return;
-                                }
-                                if (event.key === "Enter") {
-                                  event.preventDefault();
-                                  if (event.ctrlKey || event.metaKey) replaceAllEditorSearchMatches();
-                                  else replaceCurrentEditorSearchMatch();
-                                }
-                              }}
-                            />
-                            <button
-                              className="editor-search__replace-action"
-                              type="button"
-                              disabled={!activeEditorSearchMatch || Boolean(editorSearchError)}
-                              title="Substituir ocorrência atual (Enter)"
-                              onClick={replaceCurrentEditorSearchMatch}
-                            >Substituir</button>
-                            <button
-                              className="editor-search__replace-action"
-                              type="button"
-                              disabled={!editorSearchMatches.length || Boolean(editorSearchError)}
-                              title="Substituir todas as ocorrências (Ctrl+Enter)"
-                              onClick={replaceAllEditorSearchMatches}
-                            >Todos</button>
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : (
-                      <button
-                        className="icon-button small"
-                        type="button"
-                        aria-label="Pesquisar no arquivo"
-                        title="Pesquisar no arquivo (Ctrl+F)"
-                        disabled={!activeDocument || activeDocument.kind !== "text"}
-                        onClick={() => openEditorSearch()}
-                      ><WorkbenchIcon icon="search" size={14} /></button>
-                    )}
-                    {goToLineOpen ? (
-                      <div className="editor-go-to-line" role="search">
-                        <Hash size={13} className="editor-go-to-line__icon" />
-                        <input
-                          ref={goToLineInputRef}
-                          className="editor-go-to-line__input"
-                          type="number"
-                          min={1}
-                          max={editorMetrics.lineCount}
-                          value={goToLineValue}
-                          aria-label="Ir para a linha"
-                          placeholder={`Linha (1-${editorMetrics.lineCount})`}
-                          onChange={(event) => setGoToLineValue(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Escape") {
-                              event.preventDefault();
-                              setGoToLineOpen(false);
-                              setGoToLineValue("");
-                              editorRef.current?.focus({ preventScroll: true });
-                              return;
-                            }
-                            if (event.key === "Enter") {
-                              event.preventDefault();
-                              const line = Number.parseInt(goToLineValue, 10);
-                              if (Number.isFinite(line)) goToEditorLine(line);
-                              setGoToLineOpen(false);
-                              setGoToLineValue("");
-                            }
-                          }}
-                          onBlur={() => {
-                            setGoToLineOpen(false);
-                            setGoToLineValue("");
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <button
-                        className="icon-button small"
-                        type="button"
-                        aria-label="Ir para linha"
-                        title="Ir para linha (Ctrl+G)"
-                        disabled={!activeDocument || activeDocument.kind !== "text" || Boolean(activeResourceEditorProvider)}
-                        onClick={() => openGoToLine()}
-                      ><Hash size={14} /></button>
-                    )}
-                    {editorToolbarItems.map((item) => {
-                      const icon = <WorkbenchIcon icon={item.icon === "undo" ? "undo"
-                        : item.icon === "diff" ? "diff"
-                          : item.icon === "back" ? "back"
-                            : item.icon === "forward" ? "forward"
-                          : item.icon === "history" ? "history"
-                          : item.icon === "preview" ? "preview"
-                          : item.icon === "plus" ? "plus"
-                            : "file"} size={14} />;
-                      return (
-                        <button
-                          key={item.id}
-                          className="icon-button small"
-                          type="button"
-                          aria-label={item.label}
-                          title={item.label}
-                          disabled={item.enabled === false}
-                          onClick={() => invoke(() => {
-                            if (!activeDocument) return Promise.resolve();
-                            return platform.commands.execute(item.command, textEditorDocumentSnapshot(activeDocument));
-                          })}
-                        >{icon}</button>
-                      );
-                    })}
-                    {activeLanguageProvider?.lintRules?.length ? (
-                      <button className="icon-button small" type="button" aria-label="Configurar lint" title="Configurar lint" onClick={() => setLintSettingsOpen(true)}><Code2 size={14} /></button>
-                    ) : null}
-                    <button
-                      className="icon-button small"
-                      type="button"
-                      aria-label="Salvar arquivo"
-                      title="Salvar arquivo"
-                      disabled={!activeDocument || activeDocument.kind !== "text" || activeDocument.readOnly || Boolean(activeResourceEditorProvider)}
-                      onClick={() => invoke(saveDocument)}
-                    ><Save size={14} /></button>
-                  </div>
-                </div>
+                <WorkbenchEditorTabs
+                  documents={documents}
+                  activeDocumentId={activeDocumentId}
+                  {...(workspaceRoot ? { workspaceRoot } : {})}
+                  {...(draggingDocumentId ? { draggingDocumentId } : {})}
+                  {...(dropTargetDocumentId ? { dropTargetDocumentId } : {})}
+                  onSelectDocument={setActiveDocumentId}
+                  onCloseDocument={closeDocument}
+                  onReorderDocuments={reorderDocuments}
+                  onOpenContextMenu={(document, x, y) => invoke(() => openDocumentMenu(document, x, y))}
+                  onDragStateChange={(draggingId, targetId) => {
+                    setDraggingDocumentId(draggingId);
+                    setDropTargetDocumentId(targetId);
+                  }}
+                />
+                <WorkbenchEditorToolbar
+                  document={activeDocument}
+                  canNavigateBack={Boolean(editorLocationHistory.back.length)}
+                  canNavigateForward={Boolean(editorLocationHistory.forward.length)}
+                  onNavigateHistory={(direction) => void navigateEditorLocationHistory(direction)}
+                  searchProps={{
+                    open: editorSearchOpen,
+                    query: editorSearchQuery,
+                    ...(editorSearchError ? { error: editorSearchError } : {}),
+                    replaceOpen: editorSearchReplaceOpen,
+                    replacement: editorSearchReplacement,
+                    caseSensitive: editorSearchCaseSensitive,
+                    regex: editorSearchRegex,
+                    matchCount: editorSearchMatches.length,
+                    matchIndex: editorSearchMatchIndex,
+                    hasActiveMatch: Boolean(activeEditorSearchMatch),
+                    canReplace: !activeResourceEditorProvider,
+                    disabled: !activeDocument || activeDocument.kind !== "text",
+                    searchInputRef: editorSearchInputRef,
+                    replaceInputRef: editorSearchReplaceInputRef,
+                    onOpenSearch: () => openEditorSearch(),
+                    onCloseSearch: () => {
+                      setEditorSearchOpen(false);
+                      setEditorSearchQuery("");
+                      setEditorSearchReplaceOpen(false);
+                      setEditorSearchReplacement("");
+                    },
+                    onQueryChange: (query) => {
+                      setEditorSearchQuery(query);
+                      setEditorSearchMatchIndex(0);
+                    },
+                    onReplacementChange: setEditorSearchReplacement,
+                    onToggleCaseSensitive: () => {
+                      setEditorSearchCaseSensitive((current) => !current);
+                      setEditorSearchMatchIndex(0);
+                    },
+                    onToggleRegex: () => {
+                      setEditorSearchRegex((current) => !current);
+                      setEditorSearchMatchIndex(0);
+                    },
+                    onToggleReplaceOpen: () => setEditorSearchReplaceOpen((current) => !current),
+                    onCloseReplace: () => setEditorSearchReplaceOpen(false),
+                    onSelectMatch: selectEditorSearchMatch,
+                    onReplaceCurrent: replaceCurrentEditorSearchMatch,
+                    onReplaceAll: replaceAllEditorSearchMatches,
+                  }}
+                  goToLineProps={{
+                    open: goToLineOpen,
+                    value: goToLineValue,
+                    lineCount: editorMetrics.lineCount,
+                    disabled: !activeDocument || activeDocument.kind !== "text" || Boolean(activeResourceEditorProvider),
+                    inputRef: goToLineInputRef,
+                    onOpen: () => openGoToLine(),
+                    onClose: (restoreEditorFocus) => {
+                      setGoToLineOpen(false);
+                      setGoToLineValue("");
+                      if (restoreEditorFocus) editorRef.current?.focus({ preventScroll: true });
+                    },
+                    onChange: setGoToLineValue,
+                    onGoToLine: goToEditorLine,
+                  }}
+                  toolbarItems={editorToolbarItems}
+                  onExecuteToolbarItem={(item) => invoke(() => {
+                    if (!activeDocument) return Promise.resolve();
+                    return platform.commands.execute(item.command, textEditorDocumentSnapshot(activeDocument));
+                  })}
+                  hasLintRules={Boolean(activeLanguageProvider?.lintRules?.length)}
+                  onOpenLintSettings={() => setLintSettingsOpen(true)}
+                  canSave={Boolean(activeDocument?.kind === "text" && !activeDocument.readOnly && !activeResourceEditorProvider)}
+                  onSave={() => invoke(saveDocument)}
+                />
                 <div className="editor-stack">
                   {activeDocument && activeExternalDocumentNotice ? (
                     <ExternalFileNotice
@@ -8124,247 +7426,76 @@ export function App() {
                       onDismiss={() => dismissExternalDocumentNotice(activeDocument.id)}
                     />
                   ) : null}
-                  {activeDocument && activeResourceEditorProvider ? (
-                    <ResourceEditorHost
-                      provider={activeResourceEditorProvider}
-                      document={activeDocument}
-                      hostRef={resourceEditorHostRef}
-                      topLine={editorTopLineForScrollTop(activeDocument.scrollTop)}
-                      onRevealLine={(line) => setDocuments((current) => current.map((document) => document.id === activeDocument.id
+                  <EditorDocumentSurface
+                    document={activeDocument}
+                    resourceEditorProvider={activeResourceEditorProvider}
+                    resourceEditorHostRef={resourceEditorHostRef}
+                    resourceTopLine={activeDocument ? editorTopLineForScrollTop(activeDocument.scrollTop) : undefined}
+                    onRevealResourceLine={(line) => {
+                      if (!activeDocument) return;
+                      setDocuments((current) => current.map((document) => document.id === activeDocument.id
                         ? { ...document, scrollTop: editorScrollTopForTopLine(line) }
-                        : document))}
-                    />
-                  ) : activeDocument?.kind === "image" ? (
-                    <NativeImageEditor document={activeDocument} />
-                  ) : activeDocument?.kind === "binary" ? (
-                    <UnsupportedBinaryEditor document={activeDocument} />
-                  ) : (
-                    <>
+                        : document));
+                    }}
+                  >
                   <div
                     className={`editor-canvas${showEditorGutter ? " has-editor-gutter" : ""}${editorInlineGutter ? " has-inline-gutter" : ""}${editorSettings.lineNumbers ? " has-line-numbers" : ""}${editorNavigationLoading ? " is-symbol-navigation-loading" : ""}${activeEditorBusyOperation ? " is-editor-operation-busy" : ""}`}
                     aria-busy={editorNavigationLoading || Boolean(activeEditorBusyOperation)}
                     style={{
                       "--editor-gutter-width": `${showEditorGutter && !editorSettings.lineNumbers ? 20 : editorMetrics.gutterWidth}px`,
-                      "--editor-line-height": `${editorLayoutMetrics.lineHeight}px`,
+                      // --editor-line-height NÃO é redefinida aqui: o texto do editor consome a
+                      // var; re-injetar o valor medido congelaria a medição no estado inicial.
                       "--editor-content-padding": `${editorLayoutMetrics.contentPadding}px`,
                     } as React.CSSProperties}
                     onMouseMove={trackFoldHover}
                     onMouseLeave={() => { setHoveredFoldLine(undefined); scheduleFoldPreviewClose(); }}
                   >
-                    {activeEditorBusyOperation ? (
-                      <div className="editor-operation-mask" role="status" aria-live="polite">
-                        <RefreshCw className="is-spinning" size={18} />
-                        <span>{activeEditorBusyOperation.label}</span>
-                      </div>
-                    ) : null}
+                    <EditorOperationMask label={activeEditorBusyOperation?.label} />
                     {editorInlineGutter ? null : editorLineRulerElement}
-                    {editorUsesHighlightScroller ? null : editorBreakpointLinesElement}
-                    {editorUsesHighlightScroller ? null : editorDebugCurrentLineElement}
-                    {editorUsesHighlightScroller ? null : editorAttentionLinesElement}
+                    {editorUsesHighlightScroller ? null : editorExecutionLayersElement}
                     {editorUsesHighlightScroller && activeDocument ? (
-                      <div
-                        ref={highlightedEditorScrollRef}
-                        className={`highlight-editor${editorInlineGutter ? " has-inline-ruler" : ""}`}
-                        onMouseMove={(event) => {
-                          const bounds = event.currentTarget.getBoundingClientRect();
-                          const contentY = event.clientY - bounds.top + event.currentTarget.scrollTop - editorLayoutMetrics.contentPadding;
-                          const line = Math.floor(contentY / editorLayoutMetrics.lineHeight) + 1;
-                          const nextLine = diagnostics.some((diagnostic) => diagnostic.line === line)
-                            ? line
-                            : undefined;
-                          setHoveredDiagnosticLine((current) => current === nextLine ? current : nextLine);
-                        }}
-                        onMouseLeave={() => setHoveredDiagnosticLine(undefined)}
-                        onScroll={(event) => {
-                          syncEditorLineRuler(event.currentTarget.scrollTop);
-                          syncEditorViewportOnScroll(event.currentTarget);
-                          if (editorRef.current) scheduleEditorStateCapture(editorRef.current, event.currentTarget);
+                      <EditorHighlightScroller
+                        scrollRef={highlightedEditorScrollRef}
+                        syntaxLayerRef={syntaxLayerRef}
+                        inlineRuler={editorInlineGutter}
+                        ruler={editorLineRulerElement}
+                        executionLayers={editorExecutionLayersElement}
+                        provider={activeSyntaxHighlighter}
+                        source={activeEditorDisplayContent}
+                        lineStarts={editorSyntaxLineStarts}
+                        viewportStore={editorViewportStore}
+                        lineCount={editorMetrics.lineCount}
+                        lineHeight={editorLayoutMetrics.lineHeight}
+                        contentPadding={editorLayoutMetrics.contentPadding}
+                        widthGuard={editorSyntaxWidthGuard}
+                        searchHighlight={activeEditorSearchHighlight}
+                        contextTarget={editorContextTargetHighlight}
+                        diagnostics={diagnostics}
+                        folded={Boolean(activeFoldProjection)}
+                        foldSelectionRef={foldedEditorSelectionRef}
+                        foldCaretRef={foldedEditorCaretRef}
+                        onScroll={(target) => {
+                          syncEditorLineRuler(target.scrollTop);
+                          syncEditorViewportOnScroll(target);
+                          if (editorRef.current) scheduleEditorStateCapture(editorRef.current, target);
                         }}
                       >
-                        {editorInlineGutter ? editorLineRulerElement : null}
-                        <div className="highlight-editor__content">
-                          {editorBreakpointLinesElement}
-                          {editorDebugCurrentLineElement}
-                          {editorAttentionLinesElement}
-                          <pre
-                            ref={syntaxLayerRef}
-                            className="syntax-layer"
-                            data-syntax-provider={activeSyntaxHighlighter?.id}
-                            data-syntax-origin={activeSyntaxHighlighter?.origin}
-                          >
-                            {editorSyntaxLineStarts ? (
-                              <WindowedHighlightedSource
-                                viewportStore={editorViewportStore}
-                                lineStarts={editorSyntaxLineStarts}
-                                lineCount={editorMetrics.lineCount}
-                                lineHeight={editorLayoutMetrics.lineHeight}
-                                contentPadding={editorLayoutMetrics.contentPadding}
-                                widthGuard={editorSyntaxWidthGuard}
-                                source={activeEditorDisplayContent}
-                                {...(activeSyntaxHighlighter ? { provider: activeSyntaxHighlighter } : {})}
-                                {...(activeEditorSearchHighlight ? { highlight: activeEditorSearchHighlight } : {})}
-                                {...(editorContextTargetHighlight ? { contextTarget: editorContextTargetHighlight } : {})}
-                              />
-                            ) : (
-                              <HighlightedSource
-                                source={activeEditorDisplayContent}
-                                {...(activeSyntaxHighlighter ? { provider: activeSyntaxHighlighter } : {})}
-                                {...(activeEditorSearchHighlight ? { highlight: activeEditorSearchHighlight } : {})}
-                                {...(editorContextTargetHighlight ? { contextTarget: editorContextTargetHighlight } : {})}
-                              />
-                            )}
-                          </pre>
-                          <DiagnosticLayer
-                            diagnostics={diagnostics}
-                            source={activeEditorDisplayContent}
-                            hoveredLine={hoveredDiagnosticLine}
-                          />
-                          <textarea
-                            ref={editorRef}
-                            className={`code-editor code-editor--highlighted${activeFoldProjection ? " code-editor--folded" : ""}`}
-                            spellCheck={false}
-                            wrap="off"
-                            value={activeEditorContent}
-                            readOnly={activeDocument.readOnly}
-                            onChange={handleEditorChange}
-                            onKeyDown={handleEditorKeyDown}
-                            onMouseDown={handleEditorAuxiliaryNavigation}
-                            onMouseUp={correctFoldedEditorPointerSelection}
-                            onDoubleClick={selectFoldedEditorWordAtPointer}
-                            onKeyUp={(event) => event.currentTarget.classList.toggle(
-                              "is-navigation-modifier",
-                              event.ctrlKey || event.metaKey,
-                            )}
-                            onMouseMove={(event) => event.currentTarget.classList.toggle(
-                              "is-navigation-modifier",
-                              event.ctrlKey || event.metaKey,
-                            )}
-                            onMouseLeave={(event) => event.currentTarget.classList.remove("is-navigation-modifier")}
-                            onSelect={(event) => scheduleEditorStateCapture(event.currentTarget, highlightedEditorScrollRef.current ?? event.currentTarget)}
-                            onClick={(event) => {
-                              if ((!event.ctrlKey && !event.metaKey) || !activeDocument) return;
-                              event.preventDefault();
-                              invoke(() => navigateFromEditor(activeDocument, event.currentTarget));
-                            }}
-                            onContextMenu={(event) => {
-                              if (!activeDocument) return;
-                              event.preventDefault();
-                              const preparedSelection = prepareEditorContextMenu(
-                                event.currentTarget,
-                                event.clientX,
-                                event.clientY,
-                                highlightedEditorScrollRef.current ?? event.currentTarget,
-                              );
-                              invoke(() => openEditorMenu(
-                                activeDocument,
-                                event.currentTarget,
-                                event.clientX,
-                                event.clientY,
-                                preparedSelection,
-                              ));
-                            }}
-                          />
-                          {activeFoldProjection ? (
-                            <>
-                              <div
-                                ref={foldedEditorSelectionRef}
-                                className="editor-projected-selection"
-                                aria-hidden="true"
-                                hidden
-                              />
-                              <span
-                                ref={foldedEditorCaretRef}
-                                className="editor-projected-caret"
-                                aria-hidden="true"
-                                hidden
-                              />
-                            </>
-                          ) : null}
-                        </div>
-                      </div>
+                        {renderCodeEditorTextarea(true)}
+                      </EditorHighlightScroller>
                     ) : (
-                      <textarea
-                        ref={editorRef}
-                        className="code-editor"
-                        spellCheck={false}
-                        value={activeEditorContent}
-                        readOnly={activeDocument?.readOnly}
-                        onChange={handleEditorChange}
-                        onKeyDown={handleEditorKeyDown}
-                        onMouseDown={handleEditorAuxiliaryNavigation}
-                        onMouseUp={correctFoldedEditorPointerSelection}
-                        onKeyUp={(event) => event.currentTarget.classList.toggle(
-                          "is-navigation-modifier",
-                          event.ctrlKey || event.metaKey,
-                        )}
-                        onMouseMove={(event) => event.currentTarget.classList.toggle(
-                          "is-navigation-modifier",
-                          event.ctrlKey || event.metaKey,
-                        )}
-                        onMouseLeave={(event) => event.currentTarget.classList.remove("is-navigation-modifier")}
-                        onSelect={(event) => scheduleEditorStateCapture(event.currentTarget)}
-                        onClick={(event) => {
-                          if ((!event.ctrlKey && !event.metaKey) || !activeDocument) return;
-                          event.preventDefault();
-                          invoke(() => navigateFromEditor(activeDocument, event.currentTarget));
-                        }}
-                        onContextMenu={(event) => {
-                          if (!activeDocument) return;
-                          event.preventDefault();
-                          const preparedSelection = prepareEditorContextMenu(
-                            event.currentTarget,
-                            event.clientX,
-                            event.clientY,
-                            event.currentTarget,
-                          );
-                          invoke(() => openEditorMenu(
-                            activeDocument,
-                            event.currentTarget,
-                            event.clientX,
-                            event.clientY,
-                            preparedSelection,
-                          ));
-                        }}
-                        onScroll={(event) => {
-                          syncEditorLineRuler(event.currentTarget.scrollTop);
-                          syncEditorViewportOnScroll(event.currentTarget);
-                          scheduleEditorStateCapture(event.currentTarget);
-                        }}
-                      />
+                      renderCodeEditorTextarea(false)
                     )}
                     {editorInlineGutter ? null : editorFoldOverlayElement}
                     {foldPreview ? (
-                      <div
-                        className="editor-fold-preview"
-                        style={{
-                          "--fold-preview-top": `${foldPreviewTop}px`,
-                          "--fold-preview-max-height": `${foldPreviewMaxHeight}px`,
-                        } as React.CSSProperties}
-                        role="tooltip"
-                        onMouseMove={(event) => event.stopPropagation()}
-                        onMouseEnter={cancelFoldPreviewClose}
-                        onMouseLeave={scheduleFoldPreviewClose}
-                        onFocus={cancelFoldPreviewClose}
-                        onBlur={(event) => {
-                          if (event.relatedTarget instanceof Element && event.relatedTarget.closest(".editor-fold-toggle.is-folded")) return;
-                          scheduleFoldPreviewClose();
-                        }}
-                        onWheel={(event) => event.stopPropagation()}
-                      >
-                        <div className="editor-fold-preview__title">
-                          <span>Trecho recolhido</span>
-                          <span>{foldPreview.lineCount} linha(s)</span>
-                        </div>
-                        <pre tabIndex={0} aria-label="Conteúdo completo do trecho recolhido">
-                          <HighlightedSource
-                            source={foldPreview.text}
-                            {...(activeSyntaxHighlighter ? { provider: activeSyntaxHighlighter } : {})}
-                          />
-                        </pre>
-                        {foldPreview.lineCount > 12 ? (
-                          <div className="editor-fold-preview__footer">Role para visualizar o trecho completo.</div>
-                        ) : null}
-                      </div>
+                      <EditorFoldPreview
+                        text={foldPreview.text}
+                        lineCount={foldPreview.lineCount}
+                        top={foldPreviewTop}
+                        maxHeight={foldPreviewMaxHeight}
+                        {...(activeSyntaxHighlighter ? { provider: activeSyntaxHighlighter } : {})}
+                        onCancelClose={cancelFoldPreviewClose}
+                        onScheduleClose={scheduleFoldPreviewClose}
+                      />
                     ) : null}
                     {selectedEditorLineDecoration?.change && activeDocument ? (
                       <EditorLineDiffPeek
@@ -8395,498 +7526,151 @@ export function App() {
                       />
                     ) : null}
                   </div>
-                    </>
-                  )}
+                  </EditorDocumentSurface>
                 </div>
               </>
             ) : (
-              <div className="welcome-screen">
-                <span className="welcome-kicker">Bem-vindo</span>
-                <h1>tinyIde</h1>
-                <p>Crie, abra ou arraste um arquivo para começar.</p>
-                <div className="welcome-actions">
-                  {workspaceFileCreationOptions.length ? (
-                    <DropdownMenu.Root>
-                      <DropdownMenu.Trigger asChild>
-                        <button className="button primary" type="button">
-                          <WorkbenchIcon icon="plus" size={16} /> Novo arquivo <ChevronDown size={14} />
-                        </button>
-                      </DropdownMenu.Trigger>
-                      <DropdownMenu.Portal>
-                        <DropdownMenu.Content className="menu-content" align="center" sideOffset={6}>
-                          {fileCreationOptions(workspaceFileCreationOptions).map((option) => (
-                            <DropdownMenu.Item
-                              className="menu-item"
-                              key={`${option.id}:${option.extension}`}
-                              onSelect={() => newDocument(option)}
-                            >
-                              {option.icon ? (
-                                <span
-                                  className="resource-icon resource-icon--menu"
-                                  title={option.icon.title}
-                                  style={{
-                                    color: option.icon.foreground ?? "currentColor",
-                                    background: option.icon.background ?? "transparent",
-                                  }}
-                                >{option.icon.label}</span>
-                              ) : <WorkbenchIcon icon="file" size={15} />}
-                              <span>{option.label}</span>
-                              <span className="menu-item__hint">{option.extension}</span>
-                            </DropdownMenu.Item>
-                          ))}
-                        </DropdownMenu.Content>
-                      </DropdownMenu.Portal>
-                    </DropdownMenu.Root>
-                  ) : (
-                    <button className="button primary" type="button" onClick={() => newDocument()}><WorkbenchIcon icon="plus" size={16} /> Novo arquivo</button>
-                  )}
-                  <button className="button secondary" type="button" onClick={() => invoke(openSingleFile)}><WorkbenchIcon icon="file" size={16} /> Abrir arquivo</button>
-                  <button className="button secondary" type="button" onClick={() => invoke(openProjectDialog)}><WorkbenchIcon icon="folder-open" size={16} /> Abrir projeto</button>
-                </div>
-                <small>Atalhos: Ctrl+N, Ctrl+O, Ctrl+S e Ctrl+Shift+S</small>
-              </div>
+              <WorkbenchWelcomeView
+                fileCreationOptions={workspaceFileCreationOptions}
+                onNewDocument={newDocument}
+                onOpenFile={() => invoke(openSingleFile)}
+                onOpenProject={() => invoke(openProjectDialog)}
+              />
             )}
 
           </main>
 
-          {problemsVisible ? (
-            <div
-              className={`resize-handle ${problemsDockSide === "left" ? "resize-handle--sidebar" : "resize-handle--problems"}`}
-              role="separator"
-              aria-label="Redimensionar painel de problemas"
-              onPointerDown={beginProblemsResize}
-              onDoubleClick={() => setVerticalPanelWidths((current) => (
-                updateVerticalPanelWidth(current, problemsDockSide, DEFAULT_LAYOUT.problemsWidth)
-              ))}
-            />
-          ) : null}
+          <WorkbenchProblemsDock
+            visible={problemsVisible}
+            side={problemsDockSide}
+            diagnostics={diagnostics}
+            onResize={beginProblemsResize}
+            onResetWidth={() => setVerticalPanelWidths((current) => (
+              updateVerticalPanelWidth(current, problemsDockSide, DEFAULT_LAYOUT.problemsWidth)
+            ))}
+            onClose={() => setProblemsVisible(false)}
+          />
 
-          {problemsVisible ? (
-            <ProblemsPanel
-              side={problemsDockSide}
-              diagnostics={diagnostics}
-              onClose={() => setProblemsVisible(false)}
-            />
-          ) : null}
-
-          <aside className="right-activity-bar" aria-label="Barra lateral direita">
-            <WorkbenchActivityBar
-              side="right"
-              items={rightActivityItems}
-              pluginItems={activityButtons}
-              activeSidebarId={sidebarViewsBySide.right}
-              toolWindowVisible={toolWindowVisible}
-              activeToolWindowId={activeToolWindowId}
-              draggingKey={draggingActivityButtonKey}
-              environmentLabel="Ambientes de execução"
-              environmentIcon="box"
-              executionCount={profileOutputTabs.length}
-              runningExecutionCount={runningProfileOutputCount}
-              executionActive={executionPanelActive}
-              diagnosticsCount={diagnostics.length}
-              problemsVisible={problemsVisible}
-              onPluginActivate={(item) => item.kind === "sidebar" ? togglePluginSidebar(item.id) : toggleToolWindow(item.id)}
-              onBuiltinSidebarActivate={toggleBuiltinSidebar}
-              onExecutionsActivate={toggleExecutionPanel}
-              onProblemsActivate={toggleProblemsPanel}
-              onMove={repositionActivityButton}
-              onDragStateChange={setDraggingActivityButtonKey}
-            />
-          </aside>
+          <WorkbenchActivityRail
+            {...activityBarCommonProps}
+            side="right"
+            items={rightActivityItems}
+            activeSidebarId={sidebarViewsBySide.right}
+          />
 
           <div className="workbench-bottom-region">
             {panelVisible && bottomPanelAvailable ? (
-              <section className={`output-panel${panelVisible ? "" : " output-panel--hidden"}`} style={{ height: panelHeight }}>
-                <div className="resize-handle resize-handle--panel" role="separator" aria-label="Redimensionar painel inferior" onPointerDown={beginPanelResize} onDoubleClick={() => setPanelHeight(DEFAULT_LAYOUT.panelHeight)} />
-                <div className="panel-heading">
-                  <div className="panel-tabs">
-                    {profileOutputTabs.map((tab) => {
-                      const statusLabel = tab.debugSession
-                        ? `Depuração: ${tab.debugSession.status}`
-                        : profileExecutionStatusLabel(tab.execution);
-                      const running = tab.execution?.status === "running"
-                        || Boolean(tab.debugSession && !["stopped", "completed", "failed"].includes(tab.debugSession.status));
-                      const closing = closingProfileTabIds.has(tab.tabId);
-                      const tabLabel = tab.mode === "debug" ? `${tab.name} (Debug)` : tab.name;
-                      return (
-                        <div className={`panel-tab-group${panelTab === tab.tabId ? " active" : ""}`} key={tab.tabId}>
-                          <button
-                            aria-label={`${tabLabel}: ${statusLabel}`}
-                            className="panel-tab panel-tab--profile"
-                            title={`${tabLabel}: ${statusLabel}`}
-                            type="button"
-                            onClick={() => setPanelTab(tab.tabId)}
-                          >
-                            <span className="panel-tab__label">{tabLabel}</span>
-                            <span aria-hidden="true" className={`panel-tab__execution-dot${running ? " is-running" : ""}`} />
-                          </button>
-                          <button
-                            aria-label={running ? `Fechar e interromper ${tabLabel}` : `Fechar saída de ${tabLabel}`}
-                            className="panel-tab-close"
-                            disabled={closing}
-                            title={running ? "Fechar aba e interromper processo" : "Fechar aba"}
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              invoke(() => closeProfileOutputTab(tab.tabId));
-                            }}
-                          ><X size={12} /></button>
-                        </div>
-                      );
-                    })}
-                    {workbenchPanels.map((panel) => (
-                      <button
-                        className={`panel-tab${panelTab === panel.id ? " active" : ""}`}
-                        type="button"
-                        key={panel.id}
-                        onClick={() => setPanelTab(panel.id)}
-                      >
-                        {panel.icon ? <WorkbenchActivityIconView icon={panel.icon} /> : null}
-                        <span className="panel-tab__label">{panel.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                  {(() => {
-                    const activeWorkbenchPanel = canDetachPanels
-                      ? workbenchPanels.find((panel) => panel.id === panelTab)
-                      : undefined;
-                    return activeWorkbenchPanel ? (
-                      <button
-                        className="icon-button small"
-                        type="button"
-                        aria-label={`Abrir ${activeWorkbenchPanel.label} em janela separada`}
-                        title="Abrir em janela separada"
-                        onClick={() => void detachPanelToWindow(
-                          { kind: "panel", id: activeWorkbenchPanel.id },
-                          undefined,
-                          () => setPanelVisible(false),
-                        )}
-                      ><ExternalLink size={14} /></button>
-                    ) : null;
-                  })()}
-                  <button className="icon-button small" type="button" aria-label="Fechar painel" onClick={() => setPanelVisible(false)}><X size={14} /></button>
-                </div>
-                {profileOutputTabs.map((tab) => {
-                  const tabDebugSession = tab.debugSession;
-                  const debugging = Boolean(tabDebugSession);
-                  const debugEnded = Boolean(tabDebugSession && ["stopped", "completed", "failed"].includes(tabDebugSession.status));
-                  const debugRestarting = debugRestartingProfileIds.has(tab.profileId);
-                  const debugCommandBusy = Boolean(tabDebugSession && debugCommandPending[tabDebugSession.id]);
-                  const executionRunning = tab.execution?.status === "running";
-                  const executionRestarting = restartingProfileId === tab.profileId;
-                  const outputFollowing = profileOutputFollowing[tab.tabId] ?? true;
-                  const outputOffsets = tabDebugSession
-                    ? debugOutputOffsets[tabDebugSession.id] ?? EMPTY_DEBUG_OUTPUT_OFFSETS
-                    : EMPTY_DEBUG_OUTPUT_OFFSETS;
-                  const outputSegments = tabDebugSession
-                    ? debugOutputSegments(tabDebugSession, outputOffsets)
-                    : [];
-                  return (
-                    <div className="execution-panel-view" hidden={panelTab !== tab.tabId} key={tab.tabId}>
-                      <div className="execution-panel-toolbar">
-                        <div className="execution-panel-toolbar__actions">
-                          {tabDebugSession ? (
-                            <>
-                              <ButtonTooltip label={
-                                debugEnded
-                                  ? "Iniciar depuração"
-                                  : tabDebugSession.status === "paused"
-                                    ? "Continuar"
-                                    : "Pausar"
-                              } side="top">
-                                <button
-                                  className="icon-button small"
-                                  type="button"
-                                  aria-label={
-                                    debugEnded
-                                      ? "Iniciar depuração"
-                                      : tabDebugSession.status === "paused"
-                                        ? "Continuar depuração"
-                                        : "Pausar depuração"
-                                  }
-                                  disabled={
-                                    debugRestarting
-                                    || (debugCommandBusy && tabDebugSession.status !== "running" && !debugEnded)
-                                    || (!debugEnded && !["running", "paused", "starting"].includes(tabDebugSession.status))
-                                  }
-                                  onClick={() => invoke(async () => {
-                                    if (debugEnded) {
-                                      await restartDebugSession(tab.profileId);
-                                      return;
-                                    }
-                                    await debugCommand(tab.profileId, tabDebugSession.status === "paused" ? "resume" : "pause");
-                                  })}
-                                >{
-                                  debugEnded
-                                    ? <Bug size={14} />
-                                    : tabDebugSession.status === "paused"
-                                      ? <WorkbenchIcon icon="play" size={14} />
-                                      : <WorkbenchIcon icon="pause" size={14} />
-                                }</button>
-                              </ButtonTooltip>
-                              <ButtonTooltip label="Step over" side="top">
-                                <button className="icon-button small" type="button" aria-label="Step over" disabled={debugRestarting || debugCommandBusy || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand(tab.profileId, "stepOver"))}><StepForward size={14} /></button>
-                              </ButtonTooltip>
-                              <ButtonTooltip label="Step into" side="top">
-                                <button className="icon-button small" type="button" aria-label="Step into" disabled={debugRestarting || debugCommandBusy || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand(tab.profileId, "stepInto"))}><CornerDownRight size={14} /></button>
-                              </ButtonTooltip>
-                              <ButtonTooltip label="Step out" side="top">
-                                <button className="icon-button small" type="button" aria-label="Step out" disabled={debugRestarting || debugCommandBusy || tabDebugSession.status !== "paused"} onClick={() => invoke(() => debugCommand(tab.profileId, "stepOut"))}><CornerUpRight size={14} /></button>
-                              </ButtonTooltip>
-                              <ButtonTooltip label="Reiniciar depuração" side="top">
-                                <button className="icon-button small" type="button" aria-label="Reiniciar depuração" disabled={debugRestarting || debugCommandBusy} onClick={() => invoke(() => restartDebugSession(tab.profileId))}><RotateCw className={debugRestarting ? "is-spinning" : undefined} size={13} /></button>
-                              </ButtonTooltip>
-                              <ButtonTooltip label="Parar depuração" side="top">
-                                <button className="icon-button small danger" type="button" aria-label="Parar depuração" disabled={debugRestarting || debugEnded} onClick={() => invoke(() => debugCommand(tab.profileId, "stop"))}><Square size={13} /></button>
-                              </ButtonTooltip>
-                            </>
-                          ) : tab.profile ? (
-                            <>
-                              <ButtonTooltip label="Executar perfil" side="top">
-                                <button
-                                  className="icon-button small"
-                                  type="button"
-                                  aria-label="Executar perfil nesta aba"
-                                  disabled={executionRunning || executionRestarting}
-                                  onClick={() => invoke(() => runProfile(tab.profile!))}
-                                ><WorkbenchIcon icon="play" size={14} /></button>
-                              </ButtonTooltip>
-                              <ButtonTooltip label="Reexecutar perfil" side="top">
-                                <button
-                                  className="icon-button small"
-                                  type="button"
-                                  aria-label="Reexecutar perfil nesta aba"
-                                  disabled={executionRestarting || !tab.execution}
-                                  onClick={() => invoke(() => restartProfileExecution(tab.profile!))}
-                                ><RotateCw className={executionRestarting ? "is-spinning" : undefined} size={13} /></button>
-                              </ButtonTooltip>
-                              <ButtonTooltip label="Parar execução" side="top">
-                                <button
-                                  className="icon-button small danger"
-                                  type="button"
-                                  aria-label="Parar execução"
-                                  disabled={!executionRunning || executionRestarting}
-                                  onClick={() => invoke(() => stopProfileExecution(tab.profileId))}
-                                ><Square size={13} /></button>
-                              </ButtonTooltip>
-                            </>
-                          ) : executionRunning ? (
-                            <ButtonTooltip label="Parar execução" side="top">
-                              <button className="icon-button small danger" type="button" aria-label="Parar execução" onClick={() => invoke(() => stopProfileExecution(tab.profileId))}><Square size={13} /></button>
-                            </ButtonTooltip>
-                          ) : null}
-                          {tab.viewProvider?.toolbarActions?.(tab.viewTarget).map((action) => (
-                            <ButtonTooltip label={action.label} side="top" key={action.id}>
-                              <button
-                                className={`icon-button small${action.danger ? " danger" : ""}`}
-                                type="button"
-                                aria-label={action.label}
-                                disabled={action.disabled}
-                                onClick={() => invoke(() => action.run(tab.viewTarget))}
-                              >{executionViewToolbarIcon(action)}</button>
-                            </ButtonTooltip>
-                          ))}
-                        </div>
-                        {!tabDebugSession && !tab.viewProvider ? (
-                          <label className="workbench-output-follow execution-panel-toolbar__follow">
-                            <input
-                              type="checkbox"
-                              className="checkbox-md"
-                              checked={outputFollowing}
-                              onChange={(event) => setProfileOutputFollowing((current) => ({
-                                ...current,
-                                [tab.tabId]: event.target.checked,
-                              }))}
-                            />
-                            <span>Seguir saída</span>
-                          </label>
-                        ) : null}
-                      </div>
-                      {tabDebugSession ? (
-                        <div
-                          className="execution-debug-layout"
-                          style={{ gridTemplateColumns: `minmax(0, 1fr) 5px ${debugInspectorWidth}px` }}
-                        >
-                          <section className="execution-debug-output-pane" aria-label="Saída da depuração">
-                            <div className="execution-debug-output-toolbar">
-                              <ButtonTooltip label="Quebrar linhas" side="top">
-                                <button
-                                  type="button"
-                                  className={`icon-button small execution-debug-output-toolbar__icon-btn${debugOutputWrap ? " is-active" : ""}`}
-                                  aria-label="Quebrar linhas"
-                                  aria-pressed={debugOutputWrap}
-                                  onClick={() => {
-                                    const next = !debugOutputWrap;
-                                    setDebugOutputWrap(next);
-                                    persistDebugPanelLayout({ outputWrap: next });
-                                  }}
-                                ><WrapText size={14} /></button>
-                              </ButtonTooltip>
-                              <ButtonTooltip label="Limpar" side="top">
-                                <button
-                                  type="button"
-                                  className="icon-button small execution-debug-output-toolbar__icon-btn"
-                                  aria-label="Limpar saída"
-                                  onClick={() => setDebugOutputOffsets((current) => ({
-                                    ...current,
-                                    [tabDebugSession.id]: debugOutputOffsetsFor(tabDebugSession),
-                                  }))}
-                                ><Eraser size={14} /></button>
-                              </ButtonTooltip>
-                              <label className="workbench-output-follow execution-debug-output-toolbar__follow">
-                                <input
-                                  type="checkbox"
-                                  className="checkbox-md"
-                                  checked={debugOutputFollowTail}
-                                  onChange={(event) => {
-                                    const next = event.target.checked;
-                                    setDebugOutputFollowTail(next);
-                                    persistDebugPanelLayout({ outputFollowTail: next });
-                                  }}
-                                />
-                                <span>Seguir saída</span>
-                              </label>
-                            </div>
-                            <div
-                              ref={(element) => {
-                                if (element) debugOutputRefs.current.set(tabDebugSession.id, element);
-                                else debugOutputRefs.current.delete(tabDebugSession.id);
-                              }}
-                              className={`execution-panel-output execution-panel-output--structured${debugOutputWrap ? " is-wrapped" : ""}`}
-                            >
-                              {outputSegments.length ? outputSegments.map((segment, index) => (
-                                <div className={`debug-output-segment is-${segment.kind}`} key={`${segment.kind}-${index}`}>
-                                  {segment.label ? <span className="debug-output-segment__label">{segment.label}</span> : null}
-                                  <pre>{segment.text}</pre>
-                                </div>
-                              )) : <p className="debug-output-empty">Nenhuma saída registrada.</p>}
-                            </div>
-                          </section>
-                          <div
-                            className="execution-debug-splitter execution-debug-splitter--vertical"
-                            role="separator"
-                            aria-label="Redimensionar inspetor da depuração"
-                            onPointerDown={beginDebugInspectorResize}
-                            onDoubleClick={() => {
-                              setDebugInspectorWidth(DEFAULT_DEBUG_PANEL_LAYOUT.inspectorWidth);
-                              persistDebugPanelLayout({ inspectorWidth: DEFAULT_DEBUG_PANEL_LAYOUT.inspectorWidth });
-                            }}
-                          />
-                          <aside className="execution-debug-inspector" aria-label="Estado da depuração">
-                            <section className="execution-debug-inspector-section">
-                              <h3>Breakpoints <span>{debugBreakpoints.length}</span></h3>
-                              {debugBreakpoints.length ? debugBreakpoints.map((breakpoint) => (
-                                <button key={`${breakpoint.path}:${breakpoint.line}`} type="button" onClick={() => toggleBreakpoint(breakpoint.path, breakpoint.line)}>
-                                  <span>{breakpoint.path}</span><small>{breakpoint.line}</small>
-                                </button>
-                              )) : <p>Nenhum breakpoint.</p>}
-                            </section>
-                            <section className="execution-debug-inspector-section">
-                              <h3>Pilha <span>{tabDebugSession.frames.length}</span></h3>
-                              {tabDebugSession.frames.length ? tabDebugSession.frames.map((frame) => (
-                                <button
-                                  className={frame.id === tabDebugSession.selectedFrameId ? "is-selected" : undefined}
-                                  key={frame.id}
-                                  type="button"
-                                  onClick={() => invoke(() => revealDebugLocation(frame.path, frame.line))}
-                                >
-                                  <span>{frame.name}</span>
-                                  {frame.path ? <small>{frame.path}:{frame.line ?? 0}</small> : null}
-                                </button>
-                              )) : <p>{tabDebugSession.status === "paused" ? "Pilha ainda não recebida do runtime." : "Aguardando pausa."}</p>}
-                            </section>
-                            <section className="execution-debug-variables">
-                              <div className="execution-debug-variables__heading">
-                                <h3>Variáveis</h3>
-                                <input
-                                  aria-label="Filtrar variáveis"
-                                  placeholder="Filtrar variáveis"
-                                  value={debugVariableQuery}
-                                  onChange={(event) => setDebugVariableQuery(event.target.value)}
-                                />
-                              </div>
-                              {tabDebugSession.scopes.length ? tabDebugSession.scopes.map((scope) => {
-                                const variables = filterDebugVariables(scope.variables, debugVariableQuery);
-                                return (
-                                  <div className="debug-scope" key={scope.name}>
-                                    <strong>{scope.name}</strong>
-                                    <div className="debug-variable-tree">
-                                      {variables.length ? variables.map((variable) => (
-                                        <DebugVariableNode key={variable.name} variable={variable} />
-                                      )) : <p>Nenhuma variável correspondente.</p>}
-                                    </div>
-                                  </div>
-                                );
-                              }) : <p>Nenhuma variável disponível.</p>}
-                            </section>
-                          </aside>
-                        </div>
-                      ) : tab.viewProvider ? (
-                        <ExecutionViewHost
-                          provider={tab.viewProvider}
-                          target={tab.viewTarget}
-                          state={workbenchState}
-                        />
-                      ) : (
-                        <FollowedExecutionOutput
-                          text={profileExecutionOutput(tab.execution).join("\n")}
-                          following={outputFollowing}
-                        />
-                      )}
-                    </div>
-                  );
-                })}
-                {restorationComplete ? workbenchPanels.map((panel) => (
-                  <div className="plugin-panel-container" hidden={panelTab !== panel.id} key={panel.id}>
-                    <WorkbenchPanelHost provider={panel} state={workbenchState} />
-                  </div>
-                )) : null}
-              </section>
+              <ExecutionPanel
+                height={panelHeight}
+                panelTab={panelTab}
+                profileOutputTabs={profileOutputTabs}
+                workbenchPanels={workbenchPanels}
+                workbenchState={workbenchState}
+                closingProfileTabIds={closingProfileTabIds}
+                debugRestartingProfileIds={debugRestartingProfileIds}
+                isDebugCommandPending={(sessionId) => Boolean(debugCommandPending[sessionId])}
+                restartingProfileId={restartingProfileId}
+                profileOutputFollowing={profileOutputFollowing}
+                canDetachPanels={canDetachPanels}
+                onResize={beginPanelResize}
+                onResetHeight={() => setPanelHeight(DEFAULT_LAYOUT.panelHeight)}
+                onSelectTab={setPanelTab}
+                onCloseTab={(tabId) => invoke(() => closeProfileOutputTab(tabId))}
+                onClose={() => setPanelVisible(false)}
+                onDetachPanel={(id) => void detachPanelToWindow(
+                  { kind: "panel", id }, undefined, () => setPanelVisible(false),
+                )}
+                onFollowingChange={(tabId, following) => setProfileOutputFollowing((current) => ({
+                  ...current, [tabId]: following,
+                }))}
+                actions={{
+                  run: (profile) => invoke(() => runProfile(profile)),
+                  restart: (profile) => invoke(() => restartProfileExecution(profile)),
+                  stop: (profileId) => invoke(() => stopProfileExecution(profileId)),
+                  debugCommand: (profileId, command) => invoke(() => debugCommand(profileId, command)),
+                  restartDebug: (profileId) => invoke(() => restartDebugSession(profileId)),
+                  runViewAction: (action, target) => invoke(() => action.run(target)),
+                }}
+                renderDebugSession={(tabDebugSession) => (
+                  <DebugSessionView
+                    session={tabDebugSession}
+                    inspectorWidth={debugInspectorWidth}
+                    outputWrap={debugOutputWrap}
+                    outputFollowTail={debugOutputFollowTail}
+                    outputSegments={debugOutputSegments(
+                    tabDebugSession, debugOutputOffsets[tabDebugSession.id] ?? EMPTY_DEBUG_OUTPUT_OFFSETS,
+                  )}
+                    breakpoints={debugBreakpoints}
+                    variableQuery={debugVariableQuery}
+                    onToggleOutputWrap={() => {
+                      const next = !debugOutputWrap;
+                      setDebugOutputWrap(next);
+                      persistDebugPanelLayout({ outputWrap: next });
+                    }}
+                    onClearOutput={() => setDebugOutputOffsets((current) => ({
+                      ...current,
+                      [tabDebugSession.id]: debugOutputOffsetsFor(tabDebugSession),
+                    }))}
+                    onToggleOutputFollowTail={(next) => {
+                      setDebugOutputFollowTail(next);
+                      persistDebugPanelLayout({ outputFollowTail: next });
+                    }}
+                    onToggleBreakpoint={toggleBreakpoint}
+                    onSelectFrame={(path, line) => invoke(() => revealDebugLocation(path, line))}
+                    onVariableQueryChange={setDebugVariableQuery}
+                    onBeginInspectorResize={beginDebugInspectorResize}
+                    onResetInspectorWidth={() => {
+                      setDebugInspectorWidth(DEFAULT_DEBUG_PANEL_LAYOUT.inspectorWidth);
+                      persistDebugPanelLayout({ inspectorWidth: DEFAULT_DEBUG_PANEL_LAYOUT.inspectorWidth });
+                    }}
+                    outputRef={(element) => {
+                      if (element) debugOutputRefs.current.set(tabDebugSession.id, element);
+                      else debugOutputRefs.current.delete(tabDebugSession.id);
+                    }}
+                  />
+                )}
+              />
             ) : null}
 
-            {restorationComplete ? workbenchToolWindows
-              .filter((toolWindow) => mountedToolWindowIds.has(toolWindow.id))
-              .map((toolWindow) => (
-                <WorkbenchToolWindowHost
-                  key={toolWindow.id}
-                  provider={toolWindow}
-                  state={workbenchState}
-                  visible={toolWindowVisible && toolWindow.id === activeToolWindowId}
-                  height={toolWindowHeight}
-                  {...(toolWindowViewRequest ? { viewRequest: toolWindowViewRequest } : {})}
-                  onClose={closeToolWindow}
-                  {...(canDetachPanels ? {
-                    onDetach: () => void detachPanelToWindow(
-                      { kind: "tool-window", id: toolWindow.id },
-                      undefined,
-                      // Desmonta em vez de só ocultar: o host retido seria um
-                      // segundo cliente do mesmo backend (PTY) com dimensões
-                      // divergentes da janela destacada.
-                      () => {
-                        setToolWindowVisible(false);
-                        setMountedToolWindowIds((previous) => releaseMountedToolWindow(previous, toolWindow.id));
-                      },
-                    ),
-                  } : {})}
-                  onResize={beginToolWindowResize}
-                  onResetHeight={() => setToolWindowHeight(DEFAULT_LAYOUT.toolWindowHeight)}
-                />
-              )) : null}
+            {restorationComplete ? (
+              <WorkbenchToolWindowDock
+                toolWindows={workbenchToolWindows}
+                mountedIds={mountedToolWindowIds}
+                state={workbenchState}
+                visible={toolWindowVisible}
+                activeId={activeToolWindowId}
+                height={toolWindowHeight}
+                viewRequest={toolWindowViewRequest}
+                canDetach={canDetachPanels}
+                onClose={closeToolWindow}
+                onDetach={(toolWindow) => void detachPanelToWindow(
+                  { kind: "tool-window", id: toolWindow.id },
+                  undefined,
+                  // Desmonta em vez de só ocultar: o host retido seria um
+                  // segundo cliente do mesmo backend (PTY) com dimensões
+                  // divergentes da janela destacada.
+                  () => {
+                    setToolWindowVisible(false);
+                    setMountedToolWindowIds((previous) => releaseMountedToolWindow(previous, toolWindow.id));
+                  },
+                )}
+                onResize={beginToolWindowResize}
+                onResetHeight={() => setToolWindowHeight(DEFAULT_LAYOUT.toolWindowHeight)}
+              />
+            ) : null}
           </div>
         </div>
 
-        <footer className="statusbar">
-          <button type="button" onClick={() => invoke(openSingleFile)}><WorkbenchIcon icon="file" size={13} /> Abrir arquivo</button>
-          <span>{platformSnapshot.plugins.length} plugin(s)</span>
-          {workspaceExternalSync ? <WorkspaceExternalSyncIndicator state={workspaceExternalSync} /> : null}
-          {workbenchStatusbarContributions.map((provider) => (
-            <WorkbenchStatusbarHost key={provider.id} provider={provider} state={workbenchState} />
-          ))}
-          <span className="status-spacer" />
-          <span>{activeDocument?.readOnly ? "Somente leitura" : activeDocument?.kind === "text" && activeDocument.content !== activeDocument.savedContent ? "Modificado" : "Salvo"}</span>
-          <span>{activeDocument?.kind === "text" ? "UTF-8" : activeDocument?.mediaType ?? ""}</span>
-          <span>{activeResourceEditorProvider?.id ?? activeSyntaxHighlighter?.name ?? (activeDocument?.kind === "image" ? "Imagem" : activeDocument?.kind === "binary" ? "Binário" : "Texto")}</span>
-        </footer>
+        <WorkbenchStatusBar
+          pluginCount={platformSnapshot.plugins.length}
+          {...(workspaceExternalSync ? { externalSync: workspaceExternalSync } : {})}
+          contributions={workbenchStatusbarContributions}
+          state={workbenchState}
+          document={activeDocument}
+          {...(activeResourceEditorProvider ? { resourceEditorId: activeResourceEditorProvider.id } : {})}
+          {...(activeSyntaxHighlighter ? { syntaxName: activeSyntaxHighlighter.name } : {})}
+          onOpenFile={() => invoke(openSingleFile)}
+        />
 
         <ProfileDialog
           open={profilesOpen}
@@ -8906,8 +7690,6 @@ export function App() {
           onOpenChange={setAboutOpen}
           version={import.meta.env.VITE_TINYIDE_APP_VERSION}
         />
-
-        {workbenchPluginDialogElement}
 
         <SettingsDialog
           open={settingsOpen}
@@ -8992,8 +7774,6 @@ export function App() {
           onConfirm={() => invoke(confirmEnvironmentBrowser)}
         />
 
-        {workbenchContextMenuElement}
-
         {completionSession ? (
           <CompletionPopup
             session={completionSession}
@@ -9023,50 +7803,29 @@ export function App() {
           />
         ) : null}
 
-        {pluginNotificationToastElement}
-
-        {errorToastElement}
-
         {pluginPendingRemoval ? (
-          <ConfirmationDialog
-            titleId="plugin-removal-title"
-            title="Remover plugin?"
-            confirmLabel="Remover"
+          <PluginRemovalDialog
+            pluginName={pluginPendingRemoval.manifest.name}
             onCancel={() => setPluginRemovalId(undefined)}
             onConfirm={() => invoke(async () => {
               await platform.uninstall(pluginPendingRemoval.manifest.id);
               setPluginRemovalId(undefined);
             })}
-          >
-            <p>O plugin <strong>{pluginPendingRemoval.manifest.name}</strong> será desativado e removido da aplicação.</p>
-          </ConfirmationDialog>
+          />
         ) : null}
 
-        {pluginConfirmDialogElement}
-
         {explorerPendingDeletion ? (
-          <ConfirmationDialog
-            titleId="explorer-removal-title"
-            title={<>Excluir {explorerPendingDeletion.length === 1
-              ? explorerPendingDeletion[0]?.kind === "directory" ? "pasta" : "arquivo"
-              : `${explorerPendingDeletion.length} itens`}?</>}
-            confirmLabel="Excluir"
+          <ExplorerDeletionDialog
+            entries={explorerPendingDeletion}
             onCancel={() => setExplorerPendingDeletion(undefined)}
             onConfirm={() => invoke(async () => {
               await deleteExplorerEntries(explorerPendingDeletion);
               setExplorerPendingDeletion(undefined);
             })}
-          >
-            <p>
-              {explorerPendingDeletion.length === 1 ? (
-                <><strong>{explorerPendingDeletion[0]?.name}</strong> será removido do workspace
-                {explorerPendingDeletion[0]?.kind === "directory" ? " com todo o conteúdo interno." : "."}</>
-              ) : (
-                <>Os <strong>{explorerPendingDeletion.length} itens selecionados</strong> serão removidos do workspace. Pastas incluem todo o conteúdo interno.</>
-              )}
-            </p>
-          </ConfirmationDialog>
+          />
         ) : null}
+
+        {workbenchSharedOverlaysElement}
       </div>
     </Tooltip.Provider>
   );

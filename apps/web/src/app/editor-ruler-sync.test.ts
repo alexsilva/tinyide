@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
 const rulerSource = readFileSync(new URL("./editor/EditorLineRuler.tsx", import.meta.url), "utf8");
+const surfacePartsSource = readFileSync(new URL("./editor/EditorSurfaceParts.tsx", import.meta.url), "utf8");
 const featuresCss = readFileSync(new URL("../styles/features.css", import.meta.url), "utf8");
 
 describe("editor ruler scroll synchronization", () => {
@@ -14,8 +15,8 @@ describe("editor ruler scroll synchronization", () => {
 
   it("updates the debug-line background from the same scroll position as the ruler", () => {
     expect(appSource).toContain('editorDebugCurrentLineRef.current?.style.setProperty("--editor-scroll-top", `${scrollTop}px`)');
-    expect(appSource).toContain('data-debug-line={activeDebugLine}');
-    expect(appSource).toContain('data-debug-visible-line={activeDebugVisibleLine}');
+    expect(surfacePartsSource).toContain('data-debug-line={activeDebugLine}');
+    expect(surfacePartsSource).toContain('data-debug-visible-line={activeDebugVisibleLine}');
     expect(rulerSource).toContain('const currentDebugLine = activeDebugVisibleLine === line');
     expect(featuresCss).toContain("top: calc(var(--debug-line-content-top) - var(--editor-scroll-top, 0px))");
     expect(appSource).not.toContain("(activeDebugLine - 1) * 21.45 - activeDocument.scrollTop");
@@ -29,6 +30,18 @@ describe("editor ruler scroll synchronization", () => {
     expect(appSource).toContain("const actualScrollTop = scrollContainer.scrollTop");
     expect(appSource).toContain("syncEditorLineRuler(actualScrollTop)");
     expect(appSource).toContain("scrollTop: actualScrollTop");
+  });
+
+  it("uses the CSS line-height as the ruler geometry source before virtual-window measurements", () => {
+    const declaredBranch = appSource.indexOf("Number.isFinite(declaredLineHeight) && declaredLineHeight > 8");
+    const windowBranch = appSource.indexOf("Number.isFinite(windowLineHeight) && windowLineHeight > 8");
+    expect(declaredBranch).toBeGreaterThan(-1);
+    expect(windowBranch).toBeGreaterThan(declaredBranch);
+  });
+
+  it("remeasures ruler geometry after restored documents become visible", () => {
+    expect(appSource).toContain('if (!restorationComplete || activeDocument?.kind !== "text") return;');
+    expect(appSource).toContain('[restorationComplete, activeDocument?.id, activeDocument?.kind');
   });
 
 });

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+const executionPanelSource = readFileSync(new URL("./execution/ExecutionPanel.tsx", import.meta.url), "utf8");
 const pluginHostsSource = readFileSync(new URL("./workbench-plugin-hosts.tsx", import.meta.url), "utf8");
 const activityBarSource = readFileSync(new URL("./workbench/WorkbenchActivityBar.tsx", import.meta.url), "utf8");
 const workbenchStyles = readFileSync(new URL("../styles/workbench.css", import.meta.url), "utf8");
@@ -10,7 +11,7 @@ const featureStyles = readFileSync(new URL("../styles/features.css", import.meta
 describe("execution panel layout", () => {
   it("keeps run and debug output in the horizontal bottom region", () => {
     expect(appSource).toContain('<div className="workbench-bottom-region">');
-    expect(appSource).toContain('className="resize-handle resize-handle--panel"');
+    expect(executionPanelSource).toContain('className="resize-handle resize-handle--panel"');
     expect(appSource).not.toContain("executionDockSide");
     expect(appSource).not.toContain("output-panel--side");
     expect(workbenchStyles).not.toContain("workbench-bottom-region--side");
@@ -37,12 +38,12 @@ describe("execution panel layout", () => {
     // A aba de execução é compartilhada por todos os perfis; um plugin (pytest)
     // substitui apenas o corpo da aba de execução do seu próprio perfil.
     expect(appSource).toContain("viewProvider: tabDebugSession ? undefined : executionViewProviderFor(viewTarget)");
-    expect(appSource).toContain("<ExecutionViewHost");
-    expect(appSource).toContain("{!tabDebugSession && !tab.viewProvider ? (");
+    expect(executionPanelSource).toContain("<ExecutionViewHost");
+    expect(executionPanelSource).toContain("{!tabDebugSession && !tab.viewProvider ? (");
   });
 
   it("keeps follow output in the existing execution toolbar without an extra row", () => {
-    expect(appSource).toContain('className="workbench-output-follow execution-panel-toolbar__follow"');
+    expect(executionPanelSource).toContain('className="workbench-output-follow execution-panel-toolbar__follow"');
     expect(appSource).not.toContain('className="execution-text-output__toolbar"');
     expect(featureStyles).not.toContain(".execution-text-output__toolbar");
   });

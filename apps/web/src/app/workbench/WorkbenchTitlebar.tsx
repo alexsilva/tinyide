@@ -8,7 +8,7 @@ import type {
 } from "@tinyide/plugin-api";
 import type { RecentProject } from "../project-history";
 import type { WorkspaceExecutionProfiles } from "../workspace-settings";
-import { fileCreationOptions } from "../file-creation";
+import { FileCreationMenuItems } from "./FileCreationMenuItems";
 import { WorkbenchTitlebarHost } from "../workbench-plugin-hosts";
 import { ButtonTooltip, WorkbenchIcon } from "./activity-components";
 
@@ -116,26 +116,7 @@ export function WorkbenchTitlebar({
                 </DropdownMenu.SubTrigger>
                 <DropdownMenu.Portal>
                   <DropdownMenu.SubContent className="menu-content" sideOffset={6} alignOffset={-5}>
-                    {fileCreationOptions(creationOptions).map((option) => (
-                      <DropdownMenu.Item
-                        className="menu-item"
-                        key={`${option.id}:${option.extension}`}
-                        onSelect={() => onNewDocument(option)}
-                      >
-                        {option.icon ? (
-                          <span
-                            className="resource-icon resource-icon--menu"
-                            title={option.icon.title}
-                            style={{
-                              color: option.icon.foreground ?? "currentColor",
-                              background: option.icon.background ?? "transparent",
-                            }}
-                          >{option.icon.label}</span>
-                        ) : <WorkbenchIcon icon="file" size={15} />}
-                        <span>{option.label}</span>
-                        <span className="menu-item__hint">{option.extension}</span>
-                      </DropdownMenu.Item>
-                    ))}
+                    <FileCreationMenuItems options={creationOptions} onSelect={onNewDocument} />
                   </DropdownMenu.SubContent>
                 </DropdownMenu.Portal>
               </DropdownMenu.Sub>

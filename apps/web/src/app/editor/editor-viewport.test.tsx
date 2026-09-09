@@ -113,8 +113,14 @@ describe("App wiring", () => {
       ["src/app/editor/WindowedHighlightedSource.tsx", "apps/web/src/app/editor/WindowedHighlightedSource.tsx"].find((path) => existsSync(path)) ?? "src/app/editor/WindowedHighlightedSource.tsx",
       "utf8",
     );
+    const scrollerSource = readFileSync(
+      ["src/app/editor/EditorHighlightScroller.tsx", "apps/web/src/app/editor/EditorHighlightScroller.tsx"].find((path) => existsSync(path)) ?? "src/app/editor/EditorHighlightScroller.tsx",
+      "utf8",
+    );
     expect(appSource).toContain("<EditorLineRuler");
-    expect(appSource).toContain("<WindowedHighlightedSource");
+    expect(appSource).toContain("<EditorHighlightScroller");
+    expect(appSource).toContain("viewportStore={editorViewportStore}");
+    expect(scrollerSource).toContain("<WindowedHighlightedSource");
     expect(rulerSource).toContain("useEditorViewportLineRange(");
     expect(syntaxWindowSource).toContain("useEditorViewportLineRange(");
   });

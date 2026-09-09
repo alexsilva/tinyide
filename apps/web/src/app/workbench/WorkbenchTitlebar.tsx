@@ -1,5 +1,5 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { AlignLeft, Check, ChevronDown, ChevronRight, FolderRoot, Info, RotateCw, Save, Settings2 } from "lucide-react";
+import { AlignLeft, Check, ChevronDown, ChevronRight, FolderPlus, FolderRoot, Info, RotateCw, Save, Settings2 } from "lucide-react";
 import type {
   ExecutionProfile,
   WorkbenchStateApi,
@@ -26,6 +26,7 @@ export interface WorkbenchTitlebarProps {
   readonly contributions: readonly WorkbenchTitlebarContribution[];
   readonly workbenchState: WorkbenchStateApi;
   readonly onProjectMenuOpen: () => void;
+  readonly onCreateProject: () => void;
   readonly onOpenProject: () => void;
   readonly onOpenRecentProject: (project: RecentProject) => void;
   readonly onNewDocument: (option?: WorkspaceFileCreationOption) => void;
@@ -60,6 +61,7 @@ export function WorkbenchTitlebar({
   contributions,
   workbenchState,
   onProjectMenuOpen,
+  onCreateProject,
   onOpenProject,
   onOpenRecentProject,
   onNewDocument,
@@ -84,6 +86,9 @@ export function WorkbenchTitlebar({
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content className="menu-content" align="start" sideOffset={6}>
+            <DropdownMenu.Item className="menu-item" onSelect={onCreateProject}>
+              <FolderPlus size={15} /> Criar projeto...
+            </DropdownMenu.Item>
             <DropdownMenu.Item className="menu-item" onSelect={onOpenProject}>
               <WorkbenchIcon icon="folder-open" size={15} /> Abrir projeto...
             </DropdownMenu.Item>

@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { formatCommandLineArguments, parseCommandLineArguments } from "@tinyide/core";
+import { ProjectCreateDialog } from "./ProjectCreateDialog";
 import { ProjectOpenDialog } from "./ProjectOpenDialog";
 import {
   ExecutionViewHost,
@@ -238,6 +239,7 @@ import {
 import {
   configureDesktopWorkspaceWatcher,
   copyWorkspaceResourcesToSystem,
+  createProjectDirectory,
   desktopWatcherDefaultIgnoredDirectories,
   openInSystemFileManager,
   openDesktopProjectWindow,
@@ -704,6 +706,8 @@ export function App() {
   const [watcherDraftDirectories, setWatcherDraftDirectories] = useState<readonly string[]>([]);
   const [workbenchDialog, setWorkbenchDialog] = useState<ActiveWorkbenchDialog>();
   const [projectOpenDialog, setProjectOpenDialog] = useState(false);
+  const [projectCreateDialog, setProjectCreateDialog] = useState(false);
+  const [projectCreateName, setProjectCreateName] = useState("");
   const [recentProjects, setRecentProjects] = useState<readonly RecentProject[]>([]);
   const [projectOpenTarget, setProjectOpenTarget] = useState<Exclude<ProjectOpenTarget, "ask">>("current");
   const [rememberProjectOpenTarget, setRememberProjectOpenTarget] = useState(false);
@@ -3186,11 +3190,19 @@ export function App() {
     debugRestartPromiseRef.current.clear();
   };
 
-  const activateProject = async (handle: BrowserDirectoryHandle, knownRoot?: string): Promise<boolean> => {
+  const confirmDiscardDirtyDocuments = (): boolean => {
     const dirtyDocuments = documentsRef.current.filter((document) => document.content !== document.savedContent);
-    if (dirtyDocuments.length && !window.confirm(
+    return !dirtyDocuments.length || window.confirm(
       `${dirtyDocuments.length === 1 ? "Há um arquivo não salvo" : `Há ${dirtyDocuments.length} arquivos não salvos`}. Abrir outro projeto na tela atual descartará essas alterações. Continuar?`,
-    )) return false;
+    );
+  };
+
+  const activateProject = async (
+    handle: BrowserDirectoryHandle,
+    knownRoot?: string,
+    confirmDiscard = true,
+  ): Promise<boolean> => {
+    if (confirmDiscard && !confirmDiscardDirtyDocuments()) return false;
     const rootEntries = await listDirectory(handle);
     const workspaceRootHint = knownRoot ?? await workspaceRootHintForHandle(handle);
     const hostWorkspace = await setHostWorkspace(handle.name, workspaceRootHint);
@@ -3228,7 +3240,8 @@ export function App() {
     recentProject?: RecentProject,
     reservedBrowserTab?: Window | null,
     target: Exclude<ProjectOpenTarget, "ask"> = projectOpenTarget,
-  ) => {
+    confirmDiscard = true,
+  ): Promise<boolean> => {
     const rootEntries = recentProject ? undefined : await listDirectory(handle);
     const root = recentProject?.path ?? await workspaceRootHintForHandle(handle);
     const remembered = recentProject ?? await rememberRecentProject({
@@ -3238,8 +3251,9 @@ export function App() {
     });
     await persistProjectOpenChoice(target);
     if (target === "current") {
-      if (await activateProject(handle, root)) setProjectOpenDialog(false);
-      return;
+      const activated = await activateProject(handle, root, confirmDiscard);
+      if (activated) setProjectOpenDialog(false);
+      return activated;
     }
     // A janela nova nasce sem escopo e o declara ao abrir o projeto: quem
     // define o diretório de estado é o caminho aberto, não um id sorteado aqui.
@@ -3254,6 +3268,7 @@ export function App() {
     }
     setRecentProjects(await readRecentProjects());
     setProjectOpenDialog(false);
+    return true;
   };
 
   const chooseProjectDirectory = async () => {
@@ -3266,6 +3281,29 @@ export function App() {
       await openProjectInTarget(handle, undefined, reservedBrowserTab);
     } catch (cause) {
       reservedBrowserTab?.close();
+      throw cause;
+    } finally {
+      setProjectOpenBusy(false);
+    }
+  };
+
+  const createProject = async () => {
+    const target = projectOpenTarget;
+    if (target === "current" && !confirmDiscardDirtyDocuments()) return;
+    const reservedBrowserTab = target === "new" && !isDesktopHost()
+      ? window.open("about:blank", "_blank")
+      : undefined;
+    setProjectOpenBusy(true);
+    try {
+      const handle = await createProjectDirectory(
+        projectCreateName,
+        workspaceRoot ?? recentProjects[0]?.path,
+      );
+      const opened = await openProjectInTarget(handle, undefined, reservedBrowserTab, target, false);
+      if (opened) setProjectCreateDialog(false);
+    } catch (cause) {
+      reservedBrowserTab?.close();
+      if ((cause as { readonly name?: unknown })?.name === "AbortError") return;
       throw cause;
     } finally {
       setProjectOpenBusy(false);
@@ -3353,7 +3391,15 @@ export function App() {
 
   const openProjectDialog = async () => {
     await loadProjectOpeningState();
+    setProjectCreateDialog(false);
     setProjectOpenDialog(true);
+  };
+
+  const openProjectCreateDialog = async () => {
+    await loadProjectOpeningState();
+    setProjectCreateName("");
+    setProjectOpenDialog(false);
+    setProjectCreateDialog(true);
   };
 
   const openRecentProjectFromMenu = async (project: RecentProject) => {
@@ -7287,6 +7333,7 @@ export function App() {
           contributions={workbenchTitlebarContributions}
           workbenchState={workbenchState}
           onProjectMenuOpen={() => invoke(loadProjectOpeningState)}
+          onCreateProject={() => invoke(openProjectCreateDialog)}
           onOpenProject={() => invoke(openProjectDialog)}
           onOpenRecentProject={(project) => invoke(() => openRecentProjectFromMenu(project))}
           onNewDocument={newDocument}
@@ -7534,6 +7581,7 @@ export function App() {
                 fileCreationOptions={workspaceFileCreationOptions}
                 onNewDocument={newDocument}
                 onOpenFile={() => invoke(openSingleFile)}
+                onCreateProject={() => invoke(openProjectCreateDialog)}
                 onOpenProject={() => invoke(openProjectDialog)}
               />
             )}
@@ -7800,6 +7848,21 @@ export function App() {
               setRecentProjects(await readRecentProjects());
             })}
             onClose={() => setProjectOpenDialog(false)}
+          />
+        ) : null}
+
+        {projectCreateDialog ? (
+          <ProjectCreateDialog
+            name={projectCreateName}
+            target={projectOpenTarget}
+            rememberChoice={rememberProjectOpenTarget}
+            desktop={isDesktopHost()}
+            busy={projectOpenBusy}
+            onNameChange={setProjectCreateName}
+            onTargetChange={setProjectOpenTarget}
+            onRememberChoiceChange={setRememberProjectOpenTarget}
+            onCreate={() => invoke(createProject)}
+            onClose={() => setProjectCreateDialog(false)}
           />
         ) : null}
 

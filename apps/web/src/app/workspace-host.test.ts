@@ -5,9 +5,11 @@ import type {
   BrowserFileHandle,
 } from "../browser-filesystem";
 import {
+  createProjectDirectory,
   desktopWatcherDefaultIgnoredDirectories,
   openInSystemFileManager,
   pickWorkspaceDirectory,
+  PROJECT_PARENT_PICKER_ID,
   WORKSPACE_PICKER_ID,
   workspaceRootFromFilePath,
   workspaceRootHintForHandle,
@@ -99,6 +101,53 @@ describe("pickWorkspaceDirectory", () => {
 
     await expect(pickWorkspaceDirectory("/mnt/projects/preco")).resolves.toMatchObject({ name: "preco" });
     expect(showDirectoryPicker).toHaveBeenCalledWith({ id: WORKSPACE_PICKER_ID, mode: "readwrite" });
+  });
+});
+
+describe("createProjectDirectory", () => {
+  it("delega criação e registro ao host desktop", async () => {
+    const createDirectory = vi.fn(async () => ({
+      token: "new-token",
+      name: "meu-projeto",
+      path: "/mnt/projects/meu-projeto",
+    }));
+    vi.stubGlobal("window", {
+      tinyideDesktop: {
+        getPathForFile: () => "",
+        pickDirectory: async () => undefined,
+        createProjectDirectory: createDirectory,
+        restoreDirectory: async () => undefined,
+        listDirectory: async () => [],
+        ensureFile: async () => true,
+        ensureDirectory: async () => true,
+        readFile: async () => ({ bytes: new Uint8Array(), lastModified: 0 }),
+        writeFile: async () => true,
+        removeEntry: async () => true,
+      },
+    });
+
+    await expect(createProjectDirectory("  meu-projeto  ", "/mnt/projects/atual"))
+      .resolves.toMatchObject({ name: "meu-projeto", desktopWorkspaceRoot: "/mnt/projects/meu-projeto" });
+    expect(createDirectory).toHaveBeenCalledWith("meu-projeto", "/mnt/projects/atual");
+  });
+
+  it("cria uma pasta filha inédita pelo seletor do navegador", async () => {
+    const created = directoryHandle("meu-projeto", []);
+    const getDirectoryHandle = vi.fn(async () => created);
+    const parent = { ...directoryHandle("projects", []), getDirectoryHandle };
+    const showDirectoryPicker = vi.fn(async () => parent);
+    vi.stubGlobal("window", { showDirectoryPicker });
+
+    await expect(createProjectDirectory("meu-projeto")).resolves.toBe(created);
+    expect(showDirectoryPicker).toHaveBeenCalledWith({ id: PROJECT_PARENT_PICKER_ID, mode: "readwrite" });
+    expect(getDirectoryHandle).toHaveBeenCalledWith("meu-projeto", { create: true });
+  });
+
+  it("não converte silenciosamente uma pasta existente em projeto", async () => {
+    const parent = directoryHandle("projects", [directoryHandle("Meu-Projeto", [])]);
+    vi.stubGlobal("window", { showDirectoryPicker: async () => parent });
+
+    await expect(createProjectDirectory("meu-projeto")).rejects.toThrow("Já existe um arquivo ou uma pasta");
   });
 });
 

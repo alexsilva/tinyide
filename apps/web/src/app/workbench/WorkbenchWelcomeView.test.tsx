@@ -24,6 +24,7 @@ describe("WorkbenchWelcomeView", () => {
 
     const onNewDocument = vi.fn();
     const onOpenFile = vi.fn();
+    const onCreateProject = vi.fn();
     const onOpenProject = vi.fn();
 
     act(() => {
@@ -32,6 +33,7 @@ describe("WorkbenchWelcomeView", () => {
           fileCreationOptions={[]}
           onNewDocument={onNewDocument}
           onOpenFile={onOpenFile}
+          onCreateProject={onCreateProject}
           onOpenProject={onOpenProject}
         />,
       );
@@ -43,7 +45,7 @@ describe("WorkbenchWelcomeView", () => {
     expect(host.textContent).toContain("Crie, abra ou arraste um arquivo para começar.");
 
     const buttons = host.querySelectorAll<HTMLButtonElement>("button");
-    expect(buttons.length).toBe(3);
+    expect(buttons.length).toBe(4);
 
     // Novo arquivo
     act(() => buttons[0]?.click());
@@ -53,8 +55,12 @@ describe("WorkbenchWelcomeView", () => {
     act(() => buttons[1]?.click());
     expect(onOpenFile).toHaveBeenCalledTimes(1);
 
-    // Abrir projeto
+    // Criar projeto
     act(() => buttons[2]?.click());
+    expect(onCreateProject).toHaveBeenCalledTimes(1);
+
+    // Abrir projeto
+    act(() => buttons[3]?.click());
     expect(onOpenProject).toHaveBeenCalledTimes(1);
   });
 });

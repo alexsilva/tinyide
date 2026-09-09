@@ -40,6 +40,20 @@ const PANEL_WINDOW_BOUNDS = { width: 1040, height: 700, minWidth: 520, minHeight
 // ponteiro de restauração: qual projeto cada janela reabre é decidido pelo
 // escopo na URL e, na falta dele, pelo ponteiro por host do runtime.
 const WORKSPACE_PICKER_STATE_KEY = "workspace-picker-directory";
+const INVALID_PROJECT_NAME_CHARACTERS = /[<>:"/\\|?*\u0000-\u001f]/;
+const WINDOWS_RESERVED_PROJECT_NAMES = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
+
+function validatedProjectName(value) {
+  const name = typeof value === "string" ? value.trim() : "";
+  if (!name) throw new Error("Informe o nome do projeto.");
+  if (name.length > 120) throw new Error("Use no máximo 120 caracteres no nome do projeto.");
+  if (name === "." || name === ".." || INVALID_PROJECT_NAME_CHARACTERS.test(name)) {
+    throw new Error("O nome do projeto não pode ser usado como nome de pasta.");
+  }
+  if (/[. ]$/.test(name)) throw new Error("O nome do projeto não pode terminar com ponto ou espaço.");
+  if (WINDOWS_RESERVED_PROJECT_NAMES.test(name)) throw new Error("Esse nome de projeto é reservado pelo sistema operacional.");
+  return name;
+}
 
 function installApplicationFileLogging() {
   const logger = createFileLogger({
@@ -183,6 +197,29 @@ function installDesktopFileSystemHandlers() {
     });
     if (result.canceled || !result.filePaths[0]) return undefined;
     return await registerDesktopWorkspace(result.filePaths[0], { owner });
+  });
+
+  ipcMain.handle("tinyide:workspace:create-project", async (event, requestedName, defaultPath) => {
+    const owner = event.sender.id;
+    const name = validatedProjectName(requestedName);
+    const startDirectory = await workspacePickerStartDirectory(stateRoot, defaultPath);
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "Escolher local do novo projeto",
+      properties: ["openDirectory", "createDirectory"],
+      ...(startDirectory ? { defaultPath: startDirectory } : {}),
+    });
+    if (result.canceled || !result.filePaths[0]) return undefined;
+
+    const projectPath = join(result.filePaths[0], name);
+    try {
+      await mkdir(projectPath);
+    } catch (cause) {
+      if (cause?.code === "EEXIST") {
+        throw new Error(`Já existe um arquivo ou uma pasta chamada “${name}” nesse local.`);
+      }
+      throw cause;
+    }
+    return await registerDesktopWorkspace(projectPath, { owner });
   });
 
   ipcMain.handle("tinyide:workspace:restore", async (event, rootPath) => {

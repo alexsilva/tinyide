@@ -4,6 +4,7 @@ import type {
   BrowserWritableFileStream,
 } from "../browser-filesystem";
 import { projectRuntimeFetch } from "./project-session";
+import { normalizedProjectName, projectNameError } from "./project-creation";
 
 interface DesktopWorkspaceDescriptor {
   readonly token: string;
@@ -39,6 +40,7 @@ export interface TinyIdeDesktopApi {
   notifyReady?(): void;
   getPathForFile(file: File): string;
   pickDirectory?(defaultPath?: string): Promise<DesktopWorkspaceDescriptor | undefined>;
+  createProjectDirectory?(name: string, defaultPath?: string): Promise<DesktopWorkspaceDescriptor | undefined>;
   restoreDirectory?(path: string): Promise<DesktopWorkspaceDescriptor | undefined>;
   openProjectWindow?(path: string): Promise<boolean>;
   openPanelWindow?(path: string, panelWindow: string, panelView?: string): Promise<boolean>;
@@ -418,6 +420,7 @@ export function isDesktopWorkspaceHandle(
  * lembrar o último diretório escolhido para este mesmo seletor.
  */
 export const WORKSPACE_PICKER_ID = "tinyide-workspace";
+export const PROJECT_PARENT_PICKER_ID = "tinyide-project-parent";
 
 export async function pickWorkspaceDirectory(defaultPath?: string): Promise<BrowserDirectoryHandle> {
   const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
@@ -428,6 +431,38 @@ export async function pickWorkspaceDirectory(defaultPath?: string): Promise<Brow
   }
   if (!window.showDirectoryPicker) throw new Error("Este navegador não oferece seleção de pastas.");
   return window.showDirectoryPicker({ id: WORKSPACE_PICKER_ID, mode: "readwrite" });
+}
+
+/**
+ * Cria uma raiz inédita dentro da pasta-pai escolhida. No desktop a operação
+ * fica no processo principal para que criação e registro usem o caminho real;
+ * no navegador, a File System Access API fornece diretamente o handle filho.
+ */
+export async function createProjectDirectory(
+  requestedName: string,
+  defaultPath?: string,
+): Promise<BrowserDirectoryHandle> {
+  const validationError = projectNameError(requestedName);
+  if (validationError) throw new Error(validationError);
+  const name = normalizedProjectName(requestedName);
+  const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
+  if (supportsDesktopWorkspace(desktop)) {
+    if (!desktop.createProjectDirectory) {
+      throw new Error("Esta versão do aplicativo não oferece criação de projetos. Reinicie após atualizar o tinyIde.");
+    }
+    const descriptor = await desktop.createProjectDirectory(name, defaultPath?.trim() || undefined);
+    if (!descriptor) throw new DOMException("A seleção do local foi cancelada.", "AbortError");
+    return new DesktopDirectoryHandleImpl(desktop, descriptor);
+  }
+
+  if (!window.showDirectoryPicker) throw new Error("Este navegador não oferece seleção de pastas.");
+  const parent = await window.showDirectoryPicker({ id: PROJECT_PARENT_PICKER_ID, mode: "readwrite" });
+  for await (const entry of parent.values()) {
+    if (entry.name.toLocaleLowerCase() === name.toLocaleLowerCase()) {
+      throw new Error(`Já existe um arquivo ou uma pasta chamada “${name}” nesse local.`);
+    }
+  }
+  return parent.getDirectoryHandle(name, { create: true });
 }
 
 export async function restoreDesktopWorkspaceHandle(

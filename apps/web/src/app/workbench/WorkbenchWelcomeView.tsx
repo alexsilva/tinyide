@@ -1,5 +1,5 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, FolderPlus } from "lucide-react";
 import type { WorkspaceFileCreationOption } from "@tinyide/plugin-api";
 import { FileCreationMenuItems } from "./FileCreationMenuItems";
 import { WorkbenchIcon } from "./activity-components";
@@ -11,6 +11,8 @@ export interface WorkbenchWelcomeViewProps {
   readonly onNewDocument: (option?: WorkspaceFileCreationOption) => void;
   /** Callback para abrir um único arquivo do sistema de arquivos ou storage. */
   readonly onOpenFile: () => void;
+  /** Callback para criar e abrir uma nova pasta de projeto. */
+  readonly onCreateProject: () => void;
   /** Callback para abrir o diálogo de seleção de projeto/workspace. */
   readonly onOpenProject: () => void;
 }
@@ -24,6 +26,7 @@ export function WorkbenchWelcomeView({
   fileCreationOptions: rawOptions,
   onNewDocument,
   onOpenFile,
+  onCreateProject,
   onOpenProject,
 }: WorkbenchWelcomeViewProps) {
   return (
@@ -52,6 +55,9 @@ export function WorkbenchWelcomeView({
         )}
         <button className="button secondary" type="button" onClick={onOpenFile}>
           <WorkbenchIcon icon="file" size={16} /> Abrir arquivo
+        </button>
+        <button className="button secondary" type="button" onClick={onCreateProject}>
+          <FolderPlus size={16} /> Criar projeto
         </button>
         <button className="button secondary" type="button" onClick={onOpenProject}>
           <WorkbenchIcon icon="folder-open" size={16} /> Abrir projeto

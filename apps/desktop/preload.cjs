@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld("tinyideDesktop", {
   pickDirectory(defaultPath) {
     return ipcRenderer.invoke("tinyide:workspace:pick", defaultPath);
   },
+  createProjectDirectory(name, defaultPath) {
+    return ipcRenderer.invoke("tinyide:workspace:create-project", name, defaultPath);
+  },
   restoreDirectory(path) {
     return ipcRenderer.invoke("tinyide:workspace:restore", path);
   },

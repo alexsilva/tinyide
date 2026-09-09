@@ -97,7 +97,7 @@ describe("HighlightedSource com virtualWindow (espaçadores)", () => {
   const lines = Array.from({ length: 100 }, (_, index) => `linha palavra${index}`);
   const source = lines.join("\n");
   const lineStarts = [0, ...[...source.matchAll(/\n/g)].map((match) => match.index + 1)];
-  const lineHeight = 21.45;
+  const lineHeight = 21;
 
   function renderVirtual(startLine: number, endLine: number): HTMLPreElement {
     const start = lineStarts[startLine - 1] ?? 0;

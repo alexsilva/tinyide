@@ -8,7 +8,20 @@ export const DEFAULT_EDITOR_SETTINGS: ResolvedEditorSettings = {
   lineNumbers: true,
 };
 
-export const EDITOR_DEFAULT_LINE_HEIGHT = 21.45;
+export const EDITOR_LINE_HEIGHT_FACTOR = 1.65;
+
+/**
+ * Altura de linha do editor em px inteiros. O motor de layout quantiza cada line box no grid
+ * interno (1/64px no Blink), então um line-height fracionário (13px × 1.65 = 21.45px) renderiza
+ * 21.4375px por linha enquanto espaçadores e overlays multiplicam o valor nominal — o desvio de
+ * ~0.0125px/linha soma ~12px a cada mil linhas e desalinha caret, régua e sintaxe em arquivos
+ * grandes. Valores inteiros são exatos no grid e mantêm texto e aritmética JS coincidentes.
+ */
+export function editorLineHeightPx(fontSize: number): number {
+  return Math.round(fontSize * EDITOR_LINE_HEIGHT_FACTOR);
+}
+
+export const EDITOR_DEFAULT_LINE_HEIGHT = editorLineHeightPx(13);
 export const EDITOR_CONTENT_PADDING = 18;
 
 export function resolveEditorSettings(

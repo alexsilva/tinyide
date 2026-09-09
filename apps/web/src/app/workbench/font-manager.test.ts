@@ -70,5 +70,21 @@ describe("font manager", () => {
     expect(values.get("--font-editor")).toBe('"mono", monospace');
     expect(values.get("--font-ui")).toBe('"ui", sans-serif');
     expect(values.get("--editor-font-size")).toBe("15px");
+    expect(values.get("--editor-line-height")).toBe("25px");
+  });
+
+  it("publishes an integer line-height for every allowed font size", () => {
+    // Line-height fracionário quantiza diferente do texto no grid de 1/64px do motor e o caret
+    // deriva ~12px a cada mil linhas (ver editorLineHeightPx); a var precisa ser px inteiro.
+    for (let size = workbenchFontDefaults.minEditorFontSize; size <= workbenchFontDefaults.maxEditorFontSize; size += 1) {
+      const values = new Map<string, string>();
+      const root = {
+        style: { setProperty: (name: string, value: string) => values.set(name, value) },
+      } as unknown as HTMLElement;
+      applyWorkbenchFonts({ editorFontSize: size }, root);
+      const lineHeight = values.get("--editor-line-height");
+      expect(lineHeight).toMatch(/^\d+px$/);
+      expect(Number.parseFloat(lineHeight ?? "")).toBeGreaterThanOrEqual(size);
+    }
   });
 });

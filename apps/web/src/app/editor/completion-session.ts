@@ -3,6 +3,7 @@ import type {
   TextEditorCompletionProvider,
   TextEditorDocumentSnapshot,
 } from "@tinyide/plugin-api";
+import { editorLineHeightPx } from "../editor-settings";
 import { extractCompletionPrefix, resolveTextEditorCompletions } from "./completion";
 import { textPositionAtOffset } from "./text-position";
 
@@ -22,7 +23,7 @@ export function estimateCaretScreenPosition(
   offset: number,
 ): { top: number; left: number; lineHeight: number } {
   const style = window.getComputedStyle(textarea);
-  const lineHeight = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.65 || 21;
+  const lineHeight = Number.parseFloat(style.lineHeight) || editorLineHeightPx(Number.parseFloat(style.fontSize)) || 21;
   const paddingTop = Number.parseFloat(style.paddingTop) || 0;
   const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
   const fontSize = Number.parseFloat(style.fontSize) || 13;

@@ -1,3 +1,4 @@
+import { editorLineHeightPx } from "../editor-settings";
 import type { FoldProjection } from "./folding";
 import { textOffsetAtPosition, textPositionAtOffset } from "./text-position";
 
@@ -11,7 +12,7 @@ export function cssPixelValue(value: string | undefined, fallback: number): numb
 
 export function editorLineHeight(style: CSSStyleDeclaration): number {
   const fontSize = cssPixelValue(style.fontSize, EDITOR_POINTER_FALLBACK_FONT_SIZE);
-  return cssPixelValue(style.lineHeight, fontSize * 1.65);
+  return cssPixelValue(style.lineHeight, editorLineHeightPx(fontSize));
 }
 
 function editorCharacterWidth(textarea: HTMLTextAreaElement, style: CSSStyleDeclaration): number {

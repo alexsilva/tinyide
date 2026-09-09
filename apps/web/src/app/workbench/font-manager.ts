@@ -4,6 +4,7 @@ import type {
   WorkbenchFontTarget,
 } from "@tinyide/plugin-api";
 import { WORKBENCH_FONT_CSS_VARIABLES } from "@tinyide/plugin-api";
+import { editorLineHeightPx } from "../editor-settings";
 import type { TinyIdePlatform } from "../platform";
 
 const DEFAULT_EDITOR_FONT_ID = "tinyide.editor.jetbrains-mono";
@@ -94,8 +95,12 @@ export function applyWorkbenchFonts(
   if (options.editorFont) {
     root.style.setProperty(WORKBENCH_FONT_CSS_VARIABLES.editor, options.editorFont.family);
   }
+  const editorFontSize = clampEditorFontSize(options.editorFontSize);
+  root.style.setProperty(WORKBENCH_FONT_CSS_VARIABLES.editorFontSize, `${editorFontSize}px`);
+  // Única fonte da var de altura de linha: texto, caret do textarea, régua e espaçadores JS
+  // dependem de o valor ser o mesmo px inteiro em todas as camadas (ver editorLineHeightPx).
   root.style.setProperty(
-    WORKBENCH_FONT_CSS_VARIABLES.editorFontSize,
-    `${clampEditorFontSize(options.editorFontSize)}px`,
+    WORKBENCH_FONT_CSS_VARIABLES.editorLineHeight,
+    `${editorLineHeightPx(editorFontSize)}px`,
   );
 }

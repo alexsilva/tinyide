@@ -1087,6 +1087,7 @@ export const WORKBENCH_FONT_CSS_VARIABLES = {
   interface: "--font-ui",
   editor: "--font-editor",
   editorFontSize: "--editor-font-size",
+  editorLineHeight: "--editor-line-height",
 } as const;
 
 /**

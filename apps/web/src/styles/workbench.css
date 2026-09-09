@@ -222,7 +222,7 @@
 .editor-go-to-line__input { min-width: 0; flex: 1 1 auto; height: 23px; border: 0; background: transparent; color: var(--text); font-size: 11px; }
 .editor-go-to-line__input:focus-visible { outline: none; }
 .editor-actions select { height: 27px; min-width: 150px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2); color: var(--text); font-size: 11px; }
-.code-editor { width: 100%; height: 100%; resize: none; border: 0; outline: 0; padding: 18px 20px; background: var(--surface-editor); color: var(--editor-foreground); caret-color: var(--editor-caret); font: var(--editor-font-size, 13px)/1.65 var(--font-editor, monospace); tab-size: 4; }
+.code-editor { width: 100%; height: 100%; resize: none; border: 0; outline: 0; padding: 18px 20px; background: var(--surface-editor); color: var(--editor-foreground); caret-color: var(--editor-caret); font: var(--editor-font-size, 13px)/var(--editor-line-height, 21px) var(--font-editor, monospace); tab-size: 4; }
 
 .welcome-screen { grid-row: 1 / 4; display: grid; min-width: 0; max-width: 100%; overflow: hidden; place-content: center; justify-items: center; gap: 12px; padding: 40px; text-align: center; }
 .welcome-kicker { color: var(--muted); font-size: 12px; }

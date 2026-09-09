@@ -58,7 +58,7 @@ describe("editor settings", () => {
   });
 
   it("limits the ruler to visible lines plus overscan", () => {
-    expect(editorVisibleLineRange(7_008, 50_000, 800)).toEqual({ start: 2_319, end: 2_381 });
-    expect(editorVisibleLineRange(7_008, 0, 800)).toEqual({ start: 1, end: 50 });
+    expect(editorVisibleLineRange(7_008, 50_000, 800)).toEqual({ start: 2_369, end: 2_432 });
+    expect(editorVisibleLineRange(7_008, 0, 800)).toEqual({ start: 1, end: 51 });
   });
 });

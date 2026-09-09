@@ -22,7 +22,7 @@
   margin: 0;
   border: 0;
   padding: 18px 20px;
-  font: var(--editor-font-size, 13px)/1.65 var(--font-editor, monospace);
+  font: var(--editor-font-size, 13px)/var(--editor-line-height, 21px) var(--font-editor, monospace);
   tab-size: 4;
   white-space: pre;
   pointer-events: none;
@@ -38,17 +38,17 @@
   margin: 0;
   border: 0;
   padding: 18px 20px;
-  font: var(--editor-font-size, 13px)/1.65 var(--font-editor, monospace);
+  font: var(--editor-font-size, 13px)/var(--editor-line-height, 21px) var(--font-editor, monospace);
   tab-size: 4;
   white-space: pre;
 }
 .diagnostic-layer { pointer-events: none; z-index: 2; overflow: hidden; background: transparent; }
 .diagnostic-line {
   position: absolute;
-  top: calc(var(--editor-content-padding, 18px) + (var(--diagnostic-line) - 1) * var(--editor-line-height, 21.45px));
+  top: calc(var(--editor-content-padding, 18px) + (var(--diagnostic-line) - 1) * var(--editor-line-height, 21px));
   left: 0;
   width: 100%;
-  height: var(--editor-line-height, 21.45px);
+  height: var(--editor-line-height, 21px);
   color: #e75b65;
   background: rgb(231 91 101 / 7%);
 }
@@ -479,9 +479,9 @@
 .editor-completion-detail { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .editor-line-ruler { min-height: 0; overflow: hidden; border-right: 1px solid var(--border); background: color-mix(in srgb, var(--surface-editor) 72%, var(--surface-3)); color: var(--muted); user-select: none; scrollbar-width: none; }
 .editor-line-ruler::-webkit-scrollbar { display: none; }
-.editor-line-ruler pre { position: relative; min-height: 100%; margin: 0; padding: 0; font: var(--editor-font-size, 13px)/1.65 var(--font-editor, monospace); white-space: normal; }
+.editor-line-ruler pre { position: relative; min-height: 100%; margin: 0; padding: 0; font: var(--editor-font-size, 13px)/var(--editor-line-height, 21px) var(--font-editor, monospace); white-space: normal; }
 /* Layout da régua (estilo JetBrains): número à esquerda (breakpoint sobreposto), respiro e o diff colado na borda direita. */
-.editor-line-ruler__line { position: absolute; left: 0; display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) 10px; align-items: center; height: var(--editor-line-height, 21.45px); border: 0; padding: 0 0 0 8px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.editor-line-ruler__line { position: absolute; left: 0; display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) 10px; align-items: center; height: var(--editor-line-height, 21px); border: 0; padding: 0 0 0 8px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .editor-line-ruler__line:hover,
 .editor-line-ruler__line:focus-visible { outline: none; background: var(--surface-3); color: var(--text); }
 .editor-line-ruler__line b { grid-row: 1; grid-column: 1; overflow: hidden; font: inherit; font-weight: 400; text-overflow: clip; }
@@ -512,7 +512,7 @@
 .highlight-editor.has-inline-ruler > .highlight-editor__content { flex: 1 0 auto; min-width: calc(100% - var(--editor-gutter-width)); height: max-content; }
 .editor-fold-overlay--inline { top: 0; bottom: 0; left: 100%; }
 .editor-fold-overlay--inline .editor-fold-toggle { top: var(--fold-line-top); }
-.editor-fold-toggle { position: absolute; top: calc(var(--fold-line-top) - var(--editor-scroll-top, 0px)); left: 1px; display: flex; width: 14px; height: var(--editor-line-height, 21.45px); align-items: center; justify-content: center; border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 3px; padding: 0; background: color-mix(in srgb, var(--surface-editor) 84%, var(--surface-3)); color: var(--muted); font: 12px/1 var(--font-editor, monospace); pointer-events: auto; cursor: pointer; }
+.editor-fold-toggle { position: absolute; top: calc(var(--fold-line-top) - var(--editor-scroll-top, 0px)); left: 1px; display: flex; width: 14px; height: var(--editor-line-height, 21px); align-items: center; justify-content: center; border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 3px; padding: 0; background: color-mix(in srgb, var(--surface-editor) 84%, var(--surface-3)); color: var(--muted); font: 12px/1 var(--font-editor, monospace); pointer-events: auto; cursor: pointer; }
 .editor-fold-toggle:hover,
 .editor-fold-toggle:focus-visible { outline: none; border-color: var(--accent); background: var(--surface-3); color: var(--text); }
 .editor-fold-toggle.is-folded { border-color: color-mix(in srgb, var(--accent) 60%, transparent); color: var(--accent); }
@@ -537,9 +537,9 @@
 .editor-line-ruler__line.is-change-hover .editor-line-ruler__marker::before { border-radius: 0; }
 .editor-attention-lines { position: absolute; z-index: 1; top: calc(var(--attention-line-content-top) - var(--editor-scroll-top, 0px)); right: 0; left: var(--editor-gutter-width); height: var(--attention-line-height); pointer-events: none; background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 58%, transparent); }
 .editor-attention-lines--inline { top: var(--attention-line-content-top); left: 0; }
-.editor-debug-current-line { position: absolute; z-index: 1; top: calc(var(--debug-line-content-top) - var(--editor-scroll-top, 0px)); right: 0; left: var(--editor-gutter-width); height: var(--editor-line-height, 21.45px); pointer-events: none; background: color-mix(in srgb, var(--accent) 18%, transparent); border-top: 1px solid color-mix(in srgb, var(--accent) 18%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, transparent); }
+.editor-debug-current-line { position: absolute; z-index: 1; top: calc(var(--debug-line-content-top) - var(--editor-scroll-top, 0px)); right: 0; left: var(--editor-gutter-width); height: var(--editor-line-height, 21px); pointer-events: none; background: color-mix(in srgb, var(--accent) 18%, transparent); border-top: 1px solid color-mix(in srgb, var(--accent) 18%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, transparent); }
 .editor-breakpoint-lines { position: absolute; z-index: 1; inset: 0; pointer-events: none; }
-.editor-breakpoint-line { position: absolute; top: calc(var(--breakpoint-line-top) - var(--editor-scroll-top, 0px)); right: 0; left: var(--editor-gutter-width); height: var(--editor-line-height, 21.45px); background: color-mix(in srgb, #e05252 14%, transparent); }
+.editor-breakpoint-line { position: absolute; top: calc(var(--breakpoint-line-top) - var(--editor-scroll-top, 0px)); right: 0; left: var(--editor-gutter-width); height: var(--editor-line-height, 21px); background: color-mix(in srgb, #e05252 14%, transparent); }
 .editor-breakpoint-lines--inline .editor-breakpoint-line { top: var(--breakpoint-line-top); left: 0; }
 .editor-debug-current-line--inline { top: var(--debug-line-content-top); left: 0; }
 .execution-panel-view { display: flex; height: calc(100% - var(--execution-tab-height, 30px)); min-height: 0; flex-direction: column; }

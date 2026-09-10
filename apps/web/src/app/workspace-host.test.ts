@@ -92,7 +92,31 @@ describe("pickWorkspaceDirectory", () => {
     });
 
     await expect(pickWorkspaceDirectory("/mnt/projects/preco")).resolves.toMatchObject({ name: "preco" });
-    expect(pickDirectory).toHaveBeenCalledWith("/mnt/projects/preco");
+    expect(pickDirectory).toHaveBeenCalledWith("/mnt/projects/preco", { claim: true });
+  });
+
+  /**
+   * Abrir em outra janela mantém esta no projeto atual: pedir a posse aqui faria
+   * o processo principal liberar o workspace ainda em uso e derrubar seus tokens.
+   */
+  it("não reivindica a posse quando o projeto vai abrir em outra janela", async () => {
+    const pickDirectory = vi.fn(async () => ({ token: "token", name: "outro", path: "/mnt/projects/outro" }));
+    vi.stubGlobal("window", {
+      tinyideDesktop: {
+        getPathForFile: () => "",
+        pickDirectory,
+        restoreDirectory: async () => undefined,
+        listDirectory: async () => [],
+        ensureFile: async () => true,
+        ensureDirectory: async () => true,
+        readFile: async () => ({ bytes: new Uint8Array(), lastModified: 0 }),
+        writeFile: async () => true,
+        removeEntry: async () => true,
+      },
+    });
+
+    await pickWorkspaceDirectory("/mnt/projects/preco", { claim: false });
+    expect(pickDirectory).toHaveBeenCalledWith("/mnt/projects/preco", { claim: false });
   });
 
   it("identifica o seletor do navegador para que ele reabra no último diretório", async () => {
@@ -128,7 +152,32 @@ describe("createProjectDirectory", () => {
 
     await expect(createProjectDirectory("  meu-projeto  ", "/mnt/projects/atual"))
       .resolves.toMatchObject({ name: "meu-projeto", desktopWorkspaceRoot: "/mnt/projects/meu-projeto" });
-    expect(createDirectory).toHaveBeenCalledWith("meu-projeto", "/mnt/projects/atual");
+    expect(createDirectory).toHaveBeenCalledWith("meu-projeto", "/mnt/projects/atual", { claim: true });
+  });
+
+  it("cria sem reivindicar a posse quando o projeto novo vai abrir em outra janela", async () => {
+    const createDirectory = vi.fn(async () => ({
+      token: "new-token",
+      name: "meu-projeto",
+      path: "/mnt/projects/meu-projeto",
+    }));
+    vi.stubGlobal("window", {
+      tinyideDesktop: {
+        getPathForFile: () => "",
+        pickDirectory: async () => undefined,
+        createProjectDirectory: createDirectory,
+        restoreDirectory: async () => undefined,
+        listDirectory: async () => [],
+        ensureFile: async () => true,
+        ensureDirectory: async () => true,
+        readFile: async () => ({ bytes: new Uint8Array(), lastModified: 0 }),
+        writeFile: async () => true,
+        removeEntry: async () => true,
+      },
+    });
+
+    await createProjectDirectory("meu-projeto", "/mnt/projects/atual", { claim: false });
+    expect(createDirectory).toHaveBeenCalledWith("meu-projeto", "/mnt/projects/atual", { claim: false });
   });
 
   it("cria uma pasta filha inédita pelo seletor do navegador", async () => {

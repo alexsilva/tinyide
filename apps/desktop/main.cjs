@@ -134,6 +134,16 @@ function startWorkspaceWatcher(root, extraIgnoredDirectories = []) {
 }
 
 /**
+ * Escolher um diretório não é o mesmo que passar a usá-lo. Quando o projeto vai
+ * abrir em outra janela, quem operou o diálogo continua no projeto dela: marcá-la
+ * como dona do novo workspace transferiria a posse, liberaria o projeto ainda
+ * exibido e invalidaria os tokens que a janela usa para ler e gravar arquivos.
+ */
+function requestedOwner(event, options) {
+  return options?.claim === false ? undefined : event.sender.id;
+}
+
+/**
  * `owner` é a janela que passa a usar o workspace. Registrar sem dono (o caso
  * de `open-window`, em que a janela ainda não existe) mantém o workspace vivo
  * até alguém reivindicá-lo.
@@ -185,8 +195,8 @@ function installDesktopFileSystemHandlers() {
     return true;
   });
 
-  ipcMain.handle("tinyide:workspace:pick", async (event, defaultPath) => {
-    const owner = event.sender.id;
+  ipcMain.handle("tinyide:workspace:pick", async (event, defaultPath, options) => {
+    const owner = requestedOwner(event, options);
     const testWorkspace = process.env.TINYIDE_TEST_WORKSPACE_PICKER_PATH?.trim();
     if (testWorkspace) return await registerDesktopWorkspace(testWorkspace, { owner });
     const startDirectory = await workspacePickerStartDirectory(stateRoot, defaultPath);
@@ -199,8 +209,8 @@ function installDesktopFileSystemHandlers() {
     return await registerDesktopWorkspace(result.filePaths[0], { owner });
   });
 
-  ipcMain.handle("tinyide:workspace:create-project", async (event, requestedName, defaultPath) => {
-    const owner = event.sender.id;
+  ipcMain.handle("tinyide:workspace:create-project", async (event, requestedName, defaultPath, options) => {
+    const owner = requestedOwner(event, options);
     const name = validatedProjectName(requestedName);
     const startDirectory = await workspacePickerStartDirectory(stateRoot, defaultPath);
     const result = await dialog.showOpenDialog(mainWindow, {

@@ -98,6 +98,22 @@ describe("registro de workspaces do desktop", () => {
     expect(started).toHaveLength(2);
   });
 
+  /**
+   * Criar ou escolher um projeto para abrir em outra janela não pode custar o
+   * projeto da janela que operou o diálogo: sem dono, o registro novo convive
+   * com o antigo e os tokens em uso continuam valendo.
+   */
+  it("registrar um projeto sem dono preserva o workspace que a janela ainda usa", async () => {
+    const {instance, closed} = registry();
+
+    const atual = await instance.register("/projetos/a", {owner: 1});
+    await instance.register("/projetos/novo");
+
+    expect(closed).toEqual([]);
+    expect(instance.resolveToken(atual.token)).toBe("/projetos/a");
+    expect(instance.activeRoots()).toEqual(["/projetos/a", "/projetos/novo"]);
+  });
+
   it("registro sem janela dona sobrevive à troca de projeto de outra janela", async () => {
     const {instance, closed} = registry();
 

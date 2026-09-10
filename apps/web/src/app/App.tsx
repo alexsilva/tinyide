@@ -3272,13 +3272,21 @@ export function App() {
   };
 
   const chooseProjectDirectory = async () => {
-    const reservedBrowserTab = projectOpenTarget === "new" && !isDesktopHost()
+    const target = projectOpenTarget;
+    // O descarte é confirmado antes do seletor: escolher um diretório e só
+    // então desistir da troca deixaria esta janela sem o registro do projeto
+    // que ela continua exibindo.
+    if (target === "current" && !confirmDiscardDirtyDocuments()) return;
+    const reservedBrowserTab = target === "new" && !isDesktopHost()
       ? window.open("about:blank", "_blank")
       : undefined;
     setProjectOpenBusy(true);
     try {
-      const handle = await pickWorkspaceDirectory(workspaceRoot ?? recentProjects[0]?.path);
-      await openProjectInTarget(handle, undefined, reservedBrowserTab);
+      const handle = await pickWorkspaceDirectory(
+        workspaceRoot ?? recentProjects[0]?.path,
+        { claim: target === "current" },
+      );
+      await openProjectInTarget(handle, undefined, reservedBrowserTab, target, false);
     } catch (cause) {
       reservedBrowserTab?.close();
       throw cause;
@@ -3298,6 +3306,7 @@ export function App() {
       const handle = await createProjectDirectory(
         projectCreateName,
         workspaceRoot ?? recentProjects[0]?.path,
+        { claim: target === "current" },
       );
       const opened = await openProjectInTarget(handle, undefined, reservedBrowserTab, target, false);
       if (opened) setProjectCreateDialog(false);

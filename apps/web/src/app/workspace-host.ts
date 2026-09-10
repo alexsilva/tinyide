@@ -33,14 +33,31 @@ export interface DesktopClipboardEntry {
   readonly kind: "file" | "directory";
 }
 
+/**
+ * Quem escolhe um diretório nem sempre passa a usá-lo: abrir o projeto em outra
+ * janela deixa esta aqui no projeto de sempre. `claim: false` pede o registro
+ * sem dono, para que o processo principal não tire desta janela o workspace que
+ * ela ainda exibe — o que invalidaria os tokens em uso.
+ */
+export interface WorkspaceClaimOptions {
+  readonly claim: boolean;
+}
+
 export interface TinyIdeDesktopApi {
   readState?(key: string): Promise<unknown>;
   writeState?(key: string, value: unknown): Promise<boolean>;
   removeState?(key: string): Promise<boolean>;
   notifyReady?(): void;
   getPathForFile(file: File): string;
-  pickDirectory?(defaultPath?: string): Promise<DesktopWorkspaceDescriptor | undefined>;
-  createProjectDirectory?(name: string, defaultPath?: string): Promise<DesktopWorkspaceDescriptor | undefined>;
+  pickDirectory?(
+    defaultPath?: string,
+    options?: WorkspaceClaimOptions,
+  ): Promise<DesktopWorkspaceDescriptor | undefined>;
+  createProjectDirectory?(
+    name: string,
+    defaultPath?: string,
+    options?: WorkspaceClaimOptions,
+  ): Promise<DesktopWorkspaceDescriptor | undefined>;
   restoreDirectory?(path: string): Promise<DesktopWorkspaceDescriptor | undefined>;
   openProjectWindow?(path: string): Promise<boolean>;
   openPanelWindow?(path: string, panelWindow: string, panelView?: string): Promise<boolean>;
@@ -422,10 +439,13 @@ export function isDesktopWorkspaceHandle(
 export const WORKSPACE_PICKER_ID = "tinyide-workspace";
 export const PROJECT_PARENT_PICKER_ID = "tinyide-project-parent";
 
-export async function pickWorkspaceDirectory(defaultPath?: string): Promise<BrowserDirectoryHandle> {
+export async function pickWorkspaceDirectory(
+  defaultPath?: string,
+  options: WorkspaceClaimOptions = { claim: true },
+): Promise<BrowserDirectoryHandle> {
   const desktop = typeof window === "undefined" ? undefined : window.tinyideDesktop;
   if (supportsDesktopWorkspace(desktop)) {
-    const descriptor = await desktop.pickDirectory(defaultPath?.trim() || undefined);
+    const descriptor = await desktop.pickDirectory(defaultPath?.trim() || undefined, options);
     if (!descriptor) throw new DOMException("A seleção do diretório foi cancelada.", "AbortError");
     return new DesktopDirectoryHandleImpl(desktop, descriptor);
   }
@@ -441,6 +461,7 @@ export async function pickWorkspaceDirectory(defaultPath?: string): Promise<Brow
 export async function createProjectDirectory(
   requestedName: string,
   defaultPath?: string,
+  options: WorkspaceClaimOptions = { claim: true },
 ): Promise<BrowserDirectoryHandle> {
   const validationError = projectNameError(requestedName);
   if (validationError) throw new Error(validationError);
@@ -450,7 +471,7 @@ export async function createProjectDirectory(
     if (!desktop.createProjectDirectory) {
       throw new Error("Esta versão do aplicativo não oferece criação de projetos. Reinicie após atualizar o tinyIde.");
     }
-    const descriptor = await desktop.createProjectDirectory(name, defaultPath?.trim() || undefined);
+    const descriptor = await desktop.createProjectDirectory(name, defaultPath?.trim() || undefined, options);
     if (!descriptor) throw new DOMException("A seleção do local foi cancelada.", "AbortError");
     return new DesktopDirectoryHandleImpl(desktop, descriptor);
   }

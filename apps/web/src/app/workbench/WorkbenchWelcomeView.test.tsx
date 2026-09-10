@@ -45,7 +45,7 @@ describe("WorkbenchWelcomeView", () => {
     expect(host.textContent).toContain("Crie, abra ou arraste um arquivo para começar.");
 
     const buttons = host.querySelectorAll<HTMLButtonElement>("button");
-    expect(buttons.length).toBe(4);
+    expect(buttons.length).toBe(3);
 
     // Novo arquivo
     act(() => buttons[0]?.click());
@@ -55,12 +55,25 @@ describe("WorkbenchWelcomeView", () => {
     act(() => buttons[1]?.click());
     expect(onOpenFile).toHaveBeenCalledTimes(1);
 
-    // Criar projeto
-    act(() => buttons[2]?.click());
+    // Projeto: um único gatilho de dropdown, como o de "Novo arquivo"
+    const projectTrigger = buttons[2];
+    expect(projectTrigger?.textContent).toContain("Projeto");
+    expect(projectTrigger?.getAttribute("aria-haspopup")).toBe("menu");
+
+    act(() => {
+      projectTrigger?.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true}));
+    });
+
+    const menuItems = [...document.querySelectorAll<HTMLElement>('.menu-content [role="menuitem"]')];
+    expect(menuItems.map((item) => item.textContent?.trim())).toEqual(["Criar projeto...", "Abrir projeto..."]);
+
+    act(() => menuItems[0]?.click());
     expect(onCreateProject).toHaveBeenCalledTimes(1);
 
-    // Abrir projeto
-    act(() => buttons[3]?.click());
+    act(() => {
+      projectTrigger?.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true}));
+    });
+    act(() => document.querySelectorAll<HTMLElement>('.menu-content [role="menuitem"]')[1]?.click());
     expect(onOpenProject).toHaveBeenCalledTimes(1);
   });
 });

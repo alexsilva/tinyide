@@ -1,10 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
-import { createWorkspace, launchIde } from "./ide-app.mjs";
+import { createWorkspace, launchIde, openProjectPicker } from "./ide-app.mjs";
 
 const run = promisify(execFile);
 
@@ -52,15 +52,15 @@ test.describe("troca de workspace no app empacotado", () => {
     await projectB?.dispose();
   });
 
-  async function openProjectFromPicker(window) {
-    await window.getByText("Abrir projeto", { exact: true }).first().click();
-    await window.getByText("Escolher outro projeto", { exact: true }).click();
+  /** O menu "Projeto" da barra de título, distinto do dropdown da tela de boas-vindas. */
+  function projectMenu(window) {
+    return window.locator(".titlebar").getByRole("button", { name: /^Projeto/ });
   }
 
   test("abrir um projeto recente na tela atual troca o workspace", async () => {
     // Primeira execução: abre A pelo seletor, o que o registra nos recentes.
     const first = await launchIde(projectA.root, { userDataDir, pickerPath: projectA.root });
-    await openProjectFromPicker(first.window);
+    await openProjectPicker(first.window);
     await expect(first.window.getByText("somente-em-a.txt", { exact: true })).toBeVisible({ timeout: 45_000 });
     await first.close();
 
@@ -68,10 +68,10 @@ test.describe("troca de workspace no app empacotado", () => {
     // recentes, na tela atual — o cenário relatado.
     const second = await launchIde(projectB.root, { userDataDir, pickerPath: projectB.root });
     try {
-      await openProjectFromPicker(second.window);
+      await openProjectPicker(second.window);
       await expect(second.window.getByText("somente-em-b.txt", { exact: true })).toBeVisible({ timeout: 45_000 });
 
-      await second.window.getByRole("button", { name: /^Projeto/ }).click();
+      await projectMenu(second.window).click();
       await second.window.getByRole("menuitem", { name: new RegExp(basename(projectA.root)) }).click();
 
       await expect(second.window.getByText("somente-em-a.txt", { exact: true })).toBeVisible({ timeout: 45_000 });
@@ -79,6 +79,58 @@ test.describe("troca de workspace no app empacotado", () => {
       await expect(second.window.getByText("somente-em-b.txt", { exact: true })).toHaveCount(0);
     } finally {
       await second.close();
+    }
+  });
+
+  /**
+   * Abrir outro projeto em uma janela nova não é trocar de projeto: a janela que
+   * operou o diálogo continua no projeto dela. Enquanto o processo principal
+   * tratava a escolha como troca, ele transferia a posse do workspace e liberava
+   * o projeto ainda exibido — a janela de origem perdia o watcher e qualquer
+   * leitura falhava com "O workspace desktop não está mais registrado".
+   */
+  test("abrir um projeto em outra janela mantém o projeto da janela atual utilizável", async () => {
+    const windowState = await mkdtemp(join(tmpdir(), "tinyide-e2e-janela-"));
+
+    // Registra A nos recentes: é por ele que a janela de origem abre adiante.
+    const bootstrap = await launchIde(projectA.root, { userDataDir: windowState, pickerPath: projectA.root });
+    await openProjectPicker(bootstrap.window);
+    await expect(bootstrap.window.getByText("somente-em-a.txt", { exact: true })).toBeVisible({ timeout: 45_000 });
+    await bootstrap.close();
+
+    // O seletor agora devolve B: é o projeto que vai abrir na janela nova.
+    const ide = await launchIde(projectA.root, { userDataDir: windowState, pickerPath: projectB.root });
+    try {
+      // A janela de origem abre A pelos recentes: o seletor desta execução
+      // devolve B, que é o projeto reservado para a janela nova.
+      await ide.window.locator(".welcome-actions").getByRole("button", { name: /^Projeto/ }).click();
+      await ide.window.getByRole("menuitem", { name: "Abrir projeto..." }).click();
+      await ide.window.locator(".project-open-recent__main")
+        .filter({ hasText: basename(projectA.root) })
+        .click();
+      await expect(ide.window.getByText("somente-em-a.txt", { exact: true })).toBeVisible({ timeout: 45_000 });
+
+      await projectMenu(ide.window).click();
+      await ide.window.getByRole("menuitem", { name: "Abrir projeto..." }).click();
+      await ide.window.getByText("Nova janela", { exact: true }).click();
+      const openedWindow = ide.application.waitForEvent("window");
+      await ide.window.getByText("Escolher outro projeto", { exact: true }).click();
+
+      const second = await openedWindow;
+      await second.waitForLoadState("domcontentloaded");
+      await expect(second.getByText("somente-em-b.txt", { exact: true })).toBeVisible({ timeout: 45_000 });
+
+      // Um arquivo criado agora só aparece se a janela de origem ainda conseguir
+      // ler o disco do projeto dela: com o token invalidado, o Explorer ficava
+      // congelado no conteúdo antigo e o erro subia em toda operação.
+      await writeFile(projectA.file("criado-com-a-janela-nova.txt"), "novo\n", "utf8");
+      await ide.window.getByLabel("Ações do Explorer").click();
+      await ide.window.getByRole("menuitem", { name: "Atualizar" }).click();
+      await expect(ide.window.getByText("criado-com-a-janela-nova.txt", { exact: true }))
+        .toBeVisible({ timeout: 30_000 });
+      await expect(ide.window.getByText(/não está mais registrado/)).toHaveCount(0);
+    } finally {
+      await ide.close();
     }
   });
 
@@ -95,14 +147,14 @@ test.describe("troca de workspace no app empacotado", () => {
     const gitState = await mkdtemp(join(tmpdir(), "tinyide-e2e-git-"));
 
     const first = await launchIde(projectA.root, { userDataDir: gitState, pickerPath: projectA.root });
-    await openProjectFromPicker(first.window);
+    await openProjectPicker(first.window);
     await expect(first.window.getByText("somente-em-a.txt", { exact: true })).toBeVisible({ timeout: 45_000 });
     await first.close();
 
     const second = await launchIde(projectB.root, { userDataDir: gitState, pickerPath: projectB.root });
     try {
       const branchLabel = second.window.locator(".tinyide-git-titlebar__branch-label");
-      await openProjectFromPicker(second.window);
+      await openProjectPicker(second.window);
       await expect(branchLabel).toHaveText("branch-do-b", { timeout: 45_000 });
 
       // Em repositórios reais, `git status` leva o suficiente para a resposta
@@ -114,7 +166,7 @@ test.describe("troca de workspace no app empacotado", () => {
         await route.continue().catch(() => undefined);
       });
 
-      await second.window.getByRole("button", { name: /^Projeto/ }).click();
+      await projectMenu(second.window).click();
       await second.window.getByRole("menuitem", { name: new RegExp(basename(projectA.root)) }).click();
       await expect(branchLabel).toHaveText("branch-do-a", { timeout: 45_000 });
 
@@ -141,13 +193,13 @@ test.describe("troca de workspace no app empacotado", () => {
 
     // Registra A nos recentes: é por ele que a troca acontece mais adiante.
     const bootstrap = await launchIde(projectA.root, { userDataDir: terminalState, pickerPath: projectA.root });
-    await openProjectFromPicker(bootstrap.window);
+    await openProjectPicker(bootstrap.window);
     await expect(bootstrap.window.getByText("somente-em-a.txt", { exact: true })).toBeVisible({ timeout: 45_000 });
     await bootstrap.close();
 
     const ide = await launchIde(projectB.root, { userDataDir: terminalState, pickerPath: projectB.root });
     try {
-      await openProjectFromPicker(ide.window);
+      await openProjectPicker(ide.window);
       await expect(ide.window.getByText("somente-em-b.txt", { exact: true })).toBeVisible({ timeout: 45_000 });
 
       await ide.window.getByLabel("Exibir TERMINAL").first().click();
@@ -166,7 +218,7 @@ test.describe("troca de workspace no app empacotado", () => {
       }, { timeout: 30_000 }).toBeGreaterThan(0);
       expect(() => process.kill(pid, 0)).not.toThrow();
 
-      await ide.window.getByRole("button", { name: /^Projeto/ }).click();
+      await projectMenu(ide.window).click();
       await ide.window.getByRole("menuitem", { name: new RegExp(basename(projectA.root)) }).click();
       await expect(ide.window.getByText("somente-em-a.txt", { exact: true })).toBeVisible({ timeout: 45_000 });
 

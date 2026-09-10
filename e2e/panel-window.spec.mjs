@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createWorkspace, launchIde } from "./ide-app.mjs";
+import { createWorkspace, launchIde, openProjectPicker } from "./ide-app.mjs";
 
 /**
  * Painéis em janelas reais do sistema — só no app empacotado. O contrato dos
@@ -19,8 +19,7 @@ test.describe("painéis em janelas do sistema", () => {
   });
 
   async function openProject(window) {
-    await window.getByText("Abrir projeto", { exact: true }).first().click();
-    await window.getByText("Escolher outro projeto", { exact: true }).click();
+    await openProjectPicker(window);
     await expect(window.getByText("README.md", { exact: true })).toBeVisible({ timeout: 45_000 });
   }
 

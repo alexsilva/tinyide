@@ -123,12 +123,21 @@ export async function launchIde(workspaceRoot, options = {}) {
 }
 
 /**
+ * Abre o seletor de projeto pelo caminho real da interface: o dropdown "Projeto" da
+ * tela de boas-vindas, seu item "Abrir projeto..." e o diálogo de seleção.
+ */
+export async function openProjectPicker(window) {
+  await window.locator(".welcome-actions").getByRole("button", { name: /^Projeto/ }).click();
+  await window.getByRole("menuitem", { name: "Abrir projeto..." }).click();
+  await window.getByText("Escolher outro projeto", { exact: true }).click();
+}
+
+/**
  * Percorre o caminho real de abertura de projeto: tela de boas-vindas, diálogo e
  * seleção. Retorna quando o Explorer já lista o conteúdo do workspace.
  */
 export async function openProject(window) {
-  await window.getByText("Abrir projeto", { exact: true }).first().click();
-  await window.getByText("Escolher outro projeto", { exact: true }).click();
+  await openProjectPicker(window);
   await window.waitForSelector("text=README.md", { timeout: 45_000 });
 }
 

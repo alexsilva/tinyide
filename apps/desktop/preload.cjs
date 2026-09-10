@@ -17,11 +17,11 @@ contextBridge.exposeInMainWorld("tinyideDesktop", {
   notifyReady() {
     ipcRenderer.send("tinyide:renderer:ready");
   },
-  pickDirectory(defaultPath) {
-    return ipcRenderer.invoke("tinyide:workspace:pick", defaultPath);
+  pickDirectory(defaultPath, options) {
+    return ipcRenderer.invoke("tinyide:workspace:pick", defaultPath, options);
   },
-  createProjectDirectory(name, defaultPath) {
-    return ipcRenderer.invoke("tinyide:workspace:create-project", name, defaultPath);
+  createProjectDirectory(name, defaultPath, options) {
+    return ipcRenderer.invoke("tinyide:workspace:create-project", name, defaultPath, options);
   },
   restoreDirectory(path) {
     return ipcRenderer.invoke("tinyide:workspace:restore", path);

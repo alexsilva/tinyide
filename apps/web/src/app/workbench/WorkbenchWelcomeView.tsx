@@ -20,7 +20,7 @@ export interface WorkbenchWelcomeViewProps {
 /**
  * Tela inicial ("welcome screen") exibida na área principal do editor quando nenhum documento está aberto.
  * Apresenta ações rápidas: criar novo documento (com dropdown para opções de plugins),
- * abrir arquivo e abrir projeto, além dos atalhos de teclado.
+ * abrir arquivo e um dropdown de projeto (criar/abrir), além dos atalhos de teclado.
  */
 export function WorkbenchWelcomeView({
   fileCreationOptions: rawOptions,
@@ -56,12 +56,23 @@ export function WorkbenchWelcomeView({
         <button className="button secondary" type="button" onClick={onOpenFile}>
           <WorkbenchIcon icon="file" size={16} /> Abrir arquivo
         </button>
-        <button className="button secondary" type="button" onClick={onCreateProject}>
-          <FolderPlus size={16} /> Criar projeto
-        </button>
-        <button className="button secondary" type="button" onClick={onOpenProject}>
-          <WorkbenchIcon icon="folder-open" size={16} /> Abrir projeto
-        </button>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild>
+            <button className="button secondary" type="button">
+              <WorkbenchIcon icon="folder-open" size={16} /> Projeto <ChevronDown size={14} />
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content className="menu-content" align="center" sideOffset={6}>
+              <DropdownMenu.Item className="menu-item" onSelect={onCreateProject}>
+                <FolderPlus size={15} /> Criar projeto...
+              </DropdownMenu.Item>
+              <DropdownMenu.Item className="menu-item" onSelect={onOpenProject}>
+                <WorkbenchIcon icon="folder-open" size={15} /> Abrir projeto...
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
       </div>
       <small>Atalhos: Ctrl+N, Ctrl+O, Ctrl+S e Ctrl+Shift+S</small>
     </div>

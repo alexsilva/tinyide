@@ -103,6 +103,10 @@
 .explorer-filter__input { min-width: 0; flex: 1 1 auto; height: 23px; border: 0; background: transparent; color: var(--text); font-size: 11px; }
 .explorer-filter__input:focus-visible { outline: none; }
 .explorer-filter__input::-webkit-search-cancel-button { display: none; }
+.explorer-filter__toggle { display: grid; width: 22px; height: 20px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 3px; background: transparent; color: var(--text-subtle); font: 600 10px/1 monospace; cursor: pointer; }
+.explorer-filter__toggle:hover { background: var(--surface-3); color: var(--text); }
+.explorer-filter__toggle[aria-pressed="true"] { background: var(--accent-soft); color: var(--text); }
+.explorer-filter__toggle:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 .explorer-filter .icon-button { width: 20px; min-height: 20px; border-color: transparent; background: transparent; }
 .explorer-filter-summary { margin: 0 4px 6px; color: var(--text-subtle); font-size: 10px; font-style: italic; line-height: 14px; }
 .workspace-name { position: sticky; top: -8px; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; margin: -8px -8px 2px; padding: 12px 10px 4px 12px; color: var(--text); font-size: 11px; font-weight: 700; text-transform: uppercase; cursor: default; background: var(--surface-sidebar); }

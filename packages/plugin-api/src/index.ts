@@ -1530,6 +1530,10 @@ export interface WorkbenchDocumentsApi {
 
 export interface WorkbenchExplorerFilterRequest {
   readonly query: string;
+  /** When true, providers should use literal/path-contiguous matching instead of fuzzy matching. */
+  readonly exact?: boolean;
+  /** When true, providers should preserve character casing while matching. */
+  readonly caseSensitive?: boolean;
 }
 
 export interface WorkbenchExplorerFilterResult {
@@ -1544,6 +1548,10 @@ export interface WorkbenchExplorerFilterProvider {
   readonly pluginId: string;
   readonly placeholder?: string;
   readonly priority?: number;
+  /** Signals that the provider honours `request.exact`. */
+  readonly supportsExactMatch?: boolean;
+  /** Signals that the provider honours `request.caseSensitive`. */
+  readonly supportsCaseSensitive?: boolean;
   filter(
     request: WorkbenchExplorerFilterRequest,
   ): WorkbenchExplorerFilterResult | Promise<WorkbenchExplorerFilterResult>;

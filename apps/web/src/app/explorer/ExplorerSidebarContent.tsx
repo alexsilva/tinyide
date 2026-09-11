@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Equal, X } from "lucide-react";
 import type { ReactNode, RefObject } from "react";
 import type { WorkbenchExplorerFilterProvider } from "@tinyide/plugin-api";
 import type { WorkspaceEntry } from "../../browser-filesystem";
@@ -23,14 +23,21 @@ export interface ExplorerSidebarContentProps {
     readonly canCollapse: boolean;
   };
   readonly filter: {
-    readonly provider: Pick<WorkbenchExplorerFilterProvider, "id" | "placeholder"> | undefined;
+    readonly provider: Pick<
+      WorkbenchExplorerFilterProvider,
+      "id" | "placeholder" | "supportsExactMatch" | "supportsCaseSensitive"
+    > | undefined;
     readonly open: boolean;
     readonly query: string;
+    readonly exact: boolean;
+    readonly caseSensitive: boolean;
     readonly result: ExplorerFilterResultState | undefined;
     readonly inputRef: RefObject<HTMLInputElement | null>;
     readonly onOpen: () => void;
     readonly onClose: () => void;
     readonly onQueryChange: (query: string) => void;
+    readonly onExactChange: (exact: boolean) => void;
+    readonly onCaseSensitiveChange: (caseSensitive: boolean) => void;
   };
   readonly dropTargetPath: string | undefined;
   readonly loadingCursorVisible: boolean;
@@ -133,6 +140,34 @@ export function ExplorerSidebarContent({
               }
             }}
           />
+          {filter.provider.supportsCaseSensitive ? (
+            <button
+              className="explorer-filter__toggle"
+              type="button"
+              aria-label="Diferenciar maiúsculas de minúsculas"
+              aria-pressed={filter.caseSensitive}
+              title="Diferenciar maiúsculas de minúsculas"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                filter.onCaseSensitiveChange(!filter.caseSensitive);
+                filter.inputRef.current?.focus({ preventScroll: true });
+              }}
+            >Aa</button>
+          ) : null}
+          {filter.provider.supportsExactMatch ? (
+            <button
+              className="explorer-filter__toggle explorer-filter__exact"
+              type="button"
+              aria-label="Correspondência exata"
+              aria-pressed={filter.exact}
+              title="Correspondência exata (desativa a busca difusa)"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                filter.onExactChange(!filter.exact);
+                filter.inputRef.current?.focus({ preventScroll: true });
+              }}
+            ><Equal size={12} /></button>
+          ) : null}
           <button
             className="icon-button small"
             type="button"

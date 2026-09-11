@@ -802,6 +802,8 @@ export function App() {
   const [externalFileDropActive, setExternalFileDropActive] = useState(false);
   const [explorerFilterOpen, setExplorerFilterOpen] = useState(false);
   const [explorerFilterQuery, setExplorerFilterQuery] = useState("");
+  const [explorerFilterExact, setExplorerFilterExact] = useState(false);
+  const [explorerFilterCaseSensitive, setExplorerFilterCaseSensitive] = useState(false);
   const [explorerFilterResult, setExplorerFilterResult] = useState<ExplorerFilterResultState>();
   const [explorerFilterRevision, setExplorerFilterRevision] = useState(0);
   const [editorSearchOpen, setEditorSearchOpen] = useState(false);
@@ -5102,7 +5104,7 @@ export function App() {
     if (!input) return;
     input.focus({ preventScroll: true });
     input.setSelectionRange(input.value.length, input.value.length);
-  }, [explorerFilterOpen, explorerFilterQuery]);
+  }, [explorerFilterOpen]);
 
   useLayoutEffect(() => {
     if (!editorSearchOpen) return;
@@ -5152,6 +5154,7 @@ export function App() {
     if (explorerFilterProvider && workspaceHandle) return;
     setExplorerFilterOpen(false);
     setExplorerFilterQuery("");
+    setExplorerFilterExact(false);
   }, [explorerFilterProvider, workspaceHandle]);
 
   useEffect(() => {
@@ -5242,7 +5245,11 @@ export function App() {
     }
     let cancelled = false;
     const timer = setTimeout(() => {
-      void Promise.resolve(explorerFilterProvider.filter({ query })).then((result) => {
+      void Promise.resolve(explorerFilterProvider.filter({
+        query,
+        exact: explorerFilterExact,
+        caseSensitive: explorerFilterCaseSensitive,
+      })).then((result) => {
         if (cancelled) return;
         const view = explorerFilterView(result.paths);
         setExplorerFilterResult({
@@ -5268,7 +5275,13 @@ export function App() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [explorerFilterQuery, explorerFilterProvider, explorerFilterRevision]);
+  }, [
+    explorerFilterCaseSensitive,
+    explorerFilterExact,
+    explorerFilterQuery,
+    explorerFilterProvider,
+    explorerFilterRevision,
+  ]);
 
   useEffect(() => {
     if (!workspaceHandle) return;
@@ -7041,11 +7054,19 @@ export function App() {
                     provider: explorerFilterProvider,
                     open: explorerFilterOpen,
                     query: explorerFilterQuery,
+                    exact: explorerFilterExact,
+                    caseSensitive: explorerFilterCaseSensitive,
                     result: explorerFilterResult,
                     inputRef: explorerFilterInputRef,
                     onOpen: () => setExplorerFilterOpen(true),
-                    onClose: () => { setExplorerFilterOpen(false); setExplorerFilterQuery(""); },
+                    onClose: () => {
+                      setExplorerFilterOpen(false);
+                      setExplorerFilterQuery("");
+                      setExplorerFilterExact(false);
+                    },
                     onQueryChange: setExplorerFilterQuery,
+                    onExactChange: setExplorerFilterExact,
+                    onCaseSensitiveChange: setExplorerFilterCaseSensitive,
                   }}
                   dropTargetPath={dropTargetExplorerPath}
                   loadingCursorVisible={explorerLoadingCursorVisible}

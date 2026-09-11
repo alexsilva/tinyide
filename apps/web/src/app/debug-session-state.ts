@@ -1,6 +1,19 @@
 import type { DebugAdapterProvider, DebugSessionSnapshot } from "@tinyide/plugin-api";
+import { appendExecutionOutput, executionOutputText } from "./execution/execution-output-buffer";
 
 const ENDED_DEBUG_STATUSES = new Set(["stopped", "completed", "failed"]);
+
+/**
+ * Debug adapters are plugins, so the workbench must not trust them to retain an
+ * unbounded stdout/stderr snapshot. Reuse the same 256 KiB retention policy used
+ * by normal execution profiles before a snapshot enters React state.
+ */
+export function boundDebugSessionOutput(session: DebugSessionSnapshot): DebugSessionSnapshot {
+  const stdout = executionOutputText(appendExecutionOutput([], [session.stdout]));
+  const stderr = executionOutputText(appendExecutionOutput([], [session.stderr]));
+  if (stdout === session.stdout && stderr === session.stderr) return session;
+  return { ...session, stdout, stderr };
+}
 
 export interface RestoredDebugSession {
   readonly adapter: DebugAdapterProvider;
@@ -27,8 +40,8 @@ export function debugSessionFingerprint(session: DebugSessionSnapshot): string {
     session.status,
     session.reason ?? "",
     session.selectedFrameId ?? "",
-    session.stdout.length,
-    session.stderr.length,
+    `${session.stdout.length}:${session.stdout.slice(-512)}`,
+    `${session.stderr.length}:${session.stderr.slice(-512)}`,
     session.error ?? "",
     session.breakpoints.map((breakpoint) => `${breakpoint.path}:${breakpoint.line}:${breakpoint.enabled}:${breakpoint.verified}`).join("|"),
     frames,
@@ -80,7 +93,9 @@ export async function restoreActiveDebugSessions(
     try {
       const sessions = await adapter.list();
       for (const session of sessions) {
-        if (!ENDED_DEBUG_STATUSES.has(session.status)) discovered.push({ adapter, session });
+        if (!ENDED_DEBUG_STATUSES.has(session.status)) {
+          discovered.push({ adapter, session: boundDebugSessionOutput(session) });
+        }
       }
     } catch (cause) {
       errors.push(asError(cause));

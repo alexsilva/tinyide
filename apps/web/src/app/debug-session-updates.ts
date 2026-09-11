@@ -1,5 +1,5 @@
 import type { DebugSessionSnapshot } from "@tinyide/plugin-api";
-import { sameDebugSessionSnapshot } from "./debug-session-state";
+import { boundDebugSessionOutput, sameDebugSessionSnapshot } from "./debug-session-state";
 
 /**
  * Decide se um instantâneo lido do adaptador substitui o estado atual da sessão.
@@ -15,5 +15,6 @@ export function nextDebugSession(
 ): DebugSessionSnapshot | undefined {
   if (!current) return current;
   if (current.id !== snapshot.id) return current;
-  return sameDebugSessionSnapshot(current, snapshot) ? current : snapshot;
+  const bounded = boundDebugSessionOutput(snapshot);
+  return sameDebugSessionSnapshot(current, bounded) ? current : bounded;
 }

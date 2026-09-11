@@ -1,6 +1,7 @@
 import type { DebugAdapterProvider, DebugSessionSnapshot } from "@tinyide/plugin-api";
 import { describe, expect, it, vi } from "vitest";
 import {
+  boundDebugSessionOutput,
   restoreActiveDebugSessions,
   sameDebugSessionSnapshot,
   workspaceRelativeDebugPath,
@@ -105,6 +106,22 @@ describe("debug source paths", () => {
 });
 
 describe("debug session snapshots", () => {
+  it("applies the same bounded output budget used by normal execution profiles", () => {
+    const huge = session("current", 20, "running");
+    const bounded = boundDebugSessionOutput({
+      ...huge,
+      stdout: `${"old\n".repeat(80_000)}latest stdout\n`,
+      stderr: `${"err\n".repeat(80_000)}latest stderr\n`,
+    });
+
+    expect(bounded.stdout.length).toBeLessThanOrEqual(256 * 1024);
+    expect(bounded.stderr.length).toBeLessThanOrEqual(256 * 1024);
+    expect(bounded.stdout).toContain("[saída anterior descartada para limitar memória]");
+    expect(bounded.stderr).toContain("[saída anterior descartada para limitar memória]");
+    expect(bounded.stdout).toContain("latest stdout");
+    expect(bounded.stderr).toContain("latest stderr");
+  });
+
   it("ignores polling responses that do not change visible debug state", () => {
     const current = session("current", 20, "running");
     expect(sameDebugSessionSnapshot(current, { ...current })).toBe(true);
@@ -113,5 +130,13 @@ describe("debug session snapshots", () => {
       ...current,
       frames: [{ id: "0", name: "task", path: "/workspace/task.py", line: 42 }],
     })).toBe(false);
+  });
+
+  it("detects rolling debug output even after the retained buffer reaches a fixed size", () => {
+    const current = session("current", 20, "running");
+    const first = { ...current, stdout: `${"x".repeat(10_000)}old-tail` };
+    const next = { ...current, stdout: `${"y".repeat(10_000)}new-tail` };
+    expect(first.stdout.length).toBe(next.stdout.length);
+    expect(sameDebugSessionSnapshot(first, next)).toBe(false);
   });
 });

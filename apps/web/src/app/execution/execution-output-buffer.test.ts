@@ -24,4 +24,12 @@ describe("execution output buffer", () => {
     const output = appendExecutionOutput(["before"], ["after"], { truncated: true, maxChars: 2048 });
     expect(output).toEqual(["before", EXECUTION_OUTPUT_TRUNCATED_MARKER, "after"]);
   });
+
+  it("retains the newest tail when one cumulative snapshot exceeds the budget", () => {
+    const output = appendExecutionOutput([], [`${"old\n".repeat(80_000)}latest output\n`]);
+    const text = executionOutputText(output);
+    expect(text.length).toBeLessThanOrEqual(256 * 1024);
+    expect(text).toContain(EXECUTION_OUTPUT_TRUNCATED_MARKER);
+    expect(text).toContain("latest output");
+  });
 });

@@ -65,10 +65,10 @@ export function WorkbenchWelcomeView({
           <DropdownMenu.Portal>
             <DropdownMenu.Content className="menu-content" align="center" sideOffset={6}>
               <DropdownMenu.Item className="menu-item" onSelect={onCreateProject}>
-                <FolderPlus size={15} /> Criar projeto...
+                <FolderPlus size={15} /> Criar projeto
               </DropdownMenu.Item>
               <DropdownMenu.Item className="menu-item" onSelect={onOpenProject}>
-                <WorkbenchIcon icon="folder-open" size={15} /> Abrir projeto...
+                <WorkbenchIcon icon="folder-open" size={15} /> Abrir projeto
               </DropdownMenu.Item>
             </DropdownMenu.Content>
           </DropdownMenu.Portal>

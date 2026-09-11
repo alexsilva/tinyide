@@ -104,14 +104,14 @@ test.describe("troca de workspace no app empacotado", () => {
       // A janela de origem abre A pelos recentes: o seletor desta execução
       // devolve B, que é o projeto reservado para a janela nova.
       await ide.window.locator(".welcome-actions").getByRole("button", { name: /^Projeto/ }).click();
-      await ide.window.getByRole("menuitem", { name: "Abrir projeto..." }).click();
+      await ide.window.getByRole("menuitem", { name: "Abrir projeto" }).click();
       await ide.window.locator(".project-open-recent__main")
         .filter({ hasText: basename(projectA.root) })
         .click();
       await expect(ide.window.getByText("somente-em-a.txt", { exact: true })).toBeVisible({ timeout: 45_000 });
 
       await projectMenu(ide.window).click();
-      await ide.window.getByRole("menuitem", { name: "Abrir projeto..." }).click();
+      await ide.window.getByRole("menuitem", { name: "Abrir projeto" }).click();
       await ide.window.getByText("Nova janela", { exact: true }).click();
       const openedWindow = ide.application.waitForEvent("window");
       await ide.window.getByText("Escolher outro projeto", { exact: true }).click();

@@ -124,11 +124,11 @@ export async function launchIde(workspaceRoot, options = {}) {
 
 /**
  * Abre o seletor de projeto pelo caminho real da interface: o dropdown "Projeto" da
- * tela de boas-vindas, seu item "Abrir projeto..." e o diálogo de seleção.
+ * tela de boas-vindas, seu item "Abrir projeto" e o diálogo de seleção.
  */
 export async function openProjectPicker(window) {
   await window.locator(".welcome-actions").getByRole("button", { name: /^Projeto/ }).click();
-  await window.getByRole("menuitem", { name: "Abrir projeto..." }).click();
+  await window.getByRole("menuitem", { name: "Abrir projeto" }).click();
   await window.getByText("Escolher outro projeto", { exact: true }).click();
 }
 

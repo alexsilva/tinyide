@@ -87,10 +87,10 @@ export function WorkbenchTitlebar({
         <DropdownMenu.Portal>
           <DropdownMenu.Content className="menu-content" align="start" sideOffset={6}>
             <DropdownMenu.Item className="menu-item" onSelect={onCreateProject}>
-              <FolderPlus size={15} /> Criar projeto...
+              <FolderPlus size={15} /> Criar projeto
             </DropdownMenu.Item>
             <DropdownMenu.Item className="menu-item" onSelect={onOpenProject}>
-              <WorkbenchIcon icon="folder-open" size={15} /> Abrir projeto...
+              <WorkbenchIcon icon="folder-open" size={15} /> Abrir projeto
             </DropdownMenu.Item>
             <DropdownMenu.Separator className="menu-separator" />
             <DropdownMenu.Item className="menu-item" disabled>

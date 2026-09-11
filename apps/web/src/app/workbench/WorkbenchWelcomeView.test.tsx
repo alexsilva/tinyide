@@ -65,7 +65,7 @@ describe("WorkbenchWelcomeView", () => {
     });
 
     const menuItems = [...document.querySelectorAll<HTMLElement>('.menu-content [role="menuitem"]')];
-    expect(menuItems.map((item) => item.textContent?.trim())).toEqual(["Criar projeto...", "Abrir projeto..."]);
+    expect(menuItems.map((item) => item.textContent?.trim())).toEqual(["Criar projeto", "Abrir projeto"]);
 
     act(() => menuItems[0]?.click());
     expect(onCreateProject).toHaveBeenCalledTimes(1);

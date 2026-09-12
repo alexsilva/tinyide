@@ -71,6 +71,31 @@ describe("runtime server hardening", () => {
     expect(() => process.kill(childPid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
   });
 
+  it("applies request environment variables to the spawned process", async () => {
+    const { workspaceRoot, scoped } = await fixture();
+    const started = await fetch(scoped("/core-api/execution/processes"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        executable: process.execPath,
+        arguments: ["-e", "console.log('TINYIDE_TEST_VAR=' + process.env.TINYIDE_TEST_VAR)"],
+        workingDirectory: workspaceRoot,
+        environmentVariables: { TINYIDE_TEST_VAR: "valor-de-teste" },
+      }),
+    });
+    expect(started.status).toBe(201);
+    const { id } = await started.json();
+    let snapshot;
+    for (let attempt = 0; attempt < 250; attempt += 1) {
+      snapshot = await (await fetch(scoped(`/core-api/execution/processes/${encodeURIComponent(id)}`))).json();
+      if (snapshot.status !== "running") break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(snapshot?.status).toBe("exited");
+    expect(snapshot?.exitCode).toBe(0);
+    expect(snapshot?.stdout).toContain("TINYIDE_TEST_VAR=valor-de-teste");
+  });
+
   it("sets browser security headers and caches hashed assets immutably", async () => {
     const { runtime } = await fixture();
     const html = await fetch(runtime.url);

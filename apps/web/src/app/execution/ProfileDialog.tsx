@@ -86,6 +86,8 @@ export function ProfileDialog({
   const [removalId, setRemovalId] = useState<string>();
   const [parameterDrafts, setParameterDrafts] = useState<Readonly<Record<string, string>>>({});
   const [parameterError, setParameterError] = useState<string>();
+  const [environmentDrafts, setEnvironmentDrafts] = useState<Readonly<Record<string, string>>>({});
+  const [environmentError, setEnvironmentError] = useState<string>();
 
   useEffect(() => {
     if (!open) return;
@@ -97,6 +99,11 @@ export function ProfileDialog({
       formatCommandLineArguments(profile.steps[0]?.parameters ?? []),
     ])));
     setParameterError(undefined);
+    setEnvironmentDrafts(Object.fromEntries(profiles.map((profile) => [
+      profile.id,
+      environmentVariablesText(profile.steps[0]?.environmentVariables),
+    ])));
+    setEnvironmentError(undefined);
   }, [open, profiles, selectedId]);
 
   const editing = drafts.find((profile) => profile.id === editingId);
@@ -122,6 +129,7 @@ export function ProfileDialog({
     const profile = makeProfile();
     setDrafts((current) => [...current, profile]);
     setParameterDrafts((current) => ({ ...current, [profile.id]: "" }));
+    setEnvironmentDrafts((current) => ({ ...current, [profile.id]: "" }));
     setEditingId(profile.id);
   };
 
@@ -136,6 +144,7 @@ export function ProfileDialog({
     };
     setDrafts((current) => [...current, profile]);
     setParameterDrafts((current) => ({ ...current, [profile.id]: formatCommandLineArguments(profile.steps[0]?.parameters ?? []) }));
+    setEnvironmentDrafts((current) => ({ ...current, [profile.id]: environmentVariablesText(profile.steps[0]?.environmentVariables) }));
     setEditingId(profile.id);
   };
 
@@ -143,24 +152,43 @@ export function ProfileDialog({
     const nextDrafts = drafts.filter((profile) => profile.id !== id);
     setDrafts(nextDrafts);
     setParameterDrafts((current) => Object.fromEntries(Object.entries(current).filter(([profileId]) => profileId !== id)));
+    setEnvironmentDrafts((current) => Object.fromEntries(Object.entries(current).filter(([profileId]) => profileId !== id)));
     if (editingId === id) setEditingId(nextDrafts[0]?.id);
     setRemovalId(undefined);
   };
 
   const saveProfiles = () => {
+    const environmentByProfile = new Map<string, Readonly<Record<string, string>>>();
+    for (const profile of drafts) {
+      const rawEnvironment = environmentDrafts[profile.id]
+        ?? environmentVariablesText(profile.steps[0]?.environmentVariables);
+      try {
+        environmentByProfile.set(profile.id, parseEnvironmentVariables(rawEnvironment));
+      } catch (cause) {
+        setEnvironmentError(cause instanceof Error ? cause.message : String(cause));
+        return;
+      }
+    }
+    setEnvironmentError(undefined);
     try {
       const parsedDrafts = drafts.map((profile) => {
         const rawParameters = parameterDrafts[profile.id]
           ?? formatCommandLineArguments(profile.steps[0]?.parameters ?? []);
         const parameters = rawParameters.trim() ? parseCommandLineArguments(rawParameters) : [];
         const targetKind = executionTargetKindForStep(profile.steps[0]!, targetKinds);
+        const environmentVariables = environmentByProfile.get(profile.id) ?? {};
         return {
           ...profile,
-          steps: profile.steps.map((profileStep, index) => index === 0
-            ? targetKind
+          steps: profile.steps.map((profileStep, index) => {
+            if (index !== 0) return profileStep;
+            const step = targetKind
               ? materializeExecutionTarget(profileStep, targetKind, parameters)
-              : { ...profileStep, parameters }
-            : profileStep),
+              : { ...profileStep, parameters };
+            const { environmentVariables: _replaced, ...withoutEnvironment } = step;
+            return Object.keys(environmentVariables).length
+              ? { ...withoutEnvironment, environmentVariables }
+              : withoutEnvironment;
+          }),
         };
       });
       setParameterError(undefined);
@@ -418,25 +446,18 @@ export function ProfileDialog({
                       Variáveis de ambiente
                       <textarea
                         rows={4}
-                        value={environmentVariablesText(step.environmentVariables)}
-                        placeholder="Ex.: DEBUG=1"
+                        value={environmentDrafts[editing.id] ?? environmentVariablesText(step.environmentVariables)}
+                        placeholder="Uma por linha. Ex.: DEBUG=1"
                         onChange={(event) => {
-                          try {
-                            const environmentVariables = parseEnvironmentVariables(event.target.value);
-                            updateEditing((profile) => ({
-                              ...profile,
-                              steps: profile.steps.map((item, index) => index === 0
-                                ? { ...item, environmentVariables }
-                                : item),
-                            }));
-                          } catch {
-                            // Preserve the last valid value while the user is still typing.
-                          }
+                          setEnvironmentDrafts((current) => ({ ...current, [editing.id]: event.target.value }));
+                          setEnvironmentError(undefined);
                         }}
                       />
+                      {environmentError ? <small className="field-error">{environmentError}</small> : null}
                     </label>
                     <label className="check-row">
                       <input
+                        className="checkbox-md"
                         type="checkbox"
                         checked={step.continueOnError === true}
                         onChange={(event) => updateEditing((profile) => ({
@@ -450,11 +471,12 @@ export function ProfileDialog({
                     </label>
                     <label className="check-row">
                       <input
+                        className="checkbox-md"
                         type="checkbox"
                         checked={editing.saveBeforeRun !== false}
                         onChange={(event) => updateEditing((profile) => ({ ...profile, saveBeforeRun: event.target.checked }))}
                       />
-                      Salvar antes de executar
+                      Salvar arquivos alterados antes de executar
                     </label>
                   </section>
                 </>

@@ -225,7 +225,7 @@ import {
   textEditorLineDecorationProviders,
   workbenchResourceDescriptor,
 } from "./runtime";
-import { restoreActiveDebugSessions, workspaceRelativeDebugPath } from "./debug-session-state";
+import { boundDebugSessionOutput, restoreActiveDebugSessions, workspaceRelativeDebugPath } from "./debug-session-state";
 import {
   DEFAULT_DEBUG_PANEL_LAYOUT,
   EMPTY_DEBUG_OUTPUT_OFFSETS,
@@ -5658,9 +5658,22 @@ export function App() {
         setDebugSessions((current) => {
           const active = current[profileId];
           if (!active || active.session.id !== record.session.id) return current;
-          return { ...current, [profileId]: { ...active, session: snapshot } };
+          return { ...current, [profileId]: { ...active, session: boundDebugSessionOutput(snapshot) } };
         });
       }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+    }
+  };
+
+  // "Salvar arquivos alterados antes de executar": flag ausente conta como ligada — é assim que o diálogo
+  // de perfis exibe o toggle — e vale para todos os documentos alterados, não só o ativo.
+  // Documentos sem arquivo (untitled) ficam de fora: salvá-los abriria um "salvar como"
+  // no meio da execução.
+  const saveDocumentsBeforeRun = async (profile: ExecutionProfile) => {
+    if (profile.saveBeforeRun === false) return;
+    for (const document of documentsRef.current) {
+      if (document.kind !== "text" || document.readOnly || !document.handle) continue;
+      if (document.content === document.savedContent) continue;
+      await saveOpenDocument(document);
     }
   };
 
@@ -5676,22 +5689,23 @@ export function App() {
       environments,
     });
     if (!adapter) throw new Error("O perfil não possui runtime com suporte a debug.");
-    if (profile.saveBeforeRun && activeDocument && activeDocument.content !== activeDocument.savedContent) await saveDocument();
+    await saveDocumentsBeforeRun(profile);
     const started = await startDebugProfile({
       profile,
       ...(activeDocument ? { activeDocument } : {}),
       environments,
       breakpoints: debugBreakpoints,
     });
+    const boundedSession = boundDebugSessionOutput(started.session);
     setDebugSessions((current) => ({
       ...current,
-      [profile.id]: { adapter: started.adapter, session: started.session },
+      [profile.id]: { adapter: started.adapter, session: boundedSession },
     }));
     const tabId = profileExecutionPanelTabId(profile.id, "debug");
     setOpenProfileTabIds((current) => openProfileExecutionTab(current, profile.id, "debug"));
     setPanelHeight((current) => Math.max(current, 420));
     revealExecutionPanel(tabId);
-    return started.session;
+    return boundedSession;
   };
   debugProfileRef.current = startDebugForProfile;
 
@@ -5716,7 +5730,7 @@ export function App() {
       setDebugSessions((current) => {
         const active = current[profileId];
         if (!active || active.session.id !== sessionId) return current;
-        return { ...current, [profileId]: { ...active, session: snapshot } };
+        return { ...current, [profileId]: { ...active, session: boundDebugSessionOutput(snapshot) } };
       });
     })();
     debugCommandPromiseRef.current.set(sessionId, pending);
@@ -5751,21 +5765,20 @@ export function App() {
         setDebugSessions((current) => {
           const active = current[profileId];
           if (!active || active.session.id !== previousSession.id) return current;
-          return { ...current, [profileId]: { ...active, session: stopped } };
+          return { ...current, [profileId]: { ...active, session: boundDebugSessionOutput(stopped) } };
         });
       }
-      if (profile.saveBeforeRun && activeDocument && activeDocument.content !== activeDocument.savedContent) {
-        await saveDocument();
-      }
+      await saveDocumentsBeforeRun(profile);
       const started = await startDebugProfile({
         profile,
         ...(activeDocument ? { activeDocument } : {}),
         environments,
         breakpoints: debugBreakpoints,
       });
+      const boundedSession = boundDebugSessionOutput(started.session);
       setDebugSessions((current) => ({
         ...current,
-        [profileId]: { adapter: started.adapter, session: started.session },
+        [profileId]: { adapter: started.adapter, session: boundedSession },
       }));
       const tabId = profileExecutionPanelTabId(profile.id, "debug");
       setOpenProfileTabIds((current) => openProfileExecutionTab(current, profile.id, "debug"));
@@ -5790,9 +5803,7 @@ export function App() {
     if (!replaceRunning && profileExecutionsRef.current[profile.id]?.status === "running") {
       throw new Error(`O perfil '${profile.name}' já está em execução.`);
     }
-    if (profile.saveBeforeRun && activeDocument && activeDocument.content !== activeDocument.savedContent) {
-      await saveDocument();
-    }
+    await saveDocumentsBeforeRun(profile);
 
     const startedAt = Date.now();
     const cancellation = { cancelled: false };

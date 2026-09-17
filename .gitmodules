@@ -34,3 +34,6 @@
 [submodule "plugins/mcp-server"]
 	path = plugins/mcp-server
 	url = git@github.com:alexsilva/tinyide.mcp-server.git
+[submodule "plugins/aws"]
+	path = plugins/aws
+	url = git@github.com:alexsilva/tinyide.aws.git

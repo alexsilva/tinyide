@@ -16,7 +16,7 @@ async function readRequestBody(request) {
   return chunks.length ? Buffer.concat(chunks) : Buffer.alloc(0);
 }
 
-export function createPluginBackendProxy({ backendPath, workspaceRoot, pluginId }) {
+export function createPluginBackendProxy({ backendPath, workspaceRoot, pluginId, runtimeRequest }) {
   const worker = new Worker(new URL("./plugin-backend-worker.mjs", import.meta.url), {
     workerData: {
       backendUrl: pathToFileURL(backendPath).href,
@@ -63,6 +63,24 @@ export function createPluginBackendProxy({ backendPath, workspaceRoot, pluginId 
       } else {
         pending.resolve(message);
       }
+      return;
+    }
+    if (message.type === "runtime-request") {
+      void Promise.resolve(runtimeRequest?.(message.method, message.payload))
+        .then((result) => worker.postMessage({ type: "runtime-response", id: message.id, result }))
+        .catch((error) => worker.postMessage({
+          type: "runtime-error",
+          id: message.id,
+          error: { message: error instanceof Error ? error.message : String(error), ...(error instanceof Error && error.stack ? { stack: error.stack } : {}) },
+        }));
+      return;
+    }
+    if (message.type === "control-response" || message.type === "control-error") {
+      const pending = control.get(message.id);
+      if (!pending) return;
+      control.delete(message.id);
+      if (message.type === "control-error") pending.reject(errorFromPayload(message.error, `Falha no backend do plugin '${pluginId}'.`));
+      else pending.resolve(message.result);
       return;
     }
     if (message.type === "disposed" || message.type === "dispose-error") {
@@ -118,6 +136,18 @@ export function createPluginBackendProxy({ backendPath, workspaceRoot, pluginId 
       response.off?.("close", abort);
     }
   };
+
+  const controlRequest = async (action, payload) => {
+    if (disposed) throw new Error(`Backend do plugin '${pluginId}' já foi descartado.`);
+    await ready;
+    const id = randomUUID();
+    const promise = new Promise((resolve, reject) => control.set(id, { resolve, reject }));
+    worker.postMessage({ type: "control", id, action, payload });
+    return promise;
+  };
+
+  proxy.listMcpTools = () => controlRequest("mcp-tools:list");
+  proxy.invokeMcpTool = (name, args) => controlRequest("mcp-tools:invoke", { name, args });
 
   proxy.dispose = async ({ reason } = {}) => {
     if (disposed) return;

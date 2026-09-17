@@ -185,6 +185,8 @@
 .font-setting-card__check { position: absolute; top: 15px; right: 15px; display: grid; width: 22px; height: 22px; place-items: center; border-radius: 999px; background: var(--accent); color: var(--text-inverse); }
 .font-setting-card:not(.is-active) .font-setting-card__check { display: none; }
 .plugin-setting-list { display: grid; gap: 10px; margin: 20px 0; }
+.plugin-setting-group { display: grid; gap: 10px; }
+.plugin-setting-group + .plugin-setting-group { margin-top: 6px; }
 .plugin-setting { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 15px 16px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); box-shadow: 0 6px 18px rgb(0 0 0 / 12%); cursor: pointer; }
 .plugin-setting:hover { border-color: var(--border-strong); background: var(--surface-3); }
 .plugin-setting:has(input:disabled) { opacity: .55; cursor: default; }

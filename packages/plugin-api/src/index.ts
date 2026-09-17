@@ -177,6 +177,27 @@ export interface PluginModule {
   deactivate?(): void | Promise<void>;
 }
 
+/** JSON Schema transportado entre plugins e a infraestrutura MCP sem dependência do SDK MCP. */
+export type McpJsonSchema = Readonly<Record<string, unknown>>;
+
+export interface McpToolAnnotations {
+  readonly readOnlyHint?: boolean;
+  readonly destructiveHint?: boolean;
+  readonly idempotentHint?: boolean;
+  readonly openWorldHint?: boolean;
+}
+
+export interface McpToolTextContent {
+  readonly type: "text";
+  readonly text: string;
+}
+
+export interface McpToolResult {
+  readonly content?: readonly McpToolTextContent[];
+  readonly structuredContent?: unknown;
+  readonly isError?: boolean;
+}
+
 export type DiagnosticSeverity = "error" | "warning" | "information";
 
 export interface TextDiagnostic {

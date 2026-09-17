@@ -106,6 +106,7 @@ describe("plugin runtime cache", () => {
       backendPath: "/plugins/sample/backend.mjs",
       workspaceRoot: "/workspace",
       pluginId: "sample",
+      context: fixture.context,
     });
   });
 

@@ -76,6 +76,7 @@ export function createPluginBackendResolver({
       backendPath,
       workspaceRoot: activeWorkspaceRoot,
       pluginId,
+      context,
     });
     context.backendHandlers.set(cacheKey, {mtime: backendInfo.mtimeMs, handler});
     return handler;

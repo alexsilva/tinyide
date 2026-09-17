@@ -21,7 +21,7 @@ export interface SettingsDialogProps {
   readonly workspaceName: string;
   readonly workspaceRoot?: string;
   readonly settingsProviders: readonly PluginSettingsProvider[];
-  readonly activePluginSettingsProvider?: PluginSettingsProvider;
+  readonly activePluginSettingsProviders: readonly PluginSettingsProvider[];
   readonly lineNumbers: boolean;
   readonly availableThemes: readonly WorkbenchThemeDefinition[];
   readonly activeThemeId?: string;
@@ -59,7 +59,7 @@ export function SettingsDialog({
   workspaceName,
   workspaceRoot,
   settingsProviders,
-  activePluginSettingsProvider,
+  activePluginSettingsProviders,
   lineNumbers,
   availableThemes,
   activeThemeId,
@@ -90,7 +90,86 @@ export function SettingsDialog({
   onApplyPluginSetting,
   onComplete,
 }: SettingsDialogProps) {
-  const projectPluginUnavailable = activePluginSettingsProvider?.scope === "project" && !workspaceRoot;
+  const settingsNavigationProviders = settingsProviders.filter((provider, index, values) => (
+    values.findIndex((candidate) => candidate.pluginId === provider.pluginId) === index
+  ));
+  const activePluginSettingsProvider = activePluginSettingsProviders[0];
+  const allActivePluginSettingsUnavailable = activePluginSettingsProviders.length > 0
+    && activePluginSettingsProviders.every((provider) => provider.scope === "project")
+    && !workspaceRoot;
+
+  const renderPluginSetting = (
+    provider: PluginSettingsProvider,
+    setting: PluginSettingsProvider["settings"][number],
+  ) => {
+    const projectPluginUnavailable = provider.scope === "project" && !workspaceRoot;
+    if (setting.type === "stringArray") {
+      return (
+        <div className={`plugin-setting plugin-setting--${setting.type}`} key={`${provider.id}:${setting.id}`}>
+          <span className="plugin-setting__copy"><strong>{setting.label}</strong>{setting.description ? <small>{setting.description}</small> : null}</span>
+          <div className="plugin-setting__string-array">
+            <div className="watcher-ignored-chips">
+              {resolvePluginStringArraySettingValue(setting, pluginSettingsDraft).map((entry) => (
+                <span className="watcher-ignored-chip" key={entry}>
+                  {entry}
+                  <button type="button" aria-label={`Remover ${entry}`} disabled={projectPluginUnavailable} onClick={() => onRemovePluginStringArraySetting(setting.id, entry)}><X size={12} /></button>
+                </span>
+              ))}
+            </div>
+            <div className="watcher-ignored-add">
+              <input
+                type="text"
+                placeholder={setting.inputPlaceholder}
+                value={pluginStringArrayDrafts[setting.id] ?? ""}
+                disabled={projectPluginUnavailable}
+                onChange={(event) => onPluginStringArrayDraftChange(setting.id, event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    onAddPluginStringArraySetting(setting.id);
+                  }
+                }}
+              />
+              <button className="button" type="button" disabled={projectPluginUnavailable || !(pluginStringArrayDrafts[setting.id] ?? "").trim()} onClick={() => onAddPluginStringArraySetting(setting.id)}>
+                <WorkbenchIcon icon="plus" size={14} /> {setting.addLabel ?? "Adicionar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <label className={`plugin-setting plugin-setting--${setting.type}`} key={`${provider.id}:${setting.id}`}>
+        <span className="plugin-setting__copy"><strong>{setting.label}</strong>{setting.description ? <small>{setting.description}</small> : null}</span>
+        {setting.type === "boolean" ? (
+          <span className="settings-switch">
+            <input type="checkbox" checked={resolvePluginBooleanSettingValue(setting, pluginSettingsDraft)} disabled={projectPluginUnavailable} onChange={(event) => onApplyPluginSetting(setting.id, event.target.checked)} />
+            <i aria-hidden="true" />
+          </span>
+        ) : setting.type === "select" ? (
+          <select className="plugin-setting__control" value={String(pluginSettingsDraft[setting.id] ?? setting.defaultValue)} disabled={projectPluginUnavailable} onChange={(event) => onApplyPluginSetting(setting.id, event.target.value)}>
+            {setting.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        ) : setting.type === "string" ? (
+          <input className="plugin-setting__control plugin-setting__control--string" type="text" value={String(pluginSettingsDraft[setting.id] ?? setting.defaultValue)} placeholder={setting.placeholder} disabled={projectPluginUnavailable} onChange={(event) => onApplyPluginSetting(setting.id, event.target.value)} />
+        ) : (
+          <input
+            className="plugin-setting__control plugin-setting__control--number"
+            type="number"
+            value={Number(pluginSettingsDraft[setting.id] ?? setting.defaultValue)}
+            min={setting.min}
+            max={setting.max}
+            step={setting.step}
+            disabled={projectPluginUnavailable}
+            onChange={(event) => {
+              const value = event.target.valueAsNumber;
+              if (Number.isFinite(value)) onApplyPluginSetting(setting.id, value);
+            }}
+          />
+        )}
+      </label>
+    );
+  };
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -131,8 +210,8 @@ export function SettingsDialog({
               <button className={sectionId === "watcher" ? "is-active" : ""} type="button" onClick={() => onSelectSection("watcher")}>
                 <WorkbenchIcon icon="preview" size={15} /><span>Vigia de arquivos</span>
               </button>
-              {settingsProviders.length ? <span className="settings-navigation__label">Plugins</span> : null}
-              {settingsProviders.map((provider) => (
+              {settingsNavigationProviders.length ? <span className="settings-navigation__label">Plugins</span> : null}
+              {settingsNavigationProviders.map((provider) => (
                 <button
                   className={sectionId === provider.pluginId ? "is-active" : ""}
                   key={provider.pluginId}
@@ -298,68 +377,16 @@ export function SettingsDialog({
                     <div><span className="eyebrow">PLUGIN</span><h3>{activePluginSettingsProvider.title}</h3><p>{activePluginSettingsProvider.description ?? "Configurações do plugin."}</p></div>
                   </div>
                   <div className="plugin-setting-list">
-                    {activePluginSettingsProvider.settings.map((setting) => setting.type === "stringArray" ? (
-                      <div className={`plugin-setting plugin-setting--${setting.type}`} key={setting.id}>
-                        <span className="plugin-setting__copy"><strong>{setting.label}</strong>{setting.description ? <small>{setting.description}</small> : null}</span>
-                        <div className="plugin-setting__string-array">
-                          <div className="watcher-ignored-chips">
-                            {resolvePluginStringArraySettingValue(setting, pluginSettingsDraft).map((entry) => (
-                              <span className="watcher-ignored-chip" key={entry}>
-                                {entry}
-                                <button type="button" aria-label={`Remover ${entry}`} disabled={projectPluginUnavailable} onClick={() => onRemovePluginStringArraySetting(setting.id, entry)}><X size={12} /></button>
-                              </span>
-                            ))}
+                    {activePluginSettingsProviders.map((provider) => (
+                      <div className="plugin-setting-group" key={provider.id}>
+                        {activePluginSettingsProviders.length > 1 ? (
+                          <div className="plugin-setting-note">
+                            <strong>{provider.scope === "user" ? "Usuário" : "Projeto"}</strong>
+                            <small>{provider.scope === "user" ? "Preferências pessoais, compartilhadas entre projetos." : workspaceRoot ? "Configurações deste workspace." : "Abra um workspace para alterar estas opções."}</small>
                           </div>
-                          <div className="watcher-ignored-add">
-                            <input
-                              type="text"
-                              placeholder={setting.inputPlaceholder}
-                              value={pluginStringArrayDrafts[setting.id] ?? ""}
-                              disabled={projectPluginUnavailable}
-                              onChange={(event) => onPluginStringArrayDraftChange(setting.id, event.target.value)}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                  event.preventDefault();
-                                  onAddPluginStringArraySetting(setting.id);
-                                }
-                              }}
-                            />
-                            <button className="button" type="button" disabled={projectPluginUnavailable || !(pluginStringArrayDrafts[setting.id] ?? "").trim()} onClick={() => onAddPluginStringArraySetting(setting.id)}>
-                              <WorkbenchIcon icon="plus" size={14} /> {setting.addLabel ?? "Adicionar"}
-                            </button>
-                          </div>
-                        </div>
+                        ) : null}
+                        {provider.settings.map((setting) => renderPluginSetting(provider, setting))}
                       </div>
-                    ) : (
-                      <label className={`plugin-setting plugin-setting--${setting.type}`} key={setting.id}>
-                        <span className="plugin-setting__copy"><strong>{setting.label}</strong>{setting.description ? <small>{setting.description}</small> : null}</span>
-                        {setting.type === "boolean" ? (
-                          <span className="settings-switch">
-                            <input type="checkbox" checked={resolvePluginBooleanSettingValue(setting, pluginSettingsDraft)} disabled={projectPluginUnavailable} onChange={(event) => onApplyPluginSetting(setting.id, event.target.checked)} />
-                            <i aria-hidden="true" />
-                          </span>
-                        ) : setting.type === "select" ? (
-                          <select className="plugin-setting__control" value={String(pluginSettingsDraft[setting.id] ?? setting.defaultValue)} disabled={projectPluginUnavailable} onChange={(event) => onApplyPluginSetting(setting.id, event.target.value)}>
-                            {setting.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                          </select>
-                        ) : setting.type === "string" ? (
-                          <input className="plugin-setting__control plugin-setting__control--string" type="text" value={String(pluginSettingsDraft[setting.id] ?? setting.defaultValue)} placeholder={setting.placeholder} disabled={projectPluginUnavailable} onChange={(event) => onApplyPluginSetting(setting.id, event.target.value)} />
-                        ) : (
-                          <input
-                            className="plugin-setting__control plugin-setting__control--number"
-                            type="number"
-                            value={Number(pluginSettingsDraft[setting.id] ?? setting.defaultValue)}
-                            min={setting.min}
-                            max={setting.max}
-                            step={setting.step}
-                            disabled={projectPluginUnavailable}
-                            onChange={(event) => {
-                              const value = event.target.valueAsNumber;
-                              if (Number.isFinite(value)) onApplyPluginSetting(setting.id, value);
-                            }}
-                          />
-                        )}
-                      </label>
                     ))}
                   </div>
                 </>
@@ -372,7 +399,7 @@ export function SettingsDialog({
           <div className="settings-dialog__footer">
             {sectionId === "watcher" && !workspaceRoot ? (
               <p className="settings-scope-note"><WorkbenchIcon icon="problems" size={14} /> Abra um workspace para alterar esta configuração.</p>
-            ) : projectPluginUnavailable ? (
+            ) : allActivePluginSettingsUnavailable ? (
               <p className="settings-scope-note"><WorkbenchIcon icon="problems" size={14} /> Abra um workspace para alterar esta configuração.</p>
             ) : sectionId === "watcher" ? (
               <p className="settings-scope-note"><Check size={14} /> Alterações só são aplicadas ao clicar em "Concluir".</p>

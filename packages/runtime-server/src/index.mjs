@@ -439,7 +439,10 @@ export function createTinyIdeRuntime(options) {
       return safeFile(directory, manifest.entrypoints.backend);
     },
     statBackend: stat,
-    createBackendProxy: createPluginBackendProxy,
+    createBackendProxy: ({ context, ...proxyOptions }) => createPluginBackendProxy({
+      ...proxyOptions,
+      runtimeRequest: (method, payload) => handlePluginRuntimeRequest(context, proxyOptions.pluginId, method, payload),
+    }),
     disposeBackend: disposeBackendHandler,
   });
 
@@ -447,6 +450,42 @@ export function createTinyIdeRuntime(options) {
     const activeWorkspaceRoot = context.workspaceRoot;
     if (!activeWorkspaceRoot) return Promise.reject(new Error("Abra um workspace antes de usar este plugin."));
     return resolvePluginBackend(context, pluginId, activeWorkspaceRoot, cachedPluginState().byId);
+  }
+
+  async function listMcpTools(context, callerPluginId) {
+    const tools = [];
+    const names = new Set();
+    for (const [pluginId, descriptor] of cachedPluginState().byId) {
+      if (pluginId === callerPluginId || !descriptor?.manifest?.entrypoints?.backend) continue;
+      const handler = await resolveBackend(context, pluginId).catch(() => undefined);
+      if (!handler?.listMcpTools) continue;
+      const contributed = await handler.listMcpTools().catch(() => []);
+      for (const tool of Array.isArray(contributed) ? contributed : []) {
+        const name = typeof tool?.name === "string" ? tool.name.trim() : "";
+        if (!name) continue;
+        if (names.has(name)) throw new Error(`Ferramenta MCP duplicada: ${name}.`);
+        names.add(name);
+        tools.push({ ...tool, name, pluginId });
+      }
+    }
+    return tools;
+  }
+
+  async function invokeMcpTool(context, callerPluginId, payload = {}) {
+    const name = typeof payload.name === "string" ? payload.name.trim() : "";
+    if (!name) throw Object.assign(new Error("Nome da ferramenta MCP inválido."), { statusCode: 400 });
+    for (const tool of await listMcpTools(context, callerPluginId)) {
+      if (tool.name !== name) continue;
+      const handler = await resolveBackend(context, tool.pluginId);
+      return handler.invokeMcpTool(name, payload.args ?? {});
+    }
+    throw Object.assign(new Error(`Ferramenta MCP não encontrada: ${name}.`), { statusCode: 404 });
+  }
+
+  function handlePluginRuntimeRequest(context, callerPluginId, method, payload) {
+    if (method === "mcp-tools:list") return listMcpTools(context, callerPluginId);
+    if (method === "mcp-tools:invoke") return invokeMcpTool(context, callerPluginId, payload);
+    throw new Error(`Serviço interno do runtime não reconhecido: ${method}`);
   }
 
   function serveFile(response, absolutePath) {

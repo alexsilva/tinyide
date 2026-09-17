@@ -945,18 +945,21 @@ export function App() {
   const workspaceSettingsRef = useRef<WorkspaceSettings>(EMPTY_WORKSPACE_SETTINGS);
   const workspaceSettingsWriteQueueRef = useRef<Promise<WorkspaceSettings>>(Promise.resolve(EMPTY_WORKSPACE_SETTINGS));
   const settingsProviders = pluginSettingsProviders();
-  const resolvedPluginSettings = useMemo(
-    () => Object.fromEntries(settingsProviders.map((provider) => [
-      provider.pluginId,
-      resolvePluginSettingValues(
-        provider,
-        provider.scope === "user"
-          ? userSettings.plugins?.[provider.pluginId]
-          : workspaceSettings.plugins?.[provider.pluginId],
-      ),
-    ])),
-    [settingsProviders, userSettings.plugins, workspaceSettings.plugins],
-  );
+  const resolvedPluginSettings = useMemo(() => {
+    const grouped = new Map<string, PluginSettingValues>();
+    for (const provider of settingsProviders) {
+      grouped.set(provider.pluginId, {
+        ...(grouped.get(provider.pluginId) ?? {}),
+        ...resolvePluginSettingValues(
+          provider,
+          provider.scope === "user"
+            ? userSettings.plugins?.[provider.pluginId]
+            : workspaceSettings.plugins?.[provider.pluginId],
+        ),
+      });
+    }
+    return Object.fromEntries(grouped);
+  }, [settingsProviders, userSettings.plugins, workspaceSettings.plugins]);
   const workbenchStateRef = useRef<WorkbenchStateSnapshot>({
     workspaceName,
     ...(workspaceRoot ? { workspaceRoot } : {}),
@@ -1460,9 +1463,9 @@ export function App() {
     () => resolveIconPack(availableIconPacks, preferredIconPackId),
     [availableIconPacks, preferredIconPackId],
   );
-  const activePluginSettingsProvider = ["editor", "appearance", "fonts", "watcher"].includes(settingsSectionId)
-    ? undefined
-    : settingsProviders.find((provider) => provider.pluginId === settingsSectionId);
+  const activePluginSettingsProviders = ["editor", "appearance", "fonts", "watcher"].includes(settingsSectionId)
+    ? []
+    : settingsProviders.filter((provider) => provider.pluginId === settingsSectionId);
   const fileCreationTargetPath = explorerTargetDirectoryPath(entries, selectedExplorerPath);
 
   const resolveWorkspaceFileCreationOptions = useCallback(async (directoryPath: string) => {
@@ -6859,18 +6862,27 @@ export function App() {
       : workspaceSettings.plugins?.[provider.pluginId],
   );
 
+  const pluginSettingsForSection = (sectionId: string): PluginSettingValues => Object.assign(
+    {},
+    ...settingsProviders
+      .filter((provider) => provider.pluginId === sectionId)
+      .map((provider) => pluginSettingsForProvider(provider)),
+  );
+
+  const activePluginSettingsProviderForSetting = (settingId: string): PluginSettingsProvider | undefined => (
+    activePluginSettingsProviders.find((provider) => provider.settings.some((setting) => setting.id === settingId))
+  );
+
   const openSettings = (sectionId = "editor") => {
     setSettingsSectionId(sectionId);
-    const provider = settingsProviders.find((candidate) => candidate.pluginId === sectionId);
-    setPluginSettingsDraft(provider ? pluginSettingsForProvider(provider) : {});
+    setPluginSettingsDraft(pluginSettingsForSection(sectionId));
     setWatcherDraftDirectories(workspaceSettings.watcher?.extraIgnoredDirectories ?? []);
     setSettingsOpen(true);
   };
 
   const selectSettingsSection = (sectionId: string) => {
     setSettingsSectionId(sectionId);
-    const provider = settingsProviders.find((candidate) => candidate.pluginId === sectionId);
-    setPluginSettingsDraft(provider ? pluginSettingsForProvider(provider) : {});
+    setPluginSettingsDraft(pluginSettingsForSection(sectionId));
   };
 
   const selectTheme = (themeId: string) => {
@@ -6932,8 +6944,9 @@ export function App() {
   };
 
   const addPluginStringArraySetting = (settingId: string) => {
-    if (!activePluginSettingsProvider) return;
-    const setting = activePluginSettingsProvider.settings.find((candidate) => candidate.id === settingId);
+    const provider = activePluginSettingsProviderForSetting(settingId);
+    if (!provider) return;
+    const setting = provider.settings.find((candidate) => candidate.id === settingId);
     if (!setting || setting.type !== "stringArray") return;
     const draft = (pluginStringArrayDrafts[settingId] ?? "").trim();
     if (!draft) return;
@@ -6944,8 +6957,9 @@ export function App() {
   };
 
   const removePluginStringArraySetting = (settingId: string, entry: string) => {
-    if (!activePluginSettingsProvider) return;
-    const setting = activePluginSettingsProvider.settings.find((candidate) => candidate.id === settingId);
+    const provider = activePluginSettingsProviderForSetting(settingId);
+    if (!provider) return;
+    const setting = provider.settings.find((candidate) => candidate.id === settingId);
     if (!setting || setting.type !== "stringArray") return;
     const current = resolvePluginStringArraySettingValue(setting, pluginSettingsDraft);
     void applyPluginSetting(settingId, current.filter((candidate) => candidate !== entry));
@@ -6959,20 +6973,17 @@ export function App() {
   };
 
   const applyPluginSetting = async (settingId: string, value: PluginSettingValue) => {
-    if (!activePluginSettingsProvider) return;
-    const values = updatePluginSettingValue(
-      resolvePluginSettingValues(activePluginSettingsProvider, pluginSettingsDraft),
-      settingId,
-      value,
-    );
+    const provider = activePluginSettingsProviderForSetting(settingId);
+    if (!provider) return;
+    const values = updatePluginSettingValue(pluginSettingsDraft, settingId, value);
     setPluginSettingsDraft(values);
-    if (activePluginSettingsProvider.scope === "user") {
+    if (provider.scope === "user") {
       await updateUserSettings((current) => ({
         ...current,
         plugins: {
           ...current.plugins,
-          [activePluginSettingsProvider.pluginId]: {
-            ...(current.plugins?.[activePluginSettingsProvider.pluginId] ?? {}),
+          [provider.pluginId]: {
+            ...(current.plugins?.[provider.pluginId] ?? {}),
             [settingId]: value,
           },
         },
@@ -6983,8 +6994,8 @@ export function App() {
       ...current,
       plugins: {
         ...current.plugins,
-        [activePluginSettingsProvider.pluginId]: {
-          ...(current.plugins?.[activePluginSettingsProvider.pluginId] ?? {}),
+        [provider.pluginId]: {
+          ...(current.plugins?.[provider.pluginId] ?? {}),
           [settingId]: value,
         },
       },
@@ -7786,7 +7797,7 @@ export function App() {
           workspaceName={workspaceName}
           {...(workspaceRoot ? { workspaceRoot } : {})}
           settingsProviders={settingsProviders}
-          {...(activePluginSettingsProvider ? { activePluginSettingsProvider } : {})}
+          activePluginSettingsProviders={activePluginSettingsProviders}
           lineNumbers={userSettings.editor?.lineNumbers !== false}
           availableThemes={availableThemes}
           {...(activeTheme ? { activeThemeId: activeTheme.id } : {})}

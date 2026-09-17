@@ -12,6 +12,7 @@ const visualPlugins = [
   { name: "Docker", path: "plugins/docker/src/index.js", selector: ".tinyide-docker" },
   { name: "Node Runtime", path: "plugins/node-runtime/src/index.js", selector: ".tinyide-node-runtime" },
   { name: "Database", path: "plugins/database/src/index.js", selector: ".tinyide-db-grid" },
+  { name: "AWS", path: "plugins/aws/src/index.js", selector: ".tinyide-aws" },
   { name: "Pytest", path: "plugins/pytest/src/index.js", selector: ".tinyide-pytest" },
   { name: "Terminal", path: "plugins/terminal/src/index.js", selector: ".tinyide-terminal-panel" },
   { name: "Markdown", path: "plugins/markdown/src/index.js", selector: "[data-markdown-preview-host]" },

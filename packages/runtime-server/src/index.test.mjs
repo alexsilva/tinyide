@@ -44,6 +44,65 @@ async function fixture(options = {}) {
 }
 
 describe("runtime server hardening", () => {
+  it("discovers and invokes MCP tools through the trusted backend runtime bridge", async () => {
+    const { runtime, pluginsRoot, scoped } = await fixture();
+    const providerRoot = join(pluginsRoot, "provider");
+    const consumerRoot = join(pluginsRoot, "consumer");
+    await Promise.all([mkdir(providerRoot), mkdir(consumerRoot)]);
+    await writeFile(join(providerRoot, "plugin.json"), JSON.stringify({
+      id: "provider",
+      name: "Provider",
+      version: "1.0.0",
+      entrypoints: { backend: "./backend.mjs" },
+    }));
+    await writeFile(join(providerRoot, "backend.mjs"), `
+      export function createBackend() {
+        const handler = (_request, response) => { response.statusCode = 204; response.end(); };
+        handler.mcpTools = [{
+          name: "provider_echo",
+          label: "Provider echo",
+          description: "Echo seguro",
+          inputSchema: { type: "object", properties: { value: { type: "string" } } },
+          async invoke(args) { return { structuredContent: { value: args?.value ?? "" } }; },
+        }];
+        return handler;
+      }
+    `);
+    await writeFile(join(consumerRoot, "plugin.json"), JSON.stringify({
+      id: "consumer",
+      name: "Consumer",
+      version: "1.0.0",
+      entrypoints: { backend: "./backend.mjs" },
+    }));
+    await writeFile(join(consumerRoot, "backend.mjs"), `
+      export function createBackend({ runtime }) {
+        return async (_request, response, path) => {
+          response.setHeader("Content-Type", "application/json");
+          if (path === "/tools") {
+            response.end(JSON.stringify(await runtime.mcpTools.list()));
+            return;
+          }
+          if (path === "/invoke") {
+            response.end(JSON.stringify(await runtime.mcpTools.invoke("provider_echo", { value: "ok" })));
+            return;
+          }
+          response.statusCode = 404;
+          response.end();
+        };
+      }
+    `);
+    runtime.clearManifestCache();
+
+    const tools = await fetch(scoped("/plugin-api/consumer/tools")).then((response) => response.json());
+    expect(tools).toEqual([expect.objectContaining({
+      name: "provider_echo",
+      pluginId: "provider",
+      label: "Provider echo",
+    })]);
+    await expect(fetch(scoped("/plugin-api/consumer/invoke")).then((response) => response.json()))
+      .resolves.toEqual({ structuredContent: { value: "ok" } });
+  });
+
   it("terminates active execution process trees when the runtime closes", async () => {
     const { runtime, root, workspaceRoot, scoped } = await fixture({ workspaceClientReleaseGraceMs: 20 });
     const pidPath = join(root, "child.pid");

@@ -15,6 +15,29 @@ import {
 import { workbenchFontDefaults, type WorkbenchFontPreferences } from "./font-manager";
 import { WorkbenchIcon } from "./activity-components";
 
+/** Mapeia pluginId → id semântico do pack de ícones. */
+const SETTINGS_ICON_BY_PLUGIN_ID: Readonly<Record<string, string>> = {
+  "tinyide.aws": "aws",
+  "tinyide.docker": "docker",
+  "tinyide.git": "git",
+  "tinyide.database": "database",
+  "tinyide.mcp-server": "mcp",
+  "tinyide.python": "python",
+  "tinyide.python-venv": "python",
+  "tinyide.python-environments": "python",
+  "tinyide.terminal": "terminal",
+  "tinyide.markdown": "file",
+  "tinyide.search": "search",
+  "tinyide.javascript": "nodejs",
+  "tinyide.node-runtime": "nodejs",
+  "tinyide.html": "file",
+};
+
+function settingsIconForProvider(provider: PluginSettingsProvider): string {
+  if (provider.icon) return provider.icon;
+  return SETTINGS_ICON_BY_PLUGIN_ID[provider.pluginId] ?? "plugins";
+}
+
 export interface SettingsDialogProps {
   readonly open: boolean;
   readonly sectionId: string;
@@ -218,7 +241,7 @@ export function SettingsDialog({
                   type="button"
                   onClick={() => onSelectSection(provider.pluginId)}
                 >
-                  <WorkbenchIcon icon="plugins" size={15} /><span>{provider.title}</span>
+                  <WorkbenchIcon icon={settingsIconForProvider(provider)} size={15} /><span>{provider.title}</span>
                 </button>
               ))}
             </nav>
@@ -272,7 +295,9 @@ export function SettingsDialog({
                       return (
                         <button className={`theme-setting-card${selected ? " is-active" : ""}`} type="button" role="radio" aria-checked={selected} key={pack.id} onClick={() => onSelectIconPack(pack.id)}>
                           <span className="icon-pack-preview" aria-hidden="true">
-                            {(pack.id === "tinyide.brand" ? pack.icons.filter((icon) => ["git", "docker", "nodejs", "python", "terminal", "files"].includes(icon.id)) : pack.icons)
+                            {(pack.id === "tinyide.brand"
+                              ? pack.icons.filter((icon) => ["aws", "git", "docker", "mcp", "nodejs", "python", "database", "terminal"].includes(icon.id))
+                              : pack.icons)
                               .slice(0, 6)
                               .map((icon) => <span key={icon.id} className="workbench-icon" data-workbench-icon={icon.id} dangerouslySetInnerHTML={{ __html: icon.svg }} />)}
                           </span>
@@ -373,7 +398,7 @@ export function SettingsDialog({
               ) : activePluginSettingsProvider ? (
                 <>
                   <div className="settings-section-heading">
-                    <span className="settings-section-heading__icon"><WorkbenchIcon icon="plugins" size={18} /></span>
+                    <span className="settings-section-heading__icon"><WorkbenchIcon icon={settingsIconForProvider(activePluginSettingsProvider)} size={18} /></span>
                     <div><span className="eyebrow">PLUGIN</span><h3>{activePluginSettingsProvider.title}</h3><p>{activePluginSettingsProvider.description ?? "Configurações do plugin."}</p></div>
                   </div>
                   <div className="plugin-setting-list">

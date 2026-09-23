@@ -877,6 +877,8 @@ export interface PluginSettingsProvider {
   readonly pluginId: string;
   readonly title: string;
   readonly description?: string;
+  /** Ícone semântico do workbench (ex.: "aws", "docker"). Usado na navegação de Configurações. */
+  readonly icon?: WorkbenchActivityIcon;
   /** Defines the single persistence owner for these settings. */
   readonly scope: "user" | "project";
   readonly settings: readonly PluginSettingDefinition[];
@@ -930,6 +932,7 @@ export const WORKBENCH_BUILTIN_ICON_IDS = [
   "database",
   "diff",
   "docker",
+  "aws",
   "file",
   "files",
   "folder",
@@ -937,6 +940,7 @@ export const WORKBENCH_BUILTIN_ICON_IDS = [
   "forward",
   "git",
   "history",
+  "mcp",
   "nodejs",
   "package",
   "pause",

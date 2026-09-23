@@ -37,7 +37,9 @@ export const builtinIcons: readonly WorkbenchIconDefinition[] = [
   defineIcon("docker", "Docker", 70, strokeSvg('<path d="M22 12.5c0 1.2-.5 2-1.5 2.5-1.5.8-4.5 1-7.5 1s-6-.2-7.5-1C4.5 14.5 4 13.7 4 12.5"/><rect x="5" y="8" width="2.5" height="2.5" rx=".3"/><rect x="8.5" y="8" width="2.5" height="2.5" rx=".3"/><rect x="12" y="8" width="2.5" height="2.5" rx=".3"/><rect x="8.5" y="4.5" width="2.5" height="2.5" rx=".3"/><rect x="12" y="4.5" width="2.5" height="2.5" rx=".3"/><rect x="15.5" y="8" width="2.5" height="2.5" rx=".3"/>')),
   defineIcon("nodejs", "Node.js", 80, strokeSvg('<path d="M12 2 21 7v10l-9 5-9-5V7l9-5Z"/><path d="M8 16V8l8 8V8"/>')),
   defineIcon("python", "Python", 90, strokeSvg('<path d="M12 2c-3.2 0-3.5 1.4-3.5 1.4v2.1h4v.5H6.2S3 6.4 3 11.2s2.3 4.5 2.3 4.5h1.5v-2.2s-.1-2.6 2.5-2.6h4.3s2.4 0 2.4-2.4V4.5S15.2 2 12 2Z"/><path d="M12 22c3.2 0 3.5-1.4 3.5-1.4v-2.1h-4v-.5h6.3S21 17.6 21 12.8s-2.3-4.5-2.3-4.5h-1.5v2.2s.1 2.6-2.5 2.6h-4.3s-2.4 0-2.4 2.4v3.9S8.8 22 12 22Z"/>')),
-defineIcon("search", "Buscar", 15, strokeSvg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>')),
+  defineIcon("aws", "AWS", 75, strokeSvg('<path d="M6 14.5h12.5a3.2 3.2 0 0 0 .4-6.35 4.6 4.6 0 0 0-8.7-1.4A3.8 3.8 0 0 0 6 14.5Z"/><path d="M7.2 18c2.8 1.4 6.8 1.4 9.6 0"/><path d="m16.2 16.6 2.3 1.4-1.5 2"/>'), "Cloud e serviços Amazon Web Services."),
+  defineIcon("mcp", "MCP Server", 72, strokeSvg('<rect x="3.5" y="5" width="10" height="14" rx="1.5"/><path d="M6 8.5h5M6 11.5h5M6 14.5h3"/><circle cx="17.5" cy="12" r="3.2"/><path d="M13.5 12h.8"/>'), "Servidor MCP local — protocolo e ferramentas expostas."),
+  defineIcon("search", "Buscar", 15, strokeSvg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>')),
   defineIcon("folder", "Pasta", 16, strokeSvg('<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9l-.81-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>')),
   defineIcon("folder-open", "Pasta aberta", 17, strokeSvg('<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>')),
   defineIcon("file", "Arquivo", 18, strokeSvg('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>')),
@@ -74,6 +76,15 @@ export const brandIcons: readonly WorkbenchIconDefinition[] = builtinIcons.map((
   }
   if (icon.id === "python") {
     return defineIcon("python", icon.label, icon.order ?? 90, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="#3776ab" d="M11.75 2C6.8 2 7.1 4.15 7.1 4.15v2.23h4.74v.67H5.22S2 6.68 2 11.74s2.82 4.88 2.82 4.88h1.69v-2.37s-.09-2.82 2.77-2.82h4.7s2.64.04 2.64-2.55V4.6S17.02 2 11.75 2Z"/><circle cx="9.12" cy="4.72" r=".78" fill="#fff"/><path fill="#ffd43b" d="M12.25 22c4.95 0 4.65-2.15 4.65-2.15v-2.23h-4.74v-.67h6.62S22 17.32 22 12.26s-2.82-4.88-2.82-4.88h-1.69v2.37s.09 2.82-2.77 2.82h-4.7s-2.64-.04-2.64 2.55v4.28S6.98 22 12.25 22Z"/><circle cx="14.88" cy="19.28" r=".78" fill="#fff"/></svg>`);
+  }
+  if (icon.id === "aws") {
+    return defineIcon("aws", icon.label, icon.order ?? 75, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><path fill="#e8eaed" d="M5.5 14.8h13a3.5 3.5 0 0 0 .45-6.9 5 5 0 0 0-9.4-1.55A4.1 4.1 0 0 0 5.5 14.8Z"/><path fill="none" stroke="#ff9900" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M6.8 18.2c3.2 1.6 7.2 1.6 10.4 0"/><path fill="#ff9900" d="m16.6 16.5 2.6 1.7-1.7 2.2z"/></svg>`);
+  }
+  if (icon.id === "database") {
+    return defineIcon("database", icon.label, icon.order ?? 40, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3" fill="#7dd3fc"/><path fill="#38bdf8" d="M4 6v5c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path fill="#0ea5e9" d="M4 11v5c0 1.7 3.6 3 8 3s8-1.3 8-3v-5"/><ellipse cx="12" cy="11" rx="8" ry="3" fill="#bae6fd" fill-opacity=".55"/><ellipse cx="12" cy="16" rx="8" ry="3" fill="#e0f2fe" fill-opacity=".4"/></svg>`);
+  }
+  if (icon.id === "mcp") {
+    return defineIcon("mcp", icon.label, icon.order ?? 72, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="10" height="14" rx="1.5" fill="#a78bfa"/><path stroke="#ede9fe" stroke-width="1.5" stroke-linecap="round" d="M6 8.5h5M6 11.5h5M6 14.5h3"/><circle cx="17.5" cy="12" r="3.2" fill="#c4b5fd"/><path stroke="#a78bfa" stroke-width="1.6" stroke-linecap="round" d="M13.5 12h.8"/></svg>`);
   }
   return icon;
 });
@@ -171,6 +182,22 @@ export const funIcons: readonly WorkbenchIconDefinition[] = [
     ),
   ),
   defineIcon(
+    "aws",
+    "AWS",
+    75,
+    funSvg(
+      '<path fill="#f1f5f9" d="M5.2 14.5h13.6a3.6 3.6 0 0 0 .5-7.1 5.1 5.1 0 0 0-9.6-1.5A4.2 4.2 0 0 0 5.2 14.5Z"/><path fill="#ff9900" d="M6.8 17.5c3.2 1.7 7.2 1.7 10.4 0l1 1.7c-3.8 1.9-8.6 1.9-12.4 0l1-1.7Z"/><path fill="#ffb84d" d="m16.5 16.2 2.8 1.8-1.8 2.3z"/>',
+    ),
+  ),
+  defineIcon(
+    "mcp",
+    "MCP Server",
+    72,
+    funSvg(
+      '<rect x="3" y="4.5" width="11" height="15" rx="2" fill="#8b5cf6"/><path stroke="#ede9fe" stroke-width="1.6" stroke-linecap="round" d="M5.5 8h6M5.5 11.5h6M5.5 15h4"/><circle cx="18" cy="12" r="3.5" fill="#c4b5fd"/><path stroke="#a78bfa" stroke-width="1.8" stroke-linecap="round" d="M14 12h1.2"/><circle cx="18" cy="12" r="1.2" fill="#7c3aed"/>',
+    ),
+  ),
+  defineIcon(
     "nodejs",
     "Node.js",
     80,
@@ -221,7 +248,7 @@ export const defaultIconPack: WorkbenchIconPackDefinition = {
 export const brandIconPack: WorkbenchIconPackDefinition = {
   id: "tinyide.brand",
   label: "Marcas",
-  description: "Cores oficiais de Git, Docker, Node e Python (demais ícones iguais ao padrão).",
+  description: "Cores oficiais de Git, Docker, AWS, MCP, banco, Node e Python (demais ícones iguais ao padrão).",
   order: 20,
   icons: brandIcons.filter(Boolean),
 };

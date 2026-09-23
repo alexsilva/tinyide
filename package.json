@@ -34,8 +34,8 @@
     "typecheck:host": "tsc --noEmit -p tsconfig.json",
     "typecheck": "npm run typecheck:host && npm run typecheck:plugins",
     "check": "npm run typecheck && npm run test && npm run test:performance && npm run coverage && npm run build",
-    "test:e2e": "npm run build:web && playwright test --config e2e/playwright.config.mjs",
-    "test:e2e:quick": "playwright test --config e2e/playwright.config.mjs",
+    "test:e2e": "npm run build:web && playwright test --config features/e2e/playwright.config.mjs",
+    "test:e2e:quick": "playwright test --config features/e2e/playwright.config.mjs",
     "test:plugins": "npm test --prefix plugins/python && npm test --prefix plugins/python-venv && npm test --prefix plugins/pytest && npm test --prefix plugins/javascript && npm test --prefix plugins/node-runtime && npm test --prefix plugins/docker && npm test --prefix plugins/terminal && npm test --prefix plugins/git && npm test --prefix plugins/search && npm test --prefix plugins/markdown && npm test --prefix plugins/database && npm test --prefix plugins/aws && npm test --prefix plugins/mcp-server"
   },
   "dependencies": {

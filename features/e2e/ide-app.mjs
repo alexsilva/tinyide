@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 /**
  * Workspace descartável com um pouco de tudo que a IDE precisa reconhecer: código,

@@ -41,8 +41,10 @@ export function pythonEnvironment(executable, id = "env-e2e-python") {
   return { id, name: "python de teste", type: "process", executable };
 }
 
-export async function createWorkspace(files) {
-  const root = await mkdtemp(join(tmpdir(), "tinyide-e2e-"));
+export async function createWorkspace(files, options = {}) {
+  const baseDir = options.baseDir ?? tmpdir();
+  await mkdir(baseDir, { recursive: true });
+  const root = await mkdtemp(join(baseDir, "tinyide-e2e-"));
   const defaults = {
     "README.md": "# Projeto de fumaça\n\nConteúdo inicial.\n",
     "src/main.py": 'def cumprimentar(nome):\n    return f"olá {nome}"\n\n\nprint(cumprimentar("mundo"))\n',
@@ -103,6 +105,7 @@ export async function launchIde(workspaceRoot, options = {}) {
     cwd: repositoryRoot,
     env: {
       ...process.env,
+      ...(options.env ?? {}),
       TINYIDE_WORKSPACE: workspaceRoot,
       TINYIDE_WORKSPACES_ROOT: dirname(workspaceRoot),
       // Gancho já existente no processo principal: dispensa o seletor nativo de

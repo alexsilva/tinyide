@@ -77,6 +77,9 @@ test.describe("AWS Secrets Manager com adapter simulado", () => {
     await expect(rawEditor).toBeHidden();
     await secretsPanel.getByLabel("Abrir variáveis de staging/database").click();
     await expect(rawEditor).toBeHidden();
+    await expect(
+      secretsPanel.locator('.tinyide-aws__secret-row[data-secret-key*="staging/database"]'),
+    ).toHaveClass(/is-selected/);
     const editorCard = secretsPanel.locator(".tinyide-aws__secret-editor");
     const closeEditor = secretsPanel.getByLabel("Fechar secret selecionado");
     await expect(closeEditor).toBeVisible();
@@ -114,7 +117,7 @@ test.describe("AWS Secrets Manager com adapter simulado", () => {
     // aumentar a área rolável do formulário.
     const scrollHeightBeforeMenu = await formFields.evaluate(element => element.scrollHeight);
     await secretsPanel.getByLabel("Ações da variável password").click();
-    const fieldMenu = secretsPanel.getByRole("menu");
+    const fieldMenu = window.getByRole("menu");
     await expect(fieldMenu).toBeVisible();
     await expect(fieldMenu).toHaveCSS("position", "fixed");
     expect(await formFields.evaluate(element => element.scrollHeight)).toBe(scrollHeightBeforeMenu);
@@ -212,6 +215,72 @@ test.describe("AWS Secrets Manager com adapter simulado", () => {
     await window.getByRole("tab", { name: "Secrets Manager", exact: true }).click();
     await expect(secretsPanel).toContainText("O profile ou a região mudou. Liste os secrets novamente.");
     await expect(secretsPanel.getByLabel("Abrir variáveis de staging/database")).toHaveCount(0);
+  });
+
+  test("mantém o layout do Secrets Manager íntegro após reload", async () => {
+    const { window } = ide;
+    const showAwsBefore = window.getByLabel("Exibir AWS");
+    const hideAwsBefore = window.getByLabel("Ocultar AWS");
+    await expect.poll(async () => (await showAwsBefore.count()) + (await hideAwsBefore.count())).toBe(1);
+    if (await showAwsBefore.count()) await showAwsBefore.click();
+
+    await window.getByRole("tab", { name: "Visão geral", exact: true }).click();
+    await window.getByLabel("Profile AWS").selectOption("default");
+    await window.getByRole("tab", { name: "Secrets Manager", exact: true }).click();
+    await window.getByLabel("Listar secrets do AWS Secrets Manager").click();
+    await expect(window.getByText("staging/database", { exact: true })).toBeVisible();
+
+    await window.reload({ waitUntil: "domcontentloaded" });
+    const showAwsAfter = window.getByLabel("Exibir AWS");
+    const hideAwsAfter = window.getByLabel("Ocultar AWS");
+    await expect.poll(async () => (await showAwsAfter.count()) + (await hideAwsAfter.count())).toBe(1);
+    if (await showAwsAfter.count()) await showAwsAfter.click();
+    const secretsTab = window.getByRole("tab", { name: "Secrets Manager", exact: true });
+    await expect(secretsTab).toBeVisible();
+    await secretsTab.click();
+
+    const secretsPanel = window.locator(".tinyide-aws").filter({ hasText: "AWS Secrets Manager" }).first();
+    await expect(secretsPanel).toBeVisible();
+    await expect(secretsPanel).toContainText(
+      "Usa o profile e a região configurados na Visão geral. A listagem mostra apenas metadados; valores só são consultados sob demanda.",
+    );
+    await secretsPanel.getByLabel("Listar secrets do AWS Secrets Manager").click();
+    await expect(secretsPanel.getByText("staging/database", { exact: true })).toBeVisible();
+
+    const content = secretsPanel.locator(".tinyide-aws__content--secrets");
+    const layout = secretsPanel.locator(".tinyide-aws__secrets-layout");
+    const editor = secretsPanel.locator(".tinyide-aws__secret-editor");
+    const list = secretsPanel.locator(".tinyide-aws__secret-list");
+    const rows = list.locator(".tinyide-aws__secret-row");
+    await expect(content).toHaveCSS("overflow", "clip");
+    await expect(list).toHaveCSS("overflow-y", "auto");
+    await expect(rows).toHaveCount(18);
+
+    const geometry = await content.evaluate((element) => {
+      const contentRect = element.getBoundingClientRect();
+      const layoutRect = element.querySelector(".tinyide-aws__secrets-layout")?.getBoundingClientRect();
+      const editorRect = element.querySelector(".tinyide-aws__secret-editor")?.getBoundingClientRect();
+      return {
+        contentBottom: contentRect.bottom,
+        layoutBottom: layoutRect?.bottom ?? 0,
+        editorBottom: editorRect?.bottom ?? 0,
+        scrollHeight: element.scrollHeight,
+        clientHeight: element.clientHeight,
+      };
+    });
+    expect(Math.abs(geometry.contentBottom - geometry.layoutBottom)).toBeLessThanOrEqual(12);
+    expect(Math.abs(geometry.layoutBottom - geometry.editorBottom)).toBeLessThanOrEqual(1);
+    expect(geometry.scrollHeight).toBeLessThanOrEqual(geometry.clientHeight + 1);
+
+    const listGeometry = await list.evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      rowHeights: [...element.querySelectorAll(".tinyide-aws__secret-row")]
+        .slice(0, 8)
+        .map(row => row.getBoundingClientRect().height),
+    }));
+    expect(listGeometry.scrollHeight).toBeGreaterThan(listGeometry.clientHeight);
+    expect(Math.min(...listGeometry.rowHeights)).toBeGreaterThanOrEqual(48);
   });
 
   test("mantém a ação de abrir o painel AWS em janela separada", async () => {

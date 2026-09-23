@@ -44,6 +44,22 @@ test.describe("AWS Secrets Manager com adapter simulado", () => {
     const tabs = window.getByRole("tab");
     await expect(tabs).toHaveText(["Visão geral", "ECS", "Secrets Manager", "CONSOLE"]);
 
+    const overviewRefresh = window.getByLabel("Atualizar estado AWS");
+    await expect(overviewRefresh).toBeVisible();
+    await expect(overviewRefresh.locator("svg")).toHaveCount(1);
+    await overviewRefresh.click();
+    await expect(window.getByText("AWS disponível", { exact: true })).toBeVisible();
+
+    await window.getByRole("tab", { name: "ECS", exact: true }).click();
+    const ecsDiscover = window.getByLabel("Descobrir clusters ECS");
+    await expect(ecsDiscover).toBeVisible();
+    await expect(ecsDiscover.locator("svg")).toHaveCount(1);
+    await ecsDiscover.click();
+    await expect(window.getByRole("treeitem", { name: /Cluster ECS production/ })).toBeVisible();
+    const ecsRefresh = window.getByLabel("Atualizar clusters ECS");
+    await expect(ecsRefresh).toBeVisible();
+    await expect(ecsRefresh.locator("svg")).toHaveCount(1);
+
     await window.getByRole("tab", { name: "Secrets Manager", exact: true }).click();
     const secretsPanel = window.locator(".tinyide-aws").filter({ hasText: "AWS Secrets Manager" }).first();
     await expect(secretsPanel).toBeVisible();
@@ -77,9 +93,52 @@ test.describe("AWS Secrets Manager com adapter simulado", () => {
     await expect(password).toHaveClass(/is-masked/);
     await expect(secretsPanel.getByText("2 variáveis", { exact: true })).toBeVisible();
     await expect(secretsPanel.locator('input[aria-label^="Nome da variável"]')).toHaveCount(0);
-    await expect(secretsPanel.getByLabel("Ações da variável password")).toBeVisible();
-    await expect(secretsPanel.getByLabel("Copiar valor de password")).toBeHidden();
-    await expect(secretsPanel.getByLabel("Remover variável password")).toBeHidden();
+    const formFields = secretsPanel.getByLabel("Variáveis do secret", { exact: true });
+
+    const revealAll = secretsPanel.getByLabel("Ver todos os valores");
+    const jsonView = secretsPanel.getByLabel("Ver JSON do secret");
+    await expect(revealAll).toBeVisible();
+    await expect(jsonView).toBeVisible();
+    const revealAllBox = await revealAll.boundingBox();
+    const jsonViewBox = await jsonView.boundingBox();
+    expect(Math.abs(revealAllBox.y - jsonViewBox.y)).toBeLessThan(4);
+    expect(jsonViewBox.x - (revealAllBox.x + revealAllBox.width)).toBeLessThan(12);
+    await revealAll.click();
+    await expect(username).not.toHaveClass(/is-masked/);
+    await expect(password).not.toHaveClass(/is-masked/);
+    await secretsPanel.getByLabel("Ocultar todos os valores").click();
+    await expect(username).toHaveClass(/is-masked/);
+    await expect(password).toHaveClass(/is-masked/);
+
+    // O menu de uma variável existente precisa flutuar sobre a lista, sem
+    // aumentar a área rolável do formulário.
+    const scrollHeightBeforeMenu = await formFields.evaluate(element => element.scrollHeight);
+    await secretsPanel.getByLabel("Ações da variável password").click();
+    const fieldMenu = secretsPanel.getByRole("menu");
+    await expect(fieldMenu).toBeVisible();
+    await expect(fieldMenu).toHaveCSS("position", "fixed");
+    expect(await formFields.evaluate(element => element.scrollHeight)).toBe(scrollHeightBeforeMenu);
+    await secretsPanel.getByLabel("Ações da variável password").click();
+    await expect(fieldMenu).toHaveCount(0);
+
+    // Uma variável nova é apenas um rascunho local: não deve nascer em estado
+    // de erro nem oferecer ações de um recurso que ainda não existe.
+    await secretsPanel.getByLabel("Adicionar variável ao secret").click();
+    const newKey = secretsPanel.locator('input[placeholder="NOME_DA_VARIAVEL"]').last();
+    await expect(newKey).toBeFocused();
+    const newRow = newKey.locator("xpath=../..");
+    await expect(newRow).not.toContainText("Informe um nome para a variável");
+    await expect(newRow.locator('button[aria-label^="Ações da variável "]')).toHaveCount(0);
+    await expect(newRow.getByLabel("Descartar nova variável")).toBeVisible();
+    await newKey.blur();
+    await expect(newRow).toContainText("Informe um nome para a variável");
+    const inlineError = newRow.locator(".tinyide-aws__secret-field-key-error");
+    await expect(inlineError).toBeVisible();
+    const keyBox = await newKey.boundingBox();
+    const errorBox = await inlineError.boundingBox();
+    expect(errorBox.y).toBeGreaterThan(keyBox.y);
+    await newRow.getByLabel("Descartar nova variável").click();
+    await expect(secretsPanel.getByText("2 variáveis", { exact: true })).toBeVisible();
 
     await secretsPanel.getByLabel("Mostrar valor de password").click();
     await expect(password).not.toHaveClass(/is-masked/);
@@ -89,7 +148,6 @@ test.describe("AWS Secrets Manager com adapter simulado", () => {
     await password.fill("e2e-updated-password");
     await expect(secretsPanel.getByText(/alterações não salvas/i)).toBeVisible();
 
-    const formFields = secretsPanel.getByLabel("Variáveis do secret", { exact: true });
     await secretsPanel.getByLabel("Ver JSON do secret").click();
     await expect(rawEditor).toBeVisible();
     await expect(formFields).toBeHidden();

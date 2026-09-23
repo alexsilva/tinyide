@@ -190,7 +190,7 @@ export function WorkbenchToolWindowHost({
   readonly windowMode?: boolean;
   readonly onClose: () => void;
   /** Presente apenas quando o host pode abrir esta superfície como janela do SO. */
-  readonly onDetach?: () => void;
+  readonly onDetach?: (viewId?: string) => void;
   /**
    * Presente apenas na janela de painel: devolve a superfície aos docks da
    * janela que a abriu, carregando a aba que está aberta agora — reanexar não
@@ -264,7 +264,7 @@ export function WorkbenchToolWindowHost({
             type="button"
             aria-label={`Abrir ${provider.label} em janela separada`}
             title="Abrir em janela separada"
-            onClick={onDetach}
+            onClick={() => onDetach(tabsRef.current?.activeId())}
           ><ExternalLink size={14} /></button>
         ) : null}
         {onReattach ? (

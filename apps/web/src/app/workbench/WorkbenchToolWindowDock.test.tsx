@@ -95,7 +95,7 @@ describe("WorkbenchToolWindowDock", () => {
     const detach = host?.querySelector<HTMLButtonElement>('[aria-label="Abrir Terminal em janela separada"]');
 
     act(() => detach?.click());
-    expect(first.onDetach).toHaveBeenCalledWith(first.terminal);
+    expect(first.onDetach).toHaveBeenCalledWith(first.terminal, undefined);
 
     act(() => root?.render(
       <WorkbenchToolWindowDock
@@ -118,6 +118,53 @@ describe("WorkbenchToolWindowDock", () => {
     expect(host?.querySelector('[data-tool-window-id="git"]')).not.toBeNull();
     expect(first.terminalDispose).toHaveBeenCalledOnce();
     expect(first.gitDispose).not.toHaveBeenCalled();
+  });
+
+  it("passes the active internal view when detaching a tool window", () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const onDetach = vi.fn();
+    const provider: WorkbenchToolWindowContribution = {
+      id: "aws",
+      pluginId: "test.plugin",
+      label: "AWS",
+      mount({ tabs }) {
+        const overview = tabs.register({ id: "aws.overview", label: "Visão geral", onSelect() {} });
+        const secrets = tabs.register({ id: "aws.secrets", label: "Secrets Manager", onSelect() {} });
+        return {
+          dispose() {
+            overview.dispose();
+            secrets.dispose();
+          },
+        };
+      },
+    };
+
+    act(() => root?.render(
+      <WorkbenchToolWindowDock
+        toolWindows={[provider]}
+        mountedIds={new Set(["aws"])}
+        state={state}
+        visible
+        activeId="aws"
+        height={240}
+        viewRequest={undefined}
+        canDetach
+        onClose={() => undefined}
+        onDetach={onDetach}
+        onResize={() => undefined}
+        onResetHeight={() => undefined}
+      />,
+    ));
+
+    const secretsTab = [...(host?.querySelectorAll<HTMLButtonElement>("button[role='tab']") ?? [])]
+      .find((button) => button.textContent === "Secrets Manager");
+    act(() => secretsTab?.click());
+    const detach = host?.querySelector<HTMLButtonElement>('[aria-label="Abrir AWS em janela separada"]');
+    act(() => detach?.click());
+
+    expect(onDetach).toHaveBeenCalledWith(provider, "aws.secrets");
   });
 
   it("keeps retained plugin DOM mounted when only dock visibility changes", () => {

@@ -18,7 +18,7 @@ export interface WorkbenchToolWindowDockProps {
   readonly viewRequest: WorkbenchToolWindowViewRequest | undefined;
   readonly canDetach: boolean;
   readonly onClose: () => void;
-  readonly onDetach: (toolWindow: WorkbenchToolWindowContribution) => void;
+  readonly onDetach: (toolWindow: WorkbenchToolWindowContribution, viewId?: string) => void;
   readonly onResize: (event: ReactPointerEvent<HTMLDivElement>) => void;
   readonly onResetHeight: () => void;
 }
@@ -49,7 +49,7 @@ export function WorkbenchToolWindowDock({
         height={height}
         {...(viewRequest ? { viewRequest } : {})}
         onClose={onClose}
-        {...(canDetach ? { onDetach: () => onDetach(toolWindow) } : {})}
+        {...(canDetach ? { onDetach: (viewId?: string) => onDetach(toolWindow, viewId) } : {})}
         onResize={onResize}
         onResetHeight={onResetHeight}
       />

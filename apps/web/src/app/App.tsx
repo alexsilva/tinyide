@@ -7743,9 +7743,9 @@ export function App() {
                 viewRequest={toolWindowViewRequest}
                 canDetach={canDetachPanels}
                 onClose={closeToolWindow}
-                onDetach={(toolWindow) => void detachPanelToWindow(
+                onDetach={(toolWindow, viewId) => void detachPanelToWindow(
                   { kind: "tool-window", id: toolWindow.id },
-                  undefined,
+                  viewId,
                   // Desmonta em vez de só ocultar: o host retido seria um
                   // segundo cliente do mesmo backend (PTY) com dimensões
                   // divergentes da janela destacada.

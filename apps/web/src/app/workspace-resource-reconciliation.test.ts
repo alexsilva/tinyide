@@ -1,11 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   readFileDocument,
   type BrowserDirectoryHandle,
   type BrowserFileHandle,
   type OpenDocument,
 } from "../browser-filesystem";
-import { reconcileOpenDocumentsAfterWorkspaceChange } from "./workspace-resource-reconciliation";
+import {
+  assertWorkspaceResourcePath,
+  isSafeWorkspaceResourcePath,
+  reconcileOpenDocumentsAfterWorkspaceChange,
+} from "./workspace-resource-reconciliation";
 
 function fileHandle(name: string, content: BlobPart = "content", type = ""): BrowserFileHandle {
   return {
@@ -41,6 +45,31 @@ async function openDocument(path: string, content: string): Promise<OpenDocument
 }
 
 describe("workspace resource reconciliation", () => {
+  it("accepts only normalized workspace-relative resource paths", () => {
+    expect(isSafeWorkspaceResourcePath("src/main.py")).toBe(true);
+    for (const unsafe of ["", "../main.py", "./main.py", "src//main.py", "src\\main.py"]) {
+      expect(isSafeWorkspaceResourcePath(unsafe)).toBe(false);
+      expect(() => assertWorkspaceResourcePath(unsafe)).toThrow("Caminho de recurso inválido.");
+    }
+    expect(() => assertWorkspaceResourcePath("src/main.py")).not.toThrow();
+  });
+
+  it("keeps untitled documents untouched during filesystem reconciliation", async () => {
+    const document = await openDocument("src/main.py", "same\n");
+    const {path: _path, ...withoutPath} = document;
+    const untitled: OpenDocument = {...withoutPath, id: "untitled:1", name: "Untitled"};
+    const root = directoryHandle("root", []);
+
+    const result = await reconcileOpenDocumentsAfterWorkspaceChange({
+      documents: [untitled],
+      workspaceHandle: root,
+      paths: ["src/main.py"],
+    });
+
+    expect(result.documents).toEqual([untitled]);
+    expect(result.removedIds).toEqual([]);
+  });
+
   it("reloads clean documents and closes files removed by reset --hard", async () => {
     const changed = await openDocument("src/changed.py", "old\n");
     const removed = await openDocument("src/removed.py", "removed\n");
@@ -145,6 +174,36 @@ describe("workspace resource reconciliation", () => {
     });
 
     expect(result.externalChanges).toEqual([]);
+  });
+
+  it("reconciles only open documents affected by watcher paths", async () => {
+    const documents = await Promise.all(Array.from({length: 500}, (_, index) => (
+      openDocument(`doc-${index}.txt`, `saved-${index}\n`)
+    )));
+    const rawRoot = directoryHandle("root", Array.from({length: 500}, (_, index) => (
+      fileHandle(
+        `doc-${index}.txt`,
+        index === 321 ? "changed-on-disk\n" : `saved-${index}\n`,
+      )
+    )));
+    const getFileHandle = vi.fn(rawRoot.getFileHandle);
+    const root: BrowserDirectoryHandle = {...rawRoot, getFileHandle};
+
+    const result = await reconcileOpenDocumentsAfterWorkspaceChange({
+      documents,
+      workspaceHandle: root,
+      workspaceRoot: "/workspace",
+      paths: ["doc-321.txt"],
+    });
+
+    expect(getFileHandle).toHaveBeenCalledTimes(1);
+    expect(getFileHandle).toHaveBeenCalledWith("doc-321.txt");
+    expect(result.documents[320]).toBe(documents[320]);
+    expect(result.documents[321]?.content).toBe("changed-on-disk\n");
+    expect(result.documents[322]).toBe(documents[322]);
+    expect(result.externalChanges).toEqual([
+      {id: "doc-321.txt", path: "doc-321.txt", kind: "reloaded"},
+    ]);
   });
 
 });

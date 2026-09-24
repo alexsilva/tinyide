@@ -49,6 +49,14 @@ function renamedWorkspacePath(path: string, renames: readonly WorkspaceResourceR
   return current;
 }
 
+function pathAffectedByChanges(path: string, paths: readonly string[] | undefined): boolean {
+  if (!paths?.length) return true;
+  return paths.some((changedPath) => (
+    path === changedPath
+    || path.startsWith(`${changedPath}/`)
+  ));
+}
+
 function mergeDiskDocument(
   current: OpenDocument,
   disk: OpenDocument,
@@ -84,6 +92,8 @@ export async function reconcileOpenDocumentsAfterWorkspaceChange(options: {
   readonly documents: readonly OpenDocument[];
   readonly workspaceHandle: BrowserDirectoryHandle;
   readonly workspaceRoot?: string;
+  /** Caminhos relativos reportados pelo watcher/Git. Ausente = reconciliação completa. */
+  readonly paths?: readonly string[];
   readonly renames?: readonly WorkspaceResourceRename[];
 }): Promise<OpenDocumentResourceReconciliation> {
   const renames = options.renames ?? [];
@@ -98,6 +108,11 @@ export async function reconcileOpenDocumentsAfterWorkspaceChange(options: {
       continue;
     }
     const path = renamedWorkspacePath(document.path, renames);
+    const renamed = path !== document.path;
+    if (!renamed && !pathAffectedByChanges(document.path, options.paths)) {
+      resolved.push(document);
+      continue;
+    }
     try {
       const handle = await resolveFileHandle(options.workspaceHandle, path);
       const disk = await readFileDocument(handle, path, options.workspaceRoot);
@@ -122,9 +137,10 @@ export async function reconcileOpenDocumentsAfterWorkspaceChange(options: {
   }
 
   const order = new Map(options.documents.map((document, index) => [document.id, index]));
+  const sourceIdByRemappedId = new Map(remappedIds.map((item) => [item.to, item.from]));
   resolved.sort((left, right) => {
-    const leftSource = remappedIds.find((item) => item.to === left.id)?.from ?? left.id;
-    const rightSource = remappedIds.find((item) => item.to === right.id)?.from ?? right.id;
+    const leftSource = sourceIdByRemappedId.get(left.id) ?? left.id;
+    const rightSource = sourceIdByRemappedId.get(right.id) ?? right.id;
     return (order.get(leftSource) ?? Number.MAX_SAFE_INTEGER) - (order.get(rightSource) ?? Number.MAX_SAFE_INTEGER);
   });
 

@@ -1,5 +1,6 @@
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -17,6 +18,10 @@ import {
   WorkbenchSidebarHost,
   type WorkbenchToolWindowViewRequest,
 } from "./workbench-plugin-hosts";
+import {
+  createAsyncCoalescer,
+  mergeWorkspaceResourceChanges,
+} from "./async-coalescer";
 import { scrollOutputToEnd } from "./output-follow";
 import {
   ExternalFileNotice,
@@ -24,6 +29,7 @@ import {
   type WorkspaceExternalSyncState,
 } from "./editor/ExternalFileNotice";
 import {
+  TEXT_EDITOR_DOCUMENT_CLOSED_EVENT,
   TEXT_EDITOR_DOCUMENT_CHANGED_EVENT,
   TEXT_EDITOR_DOCUMENT_SAVED_EVENT,
   TEXT_EDITOR_FORMAT_DOCUMENT_COMMAND,
@@ -52,6 +58,7 @@ import type {
   ResourceContextMenuProvider,
   TextEditorContextMenuContext,
   TextEditorContextMenuProvider,
+  TextEditorDocumentClosedEvent,
   TextEditorDocumentChangedEvent,
   TextEditorDocumentSavedEvent,
   TextEditorFoldingRange,
@@ -111,6 +118,7 @@ type ExplorerClipboardEntry = Pick<WorkspaceEntry, "path" | "name" | "kind">;
 interface ExplorerIgnoreResolution {
   readonly workspaceKey: string;
   readonly providerKey: string;
+  readonly revision: number;
   readonly resolvedPaths: ReadonlySet<string>;
   readonly ignoredPaths: ReadonlySet<string>;
 }
@@ -291,9 +299,11 @@ import {
 import {
   EDITOR_CONTENT_PADDING,
   EDITOR_DEFAULT_LINE_HEIGHT,
+  countLines,
   editorDocumentIndex,
   editorVisibleLineRange,
   resolveEditorSettings,
+  syntaxHighlightPlan,
 } from "./editor-settings";
 import {
   closeSidebarForSide,
@@ -544,8 +554,6 @@ type StoredProfiles = WorkspaceExecutionProfiles;
 type ContextMenuTarget = WorkbenchContextMenuTarget;
 
 const EXPLORER_FILTER_DEBOUNCE_MS = 40;
-const MAX_SYNTAX_HIGHLIGHT_SOURCE_LENGTH = 500_000;
-const SYNTAX_WINDOW_MIN_SOURCE_LENGTH = 100_000;
 const EDITOR_FOLD_CONTROL_OVERSCAN_LINES = 60;
 /**
  * Régua e janela de sintaxe assinam o viewport diretamente (editor-viewport.ts) e acompanham a
@@ -559,10 +567,68 @@ const EDITOR_VIEWPORT_TRAILING_DELAY_MS = 120;
  * descarrega a captura é o próprio trailing (um render só); este timer cobre só seleção/teclado.
  */
 const EDITOR_STATE_CAPTURE_DELAY_MS = 200;
+/**
+ * Janela de agrupamento do evento de mudança entregue aos plugins. Não afeta o
+ * texto na tela: o conteúdo editado entra no estado a cada tecla.
+ */
+const EDITOR_DOCUMENT_CHANGE_NOTICE_DELAY_MS = 250;
+/**
+ * Pausa antes de pedir as faixas dobráveis ao provedor de linguagem. Os controles de fold já só
+ * aparecem quando as faixas correspondem ao texto atual — durante a digitação eles ficam ocultos
+ * de qualquer maneira, e recalcular a cada tecla só gastava a thread principal.
+ */
+const EDITOR_FOLDING_RANGES_DELAY_MS = 120;
 const EDITOR_NAVIGATION_LOADING_DELAY_MS = 150;
 const EDITOR_NAVIGATION_LOADING_MINIMUM_MS = 350;
 const EDITOR_BUSY_MINIMUM_MS = 300;
 const EXPLORER_DIRECTORY_LOADING_CURSOR_DELAY_MS = 500;
+
+type EntryTreeProps = Parameters<typeof EntryTree>[0];
+type EntryTreeActions = Pick<
+  EntryTreeProps,
+  | "onToggle"
+  | "onSelect"
+  | "onOpen"
+  | "onContextMenu"
+  | "onMove"
+  | "onDraggingPathChange"
+  | "onDropTargetPathChange"
+  | "onShowHiddenDirectory"
+  | "onShowIgnoredEntries"
+  | "onRenameNameChange"
+  | "onRenameSubmit"
+  | "onRenameCancel"
+  | "onCreationNameChange"
+  | "onCreationSubmit"
+  | "onCreationCancel"
+>;
+type EntryTreeViewProps = Omit<EntryTreeProps, keyof EntryTreeActions>;
+
+const StableEntryTree = memo(function StableEntryTree({
+  actionsRef,
+  ...props
+}: EntryTreeViewProps & { readonly actionsRef: { current: EntryTreeActions | undefined } }) {
+  return (
+    <EntryTree
+      {...props}
+      onToggle={(entry) => actionsRef.current?.onToggle(entry)}
+      onSelect={(entry, additive) => actionsRef.current?.onSelect(entry, additive)}
+      onOpen={(entry) => actionsRef.current?.onOpen(entry)}
+      onContextMenu={(entry, x, y) => actionsRef.current?.onContextMenu(entry, x, y)}
+      onMove={(sourcePaths, targetPath) => actionsRef.current?.onMove(sourcePaths, targetPath)}
+      onDraggingPathChange={(path) => actionsRef.current?.onDraggingPathChange(path)}
+      onDropTargetPathChange={(path) => actionsRef.current?.onDropTargetPathChange(path)}
+      onShowHiddenDirectory={(path) => actionsRef.current?.onShowHiddenDirectory(path)}
+      onShowIgnoredEntries={() => actionsRef.current?.onShowIgnoredEntries()}
+      onRenameNameChange={(name) => actionsRef.current?.onRenameNameChange(name)}
+      onRenameSubmit={() => actionsRef.current?.onRenameSubmit()}
+      onRenameCancel={() => actionsRef.current?.onRenameCancel()}
+      onCreationNameChange={(name) => actionsRef.current?.onCreationNameChange(name)}
+      onCreationSubmit={() => actionsRef.current?.onCreationSubmit()}
+      onCreationCancel={() => actionsRef.current?.onCreationCancel()}
+    />
+  );
+});
 
 
 export function App() {
@@ -618,11 +684,15 @@ export function App() {
   const [workspaceRoot, setWorkspaceRoot] = useState<string | undefined>(initialSession.workspaceRoot);
   const [entries, setEntries] = useState<readonly WorkspaceEntry[]>([]);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set(initialSession.expandedDirectories));
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
   const [explorerShowHidden, setExplorerShowHidden] = useState(initialSession.explorerShowHidden);
   const [explorerShowIgnored, setExplorerShowIgnored] = useState(initialSession.explorerShowIgnored);
   const [explorerRevealedHiddenPaths, setExplorerRevealedHiddenPaths] = useState<ReadonlySet<string>>(new Set());
   const [explorerIgnoreResolution, setExplorerIgnoreResolution] = useState<ExplorerIgnoreResolution>();
   const [explorerIgnoreRevision, setExplorerIgnoreRevision] = useState(0);
+  const explorerIgnoreRequestContextRef = useRef("");
+  const explorerIgnoreRequestedPathsRef = useRef<Set<string>>(new Set());
   const [explorerLoadingPaths, setExplorerLoadingPaths] = useState<ReadonlySet<string>>(new Set());
   const [explorerLoadingCursorVisible, setExplorerLoadingCursorVisible] = useState(false);
   const [documents, setDocuments] = useState<readonly OpenDocument[]>([]);
@@ -726,6 +796,7 @@ export function App() {
   const [editorDecorationRevision, setEditorDecorationRevision] = useState(0);
   const [resourceDecorations, setResourceDecorations] = useState<ReadonlyMap<string, ResourceDecoration>>(new Map());
   const [resourceDecorationRevision, setResourceDecorationRevision] = useState(0);
+  const [resourceDecorationPathBatch, setResourceDecorationPathBatch] = useState<readonly string[]>([]);
   const [restorationComplete, setRestorationComplete] = useState(false);
   const restorationStartedRef = useRef(false);
   const [error, setErrorState] = useState<string>();
@@ -762,6 +833,7 @@ export function App() {
   }>();
   const [selectedExplorerPath, setSelectedExplorerPath] = useState<string>();
   const [selectedExplorerPaths, setSelectedExplorerPaths] = useState<ReadonlySet<string>>(new Set());
+  const explorerTreeActionsRef = useRef<EntryTreeActions | undefined>(undefined);
   const [editorContextMenuContext, setEditorContextMenuContext] = useState<TextEditorContextMenuContext>();
   const contextMenuRef = useRef<WorkbenchContextMenuHandle>(null);
   const contextMenuRequestIdRef = useRef(0);
@@ -822,8 +894,16 @@ export function App() {
   const [editorViewport, setEditorViewport] = useState({ scrollTop: 0, height: 800 });
   const [editorViewportStore] = useState(createEditorViewportStore);
   const editorViewportSyncRef = useRef<{ trailingTimer: number | undefined }>({ trailingTimer: undefined });
+  /**
+   * Última posição de rolagem conhecida do editor, mantida fora do DOM. Ler `scrollTop` de um
+   * elemento durante o render força o navegador a concluir o layout pendente na hora — com o
+   * documento recém-alterado pela tecla, isso é um reflow do arquivo inteiro a cada render.
+   */
+  const editorScrollTopRef = useRef(0);
+  const editorScrollTopDocumentRef = useRef<string | undefined>(undefined);
   const completionAbortRef = useRef<AbortController | undefined>(undefined);
   const completionTimerRef = useRef<number | undefined>(undefined);
+  const lintTimerRef = useRef<number | undefined>(undefined);
   const editorStateCaptureRef = useRef<{
     documentId: string;
     selectionStart: number;
@@ -902,6 +982,11 @@ export function App() {
   const editorDebugCurrentLineRef = useRef<HTMLDivElement | null>(null);
   const editorBreakpointLinesRef = useRef<HTMLDivElement | null>(null);
   const editorHistoriesRef = useRef<Map<string, EditorHistory>>(new Map());
+  const editorDocumentChangeRef = useRef<{
+    documentId: string;
+    previousContent: string;
+    timer?: number;
+  } | undefined>(undefined);
   const activeDocumentIdRef = useRef<string | undefined>(activeDocumentId);
   activeDocumentIdRef.current = activeDocumentId;
   const documentsRef = useRef<readonly OpenDocument[]>(documents);
@@ -1011,8 +1096,17 @@ export function App() {
   }), []);
 
   const activeDocument = documents.find((document) => document.id === activeDocumentId);
+  // Trocar de aba recomeça a contagem de rolagem no ponto salvo do documento; o efeito que
+  // restaura o scroll confirma o valor no próximo frame.
+  if (editorScrollTopDocumentRef.current !== activeDocumentId) {
+    editorScrollTopDocumentRef.current = activeDocumentId;
+    editorScrollTopRef.current = activeDocument?.scrollTop ?? 0;
+  }
   /** Conteúdo real do arquivo aberto. Fold é sempre estado visual derivado deste texto. */
   const activeEditorContent = activeDocument?.kind === "text" ? activeDocument.content : "";
+  const activeDocumentIsDirty = Boolean(
+    activeDocument?.kind === "text" && activeDocument.content !== activeDocument.savedContent,
+  );
   const activeExternalDocumentNotice = activeDocument
     ? externalDocumentNotices.get(activeDocument.id)
     : undefined;
@@ -1024,9 +1118,24 @@ export function App() {
       workspaceSettings.plugins,
       { settingsResolved: restorationComplete },
     ),
-    [activeDocument, platformSnapshot.plugins, resourceEditorRevision, restorationComplete, workspaceSettings.plugins],
+    [
+      activeDocument?.id,
+      activeDocument?.name,
+      activeDocument?.path,
+      activeDocument?.workspaceRoot,
+      activeDocument?.mediaType,
+      activeDocument?.size,
+      activeDocument?.kind,
+      platformSnapshot.plugins,
+      resourceEditorRevision,
+      restorationComplete,
+      workspaceSettings.plugins,
+    ],
   );
-  const activeLanguageProvider = activeResourceEditorProvider ? undefined : languageProviderFor(activeDocument);
+  const activeLanguageProvider = useMemo(
+    () => activeResourceEditorProvider ? undefined : languageProviderFor(activeDocument),
+    [activeResourceEditorProvider, activeDocument?.id, activeDocument?.kind, activeDocument?.name, platformSnapshot.plugins],
+  );
   const activeEditorBusyOperation = editorBusyOperation?.documentId === activeDocument?.id
     ? editorBusyOperation
     : undefined;
@@ -1162,15 +1271,27 @@ export function App() {
     window.addEventListener("keydown", handleRenderedEditorShortcut, true);
     return () => window.removeEventListener("keydown", handleRenderedEditorShortcut, true);
   }, [activeDocument?.id, activeDocument?.kind, activeResourceEditorProvider, openEditorSearch]);
+  // Só o nome e o tipo do arquivo escolhem o realçador; o texto chega a ele como argumento.
+  // Recriá-lo a cada tecla trocava a identidade da prop e refazia a camada de sintaxe mesmo
+  // quando o conteúdo não tinha mudado (hover, troca de foco, redimensionamento).
+  const syntaxHighlightDisabled = !syntaxHighlightPlan(activeEditorContent.length).enabled;
   const activeSyntaxHighlighter = useMemo(() => {
     if (activeResourceEditorProvider || !activeDocument || activeDocument.kind !== "text") return undefined;
-    if (activeEditorContent.length > MAX_SYNTAX_HIGHLIGHT_SOURCE_LENGTH) return undefined;
+    if (syntaxHighlightDisabled) return undefined;
     return resolveSyntaxHighlighter({
       fileName: activeDocument.name,
       mediaType: activeDocument.mediaType,
-      source: activeEditorContent,
+      source: "",
     }, platform.capabilities.getAll<LanguageProvider>("language.provider"));
-  }, [activeResourceEditorProvider, activeDocument?.id, activeDocument?.name, activeDocument?.mediaType, activeEditorContent, platformSnapshot.plugins]);
+  }, [
+    activeResourceEditorProvider,
+    activeDocument?.id,
+    activeDocument?.kind,
+    activeDocument?.name,
+    activeDocument?.mediaType,
+    syntaxHighlightDisabled,
+    platformSnapshot.plugins,
+  ]);
 
   useEffect(() => {
     const provider = activeLanguageProvider;
@@ -1186,26 +1307,36 @@ export function App() {
 
     let cancelled = false;
     const source = activeEditorContent;
-    const lineCount = source.split("\n").length;
     const document = textEditorDocumentSnapshot(activeDocument);
 
-    void Promise.resolve(provider.provideFoldingRanges({ document, source }))
-      .then((ranges: readonly TextEditorFoldingRange[]) => {
-        if (cancelled) return;
-        setActiveFoldRangeState({
-          documentId: activeDocument.id,
-          providerId: provider.id,
-          source,
-          ranges: normalizeFoldRanges(ranges, lineCount),
+    /**
+     * Varrer o arquivo em busca de blocos dobráveis é trabalho de plugin — pode significar um
+     * parser inteiro rodando na thread principal. Durante uma rajada de digitação o resultado
+     * seria descartado de qualquer forma: os controles só aparecem quando as faixas
+     * correspondem ao texto atual. Uma pausa curta basta para que rodem uma vez por rajada.
+     */
+    const timer = window.setTimeout(() => {
+      void Promise.resolve(provider.provideFoldingRanges?.({ document, source }))
+        .then((ranges: readonly TextEditorFoldingRange[] | undefined) => {
+          if (cancelled || !ranges) return;
+          setActiveFoldRangeState({
+            documentId: activeDocument.id,
+            providerId: provider.id,
+            source,
+            ranges: normalizeFoldRanges(ranges, countLines(source)),
+          });
+        })
+        .catch((cause) => {
+          if (cancelled) return;
+          setActiveFoldRangeState(undefined);
+          setError(cause instanceof Error ? cause.message : String(cause));
         });
-      })
-      .catch((cause) => {
-        if (cancelled) return;
-        setActiveFoldRangeState(undefined);
-        setError(cause instanceof Error ? cause.message : String(cause));
-      });
+    }, EDITOR_FOLDING_RANGES_DELAY_MS);
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [
     activeResourceEditorProvider,
     activeDocument?.id,
@@ -1252,8 +1383,7 @@ export function App() {
     activeDocument?.path,
     activeDocument?.workspaceRoot,
     activeDocument?.mediaType,
-    activeDocument?.content,
-    activeDocument?.savedContent,
+    activeDocumentIsDirty,
     platformSnapshot,
     resourceEditorRevision,
   ]);
@@ -1625,7 +1755,7 @@ export function App() {
     () => activeDocument?.kind === "text"
       ? editorDocumentIndex(
           activeEditorDisplayContent,
-          activeEditorDisplayContent.length > SYNTAX_WINDOW_MIN_SOURCE_LENGTH,
+          syntaxHighlightPlan(activeEditorDisplayContent.length).windowed,
         )
       : { lineCount: 1, lineNumberWidth: 2, gutterWidth: 52 },
     [activeDocument?.id, activeDocument?.kind, activeEditorDisplayContent],
@@ -2261,10 +2391,32 @@ export function App() {
   }, [platformSnapshot.plugins]);
 
   useEffect(() => {
+    const pendingPaths = new Set<string>();
+    let flushTimer: number | undefined;
+    const flushPaths = () => {
+      flushTimer = undefined;
+      if (!pendingPaths.size) return;
+      const paths = [...pendingPaths];
+      pendingPaths.clear();
+      setResourceDecorationPathBatch(paths);
+    };
     const subscriptions = resourceDecorationProviders()
-      .map((provider) => provider.onDidChange?.(() => setResourceDecorationRevision((current) => current + 1)))
+      .map((provider) => provider.onDidChange?.((paths) => {
+        if (!paths?.length) {
+          if (flushTimer !== undefined) window.clearTimeout(flushTimer);
+          flushTimer = undefined;
+          pendingPaths.clear();
+          setResourceDecorationRevision((current) => current + 1);
+          return;
+        }
+        for (const path of paths) pendingPaths.add(path);
+        if (flushTimer === undefined) flushTimer = window.setTimeout(flushPaths, 80);
+      }))
       .filter((subscription): subscription is { dispose(): void } => Boolean(subscription));
-    return () => subscriptions.forEach((subscription) => subscription.dispose());
+    return () => {
+      if (flushTimer !== undefined) window.clearTimeout(flushTimer);
+      subscriptions.forEach((subscription) => subscription.dispose());
+    };
   }, [platformSnapshot.plugins]);
 
   useEffect(() => {
@@ -2275,6 +2427,18 @@ export function App() {
     return () => subscriptions.forEach((subscription) => subscription.dispose());
   }, [platformSnapshot.plugins]);
 
+  const workspaceEntriesByPath = useMemo(() => {
+    const indexed = new Map<string, WorkspaceEntry>();
+    const collect = (items: readonly WorkspaceEntry[]) => {
+      for (const entry of items) {
+        indexed.set(entry.path, entry);
+        if (entry.children) collect(entry.children);
+      }
+    };
+    collect(entries);
+    return indexed;
+  }, [entries]);
+
   // Chave estável do conjunto de documentos sujos: o array `documents` ganha
   // identidade nova a cada tecla, mas o sweep de decorações da árvore inteira
   // só precisa rodar quando ESTE conjunto muda (sujar, salvar, fechar).
@@ -2284,6 +2448,9 @@ export function App() {
     .sort()
     .map((path) => JSON.stringify(path))
     .join(","), [documents]);
+  const dirtyDocumentPaths = useMemo(() => new Set<string>(
+    dirtyDocumentPathsKey ? JSON.parse(`[${dirtyDocumentPathsKey}]`) : [],
+  ), [dirtyDocumentPathsKey]);
 
   useEffect(() => {
     const providers = resourceDecorationProviders();
@@ -2292,14 +2459,7 @@ export function App() {
       return;
     }
     let cancelled = false;
-    const collect = (items: readonly WorkspaceEntry[]): WorkspaceEntry[] => items.flatMap((entry) => [
-      entry,
-      ...(entry.children ? collect(entry.children) : []),
-    ]);
-    const dirtyPaths = new Set<string>(
-      dirtyDocumentPathsKey ? JSON.parse(`[${dirtyDocumentPathsKey}]`) : [],
-    );
-    const allEntries = collect(entries);
+    const allEntries = [...workspaceEntriesByPath.values()];
     const resolveDecoration = async (entry: WorkspaceEntry) => {
       const resource: ResourceContext = {
         kind: entry.kind,
@@ -2307,7 +2467,7 @@ export function App() {
         path: entry.path,
         workspaceName,
         ...(workspaceRoot ? { workspaceRoot } : {}),
-        ...(entry.kind === "file" ? { isDirty: dirtyPaths.has(entry.path) } : {}),
+        ...(entry.kind === "file" ? { isDirty: dirtyDocumentPaths.has(entry.path) } : {}),
       };
       const decorations = (await Promise.all(providers.map(async (provider) => {
         try { return await provider.provideDecoration(resource); }
@@ -2321,7 +2481,60 @@ export function App() {
       setResourceDecorations(new Map(items.filter((item): item is readonly [string, ResourceDecoration] => Boolean(item))));
     });
     return () => { cancelled = true; };
-  }, [entries, dirtyDocumentPathsKey, workspaceName, workspaceRoot, resourceDecorationRevision, platformSnapshot.plugins]);
+  }, [
+    dirtyDocumentPaths,
+    platformSnapshot.plugins,
+    resourceDecorationRevision,
+    workspaceEntriesByPath,
+    workspaceName,
+    workspaceRoot,
+  ]);
+
+  useEffect(() => {
+    if (!resourceDecorationPathBatch.length) return;
+    const providers = resourceDecorationProviders();
+    if (!providers.length || workspaceName === "Sem workspace") return;
+    const requestedEntries = resourceDecorationPathBatch
+      .map((path) => workspaceEntriesByPath.get(path))
+      .filter((entry): entry is WorkspaceEntry => Boolean(entry));
+    if (!requestedEntries.length) return;
+    let cancelled = false;
+    const resolveDecoration = async (entry: WorkspaceEntry) => {
+      const resource: ResourceContext = {
+        kind: entry.kind,
+        name: entry.name,
+        path: entry.path,
+        workspaceName,
+        ...(workspaceRoot ? { workspaceRoot } : {}),
+        ...(entry.kind === "file" ? { isDirty: dirtyDocumentPaths.has(entry.path) } : {}),
+      };
+      const decorations = (await Promise.all(providers.map(async (provider) => {
+        try { return await provider.provideDecoration(resource); }
+        catch { return undefined; }
+      }))).filter((value): value is ResourceDecoration => Boolean(value));
+      const decoration = decorations.sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0))[0];
+      return [entry.path, decoration] as const;
+    };
+    void Promise.all(requestedEntries.map(resolveDecoration)).then((updates) => {
+      if (cancelled) return;
+      setResourceDecorations((current) => {
+        const next = new Map(current);
+        for (const [path, decoration] of updates) {
+          if (decoration) next.set(path, decoration);
+          else next.delete(path);
+        }
+        return next;
+      });
+    });
+    return () => { cancelled = true; };
+  }, [
+    dirtyDocumentPaths,
+    platformSnapshot.plugins,
+    resourceDecorationPathBatch,
+    workspaceEntriesByPath,
+    workspaceName,
+    workspaceRoot,
+  ]);
 
   useEffect(() => {
     if (activeDocument?.kind !== "text" || activeResourceEditorProvider || !activeDocument.path || !workspaceRoot) {
@@ -2376,10 +2589,16 @@ export function App() {
   }, [platformSnapshot.plugins, platformSnapshot.initialized, activeToolWindowId, toolWindowVisible]);
 
   useEffect(() => {
+    const retainedIds = new Set(
+      workbenchToolWindows
+        .filter((toolWindow) => toolWindow.retainWhenHidden)
+        .map((toolWindow) => toolWindow.id),
+    );
     setMountedToolWindowIds((previous) => retainMountedToolWindows(previous, {
       ...(activeToolWindowId ? { activeToolWindowId } : {}),
       toolWindowVisible,
       availableIds: workbenchToolWindows.map((toolWindow) => toolWindow.id),
+      retainedIds,
     }));
   }, [activeToolWindowId, toolWindowVisible, workbenchToolWindows]);
 
@@ -2476,9 +2695,15 @@ export function App() {
 
   useEffect(() => () => {
     if (workspaceExternalSyncTimerRef.current) clearTimeout(workspaceExternalSyncTimerRef.current);
+    const pendingChange = editorDocumentChangeRef.current;
+    if (pendingChange?.timer !== undefined) window.clearTimeout(pendingChange.timer);
   }, []);
 
   useEffect(() => {
+    if (lintTimerRef.current !== undefined) {
+      window.clearTimeout(lintTimerRef.current);
+      lintTimerRef.current = undefined;
+    }
     if (!activeDocument || !activeLanguageProvider) {
       setDiagnostics([]);
       return;
@@ -2486,6 +2711,7 @@ export function App() {
 
     let cancelled = false;
     const timer = window.setTimeout(() => {
+      if (lintTimerRef.current === timer) lintTimerRef.current = undefined;
       /** O lint analisa o conteúdo real; os diagnósticos voltam para as coordenadas visíveis. */
       const projection = activeFoldProjection;
       void lintDocument(activeDocument, { enabledRuleIds: lintEnabledRuleIds })
@@ -2497,10 +2723,12 @@ export function App() {
           if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
         });
     }, 450);
+    lintTimerRef.current = timer;
 
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      if (lintTimerRef.current === timer) lintTimerRef.current = undefined;
     };
   }, [activeDocument?.id, activeDocument?.content, activeLanguageProvider, lintEnabledRuleIds, activeFoldProjection]);
 
@@ -3151,6 +3379,8 @@ export function App() {
   updateProfilesRef.current = updateProfiles;
 
   const resetProjectDependentState = () => {
+    flushEditorDocumentChange();
+    releaseClosedDocumentState(documents.map((document) => document.id));
     setDocuments([]);
     setActiveDocumentId(undefined);
     setDiagnostics([]);
@@ -3162,6 +3392,7 @@ export function App() {
     setExplorerRevealedHiddenPaths(new Set());
     setExplorerLoadingPaths(new Set());
     setExplorerLoadingCursorVisible(false);
+    setExternalDocumentNotices(new Map());
     setSelectedExplorerPath(undefined);
     setSelectedExplorerPaths(new Set());
     setHighlightedExplorerPath(undefined);
@@ -4292,56 +4523,103 @@ export function App() {
     }
   };
 
-  const updateDocument = (textarea: HTMLTextAreaElement) => {
-    if (!activeDocumentId) return;
-    const previous = documents.find((document) => document.id === activeDocumentId);
+  /**
+   * Entrega aos plugins a rajada de digitação acumulada. O conteúdo já está no
+   * estado quando isto roda; aqui só se resolve quem precisa ser avisado.
+   */
+  const flushEditorDocumentChange = () => {
+    const pending = editorDocumentChangeRef.current;
+    if (!pending) return;
+    if (pending.timer !== undefined) window.clearTimeout(pending.timer);
+    editorDocumentChangeRef.current = undefined;
+
+    const current = documentsRef.current.find((document) => document.id === pending.documentId);
+    if (!current || current.kind !== "text" || current.content === pending.previousContent) return;
+    const changedEvent: TextEditorDocumentChangedEvent = {
+      document: {
+        id: current.id,
+        name: current.name,
+        ...(current.path ? { path: current.path } : {}),
+        ...(current.workspaceRoot ? { workspaceRoot: current.workspaceRoot } : {}),
+        content: current.content,
+      },
+      previousContent: pending.previousContent,
+      reason: "edit",
+      isDirty: current.content !== current.savedContent,
+    };
+    void platform.events.emit(TEXT_EDITOR_DOCUMENT_CHANGED_EVENT, changedEvent);
+  };
+
+  /**
+   * O texto digitado entra no estado no mesmo evento: no editor realçado os
+   * glifos visíveis vêm da camada de sintaxe, que lê daqui — adiar o estado é
+   * adiar o que aparece na tela. O que se adia é só a notificação aos plugins,
+   * cara e sem valor a cada tecla.
+   */
+  const updateDocument = (textarea: HTMLTextAreaElement, immediate = false) => {
+    const documentId = activeDocumentIdRef.current;
+    if (!documentId) return;
+    const previous = documentsRef.current.find((document) => document.id === documentId);
     if (!previous || previous.kind !== "text" || previous.readOnly) return;
+
     const content = textarea.value;
     const selectionStart = textarea.selectionStart;
     const selectionEnd = textarea.selectionEnd;
-    const currentFolds = documentFoldsRef.current.get(activeDocumentId) ?? [];
-    if (currentFolds.length) {
+    if (
+      previous.content === content
+      && previous.selectionStart === selectionStart
+      && previous.selectionEnd === selectionEnd
+    ) return;
+    const contentChanged = previous.content !== content;
+
+    const currentFolds = documentFoldsRef.current.get(documentId) ?? [];
+    if (currentFolds.length && contentChanged) {
       const remapped = remapDocumentFoldsAfterEdit(previous.content, content, currentFolds);
       const nextFolds = new Map(documentFoldsRef.current);
-      if (remapped.length) nextFolds.set(activeDocumentId, remapped);
-      else nextFolds.delete(activeDocumentId);
+      if (remapped.length) nextFolds.set(documentId, remapped);
+      else nextFolds.delete(documentId);
       documentFoldsRef.current = nextFolds;
       setDocumentFolds(nextFolds);
     }
-    setDocuments((current) => current.map((document) => {
-      if (document.id !== activeDocumentId) return document;
-      const history = editorHistoriesRef.current.get(document.id)
-        ?? createEditorHistory({
-          content: document.content,
-          selectionStart: document.selectionStart,
-          selectionEnd: document.selectionEnd,
-        });
-      editorHistoriesRef.current.set(document.id, recordEditorHistory(history, {
-        content,
-        selectionStart,
-        selectionEnd,
-      }));
-      return {
-        ...document,
-        content,
-        selectionStart,
-        selectionEnd,
-      };
+
+    const history = editorHistoriesRef.current.get(previous.id)
+      ?? createEditorHistory({
+        content: previous.content,
+        selectionStart: previous.selectionStart,
+        selectionEnd: previous.selectionEnd,
+      });
+    editorHistoriesRef.current.set(previous.id, recordEditorHistory(history, {
+      content,
+      selectionStart,
+      selectionEnd,
     }));
-    const changedEvent: TextEditorDocumentChangedEvent = {
-      document: {
-        id: previous.id,
-        name: previous.name,
-        ...(previous.path ? { path: previous.path } : {}),
-        ...(previous.workspaceRoot ? { workspaceRoot: previous.workspaceRoot } : {}),
-        content,
-      },
+
+    const nextDocuments = documentsRef.current.map((document) => document.id === documentId
+      ? {
+          ...document,
+          content,
+          selectionStart,
+          selectionEnd,
+        }
+      : document);
+    documentsRef.current = nextDocuments;
+    setDocuments(nextDocuments);
+
+    if (!contentChanged) return;
+    setDiagnostics((current) => current.length ? [] : current);
+
+    if (editorDocumentChangeRef.current?.documentId !== documentId) flushEditorDocumentChange();
+    /**
+     * A janela aberta pela primeira tecla da rajada não é reagendada pelas
+     * seguintes: digitação contínua ainda notifica os plugins a cada janela, em
+     * vez de adiá-los até a primeira pausa.
+     */
+    editorDocumentChangeRef.current ??= {
+      documentId,
       previousContent: previous.content,
-      reason: "edit",
-      isDirty: content !== previous.savedContent,
+      timer: window.setTimeout(flushEditorDocumentChange, EDITOR_DOCUMENT_CHANGE_NOTICE_DELAY_MS),
     };
-    void platform.events.emit(TEXT_EDITOR_DOCUMENT_CHANGED_EVENT, changedEvent);
-    setDiagnostics([]);
+    if (immediate) flushEditorDocumentChange();
   };
 
   const dismissCompletions = () => {
@@ -4426,6 +4704,10 @@ export function App() {
 
   const handleEditorChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     const textarea = event.currentTarget;
+    if (lintTimerRef.current !== undefined) {
+      window.clearTimeout(lintTimerRef.current);
+      lintTimerRef.current = undefined;
+    }
     updateDocument(textarea);
     if (completionSession) {
       const refined = refineCompletionSession(textarea, completionSession);
@@ -4445,7 +4727,7 @@ export function App() {
     const result = applyCompletionItem(textarea, completionSession, item);
     textarea.value = result.content;
     textarea.setSelectionRange(result.caret, result.caret);
-    updateDocument(textarea);
+    updateDocument(textarea, true);
     dismissCompletions();
     window.requestAnimationFrame(() => {
       textarea.focus();
@@ -4459,7 +4741,7 @@ export function App() {
     if (!textarea) return;
     textarea.value = content;
     textarea.setSelectionRange(selectionStart, selectionEnd);
-    updateDocument(textarea);
+    updateDocument(textarea, true);
     setEditorSearchMatchIndex(0);
     window.requestAnimationFrame(() => editorSearchInputRef.current?.focus({ preventScroll: true }));
   };
@@ -4482,7 +4764,10 @@ export function App() {
     textarea: HTMLTextAreaElement,
   ) => {
     if (!activeDocumentId) return;
-    const document = documents.find((candidate) => candidate.id === activeDocumentId);
+    // A rajada em aberto precisa chegar aos plugins antes do evento de undo/redo,
+    // senão eles recebem a edição depois da desfeita dela.
+    flushEditorDocumentChange();
+    const document = documentsRef.current.find((candidate) => candidate.id === activeDocumentId);
     if (!document) return;
     const history = editorHistoriesRef.current.get(document.id)
       ?? createEditorHistory({
@@ -4498,14 +4783,16 @@ export function App() {
 
     const { snapshot } = navigation;
     const content = snapshot.content;
-    setDocuments((current) => current.map((candidate) => candidate.id === document.id
+    const nextDocuments = documentsRef.current.map((candidate) => candidate.id === document.id
       ? {
           ...candidate,
           content,
           selectionStart: snapshot.selectionStart,
           selectionEnd: snapshot.selectionEnd,
         }
-      : candidate));
+      : candidate);
+    documentsRef.current = nextDocuments;
+    setDocuments(nextDocuments);
     const changedEvent: TextEditorDocumentChangedEvent = {
       document: {
         id: document.id,
@@ -4583,7 +4870,7 @@ export function App() {
         && result.selectionEnd === textarea.selectionEnd) return;
       textarea.value = result.content;
       textarea.setSelectionRange(result.selectionStart, result.selectionEnd);
-      updateDocument(textarea);
+      updateDocument(textarea, true);
       requestAnimationFrame(() => {
         textarea.focus();
         textarea.setSelectionRange(result.selectionStart, result.selectionEnd);
@@ -4700,6 +4987,7 @@ export function App() {
 
   const syncEditorViewportOnScroll = (element: HTMLElement) => {
     // Régua e janela de sintaxe acompanham via store, no próprio evento, sem render do App.
+    editorScrollTopRef.current = element.scrollTop;
     editorViewportStore.set(element.scrollTop, element.clientHeight);
     const sync = editorViewportSyncRef.current;
     if (sync.trailingTimer !== undefined) window.clearTimeout(sync.trailingTimer);
@@ -4782,6 +5070,7 @@ export function App() {
   };
 
   const syncEditorLineRuler = (scrollTop: number) => {
+    editorScrollTopRef.current = scrollTop;
     editorDebugCurrentLineRef.current?.style.setProperty("--editor-scroll-top", `${scrollTop}px`);
     editorBreakpointLinesRef.current?.style.setProperty("--editor-scroll-top", `${scrollTop}px`);
     editorFoldOverlayRef.current?.style.setProperty("--editor-scroll-top", `${scrollTop}px`);
@@ -4844,12 +5133,14 @@ export function App() {
   };
 
   const saveDocument = async (forceSaveAs = false) => {
-    if (!activeDocument) return;
-    await saveOpenDocument(activeDocument, forceSaveAs);
+    flushEditorDocumentChange();
+    const currentDocument = documentsRef.current.find((document) => document.id === activeDocumentIdRef.current);
+    if (!currentDocument) return;
+    await saveOpenDocument(currentDocument, forceSaveAs);
     setExternalDocumentNotices((current) => {
-      if (!current.has(activeDocument.id)) return current;
+      if (!current.has(currentDocument.id)) return current;
       const next = new Map(current);
-      next.delete(activeDocument.id);
+      next.delete(currentDocument.id);
       return next;
     });
   };
@@ -5005,22 +5296,30 @@ export function App() {
     });
   }, [platform.events, workspaceRoot]);
 
-  useEffect(() => platform.events.on<WorkspaceResourcesChangedEvent>(
-    WORKSPACE_RESOURCES_CHANGED_EVENT,
-    async (event) => {
-      if (!workspaceHandle) return;
-      if (event.workspaceRoot && workspaceRoot && event.workspaceRoot !== workspaceRoot) return;
+  useEffect(() => {
+    if (!workspaceHandle) return;
+    let cancelled = false;
+    const coalescer = createAsyncCoalescer<WorkspaceResourcesChangedEvent>({
+      delayMs: 40,
+      merge: mergeWorkspaceResourceChanges,
+      run: async (event) => {
+      if (cancelled) return;
       const detectedAt = Date.now();
       setWorkspaceExternalSync({ status: "checking", affected: event.paths?.length ?? 0 });
       const nextEntries = await listDirectory(workspaceHandle);
-      setEntries(await hydrateExpandedEntries(nextEntries, expanded));
+      if (cancelled) return;
+      const hydratedEntries = await hydrateExpandedEntries(nextEntries, expandedRef.current);
+      if (cancelled) return;
+      setEntries(hydratedEntries);
       const sourceDocuments = documentsRef.current;
       const reconciliation = await reconcileOpenDocumentsAfterWorkspaceChange({
         documents: sourceDocuments,
         workspaceHandle,
         ...(workspaceRoot ? {workspaceRoot} : {}),
+        ...(event.paths?.length ? {paths: event.paths} : {}),
         ...(event.renames?.length ? {renames: event.renames} : {}),
       });
+      if (cancelled) return;
       documentsRef.current = reconciliation.documents;
       setDocuments(reconciliation.documents);
       /** Arquivos alterados/removidos fora da IDE invalidam as dobras registradas para eles. */
@@ -5083,8 +5382,29 @@ export function App() {
       workspaceExternalSyncTimerRef.current = setTimeout(() => {
         setWorkspaceExternalSync(undefined);
       }, 5000);
-    },
-  ).dispose, [platform.events, workspaceHandle, workspaceRoot, expanded]);
+      },
+      onError: (cause) => {
+        console.error("Falha ao reconciliar alterações externas do workspace.", cause);
+        setWorkspaceExternalSync(undefined);
+      },
+    });
+    const subscription = platform.events.on<WorkspaceResourcesChangedEvent>(
+      WORKSPACE_RESOURCES_CHANGED_EVENT,
+      (event) => {
+        if (event.workspaceRoot && workspaceRoot && event.workspaceRoot !== workspaceRoot) return;
+        coalescer.push(event);
+      },
+    );
+    return () => {
+      cancelled = true;
+      subscription.dispose();
+      coalescer.dispose();
+      if (workspaceExternalSyncTimerRef.current) {
+        clearTimeout(workspaceExternalSyncTimerRef.current);
+        workspaceExternalSyncTimerRef.current = undefined;
+      }
+    };
+  }, [platform.events, workspaceHandle, workspaceRoot]);
 
   const expandExplorerLevel = async () => {
     if (!workspaceHandle) return;
@@ -5178,16 +5498,17 @@ export function App() {
     .map((provider) => `${provider.pluginId ?? ""}:${provider.id}`)
     .join("\u0000");
   const explorerIgnoreWorkspaceKey = workspaceRoot ?? `name:${workspaceName}`;
-  const explorerIgnorePaths = useMemo(() => {
-    const collect = (items: readonly WorkspaceEntry[]): readonly string[] => items.flatMap((entry) => [
-      entry.path,
-      ...(entry.children ? collect(entry.children) : []),
-    ]);
-    return collect(entries);
-  }, [entries]);
+  const explorerIgnoreRequestContextKey = `${explorerIgnoreWorkspaceKey}\u0000${explorerIgnoreProviderKey}\u0000${explorerIgnoreRevision}`;
+  // A árvore já foi percorrida uma vez para indexar as entradas por caminho; percorrê-la de novo
+  // só para listar os caminhos duplicaria o trabalho em projetos grandes.
+  const explorerIgnorePaths = useMemo(
+    () => [...workspaceEntriesByPath.keys()],
+    [workspaceEntriesByPath],
+  );
   const currentExplorerIgnoreResolution = explorerIgnoreResolution
     && explorerIgnoreResolution.workspaceKey === explorerIgnoreWorkspaceKey
     && explorerIgnoreResolution.providerKey === explorerIgnoreProviderKey
+    && explorerIgnoreResolution.revision === explorerIgnoreRevision
       ? explorerIgnoreResolution
       : undefined;
   const explorerIgnoredPaths = currentExplorerIgnoreResolution?.ignoredPaths ?? new Set<string>();
@@ -5199,43 +5520,68 @@ export function App() {
   }, [currentExplorerIgnoreResolution, explorerIgnorePaths, explorerIgnoreProviders.length, explorerShowIgnored]);
 
   useEffect(() => {
+    explorerIgnoreRequestContextRef.current = explorerIgnoreRequestContextKey;
+    explorerIgnoreRequestedPathsRef.current = new Set();
+  }, [explorerIgnoreRequestContextKey]);
+
+  useEffect(() => {
     if (!explorerIgnoreProviders.length || workspaceName === "Sem workspace") {
       setExplorerIgnoreResolution(undefined);
       return;
     }
     const paths = explorerIgnorePaths;
     if (!paths.length) {
+      explorerIgnoreRequestedPathsRef.current.clear();
       setExplorerIgnoreResolution({
         workspaceKey: explorerIgnoreWorkspaceKey,
         providerKey: explorerIgnoreProviderKey,
+        revision: explorerIgnoreRevision,
         resolvedPaths: new Set(),
         ignoredPaths: new Set(),
       });
       return;
     }
-    const requestedPaths = new Set(paths);
-    let cancelled = false;
+    const requestedPathsForContext = explorerIgnoreRequestedPathsRef.current;
+    const requested = paths.filter((path) => !requestedPathsForContext.has(path));
+    if (!requested.length) return;
+    for (const path of requested) requestedPathsForContext.add(path);
+    const requestedPaths = new Set(requested);
+    const requestContextKey = explorerIgnoreRequestContextKey;
     void Promise.all(explorerIgnoreProviders.map(async (provider) => {
       try {
-        return await provider.ignored({ paths });
+        return await provider.ignored({ paths: requested });
       } catch {
         return { paths: [] as readonly string[] };
       }
     })).then((results) => {
-      if (cancelled) return;
-      setExplorerIgnoreResolution({
-        workspaceKey: explorerIgnoreWorkspaceKey,
-        providerKey: explorerIgnoreProviderKey,
-        resolvedPaths: requestedPaths,
-        ignoredPaths: new Set(results.flatMap((result) => result.paths).filter((path) => requestedPaths.has(path))),
+      if (explorerIgnoreRequestContextRef.current !== requestContextKey) return;
+      setExplorerIgnoreResolution((current) => {
+        const compatible = current
+          && current.workspaceKey === explorerIgnoreWorkspaceKey
+          && current.providerKey === explorerIgnoreProviderKey
+          && current.revision === explorerIgnoreRevision
+            ? current
+            : undefined;
+        const nextIgnored = new Set(compatible?.ignoredPaths ?? []);
+        for (const path of requestedPaths) nextIgnored.delete(path);
+        for (const path of results.flatMap((result) => result.paths)) {
+          if (requestedPaths.has(path)) nextIgnored.add(path);
+        }
+        return {
+          workspaceKey: explorerIgnoreWorkspaceKey,
+          providerKey: explorerIgnoreProviderKey,
+          revision: explorerIgnoreRevision,
+          resolvedPaths: new Set([...(compatible?.resolvedPaths ?? []), ...requestedPaths]),
+          ignoredPaths: nextIgnored,
+        };
       });
     });
-    return () => { cancelled = true; };
   }, [
     explorerIgnorePaths,
     explorerIgnoreProviderKey,
     explorerIgnoreProviders,
     explorerIgnoreRevision,
+    explorerIgnoreRequestContextKey,
     explorerIgnoreWorkspaceKey,
     workspaceName,
   ]);
@@ -5673,6 +6019,7 @@ export function App() {
   // no meio da execução.
   const saveDocumentsBeforeRun = async (profile: ExecutionProfile) => {
     if (profile.saveBeforeRun === false) return;
+    flushEditorDocumentChange();
     for (const document of documentsRef.current) {
       if (document.kind !== "text" || document.readOnly || !document.handle) continue;
       if (document.content === document.savedContent) continue;
@@ -6080,14 +6427,39 @@ export function App() {
   };
 
   const closeDocument = (documentId: string) => {
-    const index = documents.findIndex((document) => document.id === documentId);
+    if (editorDocumentChangeRef.current?.documentId === documentId) flushEditorDocumentChange();
+    const sourceDocuments = documentsRef.current;
+    const index = sourceDocuments.findIndex((document) => document.id === documentId);
     if (index < 0) return;
-    const next = documents.filter((document) => document.id !== documentId);
-    editorHistoriesRef.current.delete(documentId);
-    clearDocumentFolds(documentId);
+    const next = sourceDocuments.filter((document) => document.id !== documentId);
+    releaseClosedDocumentState([documentId]);
+    documentsRef.current = next;
     setDocuments(next);
     if (activeDocumentId === documentId) {
       setActiveDocumentId(next[index]?.id ?? next[index - 1]?.id);
+    }
+  };
+
+  const releaseClosedDocumentState = (documentIds: readonly string[]) => {
+    const closedIds = new Set(documentIds);
+    for (const document of documents) {
+      if (!closedIds.has(document.id)) continue;
+      const event: TextEditorDocumentClosedEvent = {
+        document: {
+          id: document.id,
+          name: document.name,
+          ...(document.path ? { path: document.path } : {}),
+          ...(document.workspaceRoot ? { workspaceRoot: document.workspaceRoot } : {}),
+          ...(document.mediaType ? { mediaType: document.mediaType } : {}),
+          content: document.content,
+          isDirty: document.content !== document.savedContent,
+        },
+      };
+      void platform.events.emit(TEXT_EDITOR_DOCUMENT_CLOSED_EVENT, event);
+    }
+    for (const documentId of documentIds) {
+      editorHistoriesRef.current.delete(documentId);
+      clearDocumentFolds(documentId);
     }
   };
 
@@ -6253,6 +6625,9 @@ export function App() {
       return;
     }
     if (item.command === "core.tab.closeOthers") {
+      releaseClosedDocumentState(
+        documents.filter((candidate) => candidate.id !== document.id).map((candidate) => candidate.id),
+      );
       setDocuments([document]);
       setActiveDocumentId(document.id);
       return;
@@ -6260,6 +6635,7 @@ export function App() {
     if (item.command === "core.tab.closeRight") {
       const index = documents.findIndex((candidate) => candidate.id === document.id);
       const next = documents.slice(0, index + 1);
+      releaseClosedDocumentState(documents.slice(index + 1).map((candidate) => candidate.id));
       setDocuments(next);
       if (activeDocumentId && !next.some((candidate) => candidate.id === activeDocumentId)) {
         setActiveDocumentId(document.id);
@@ -6321,6 +6697,21 @@ export function App() {
       }
       if (tab.mode === "run" && profileExecutionsRef.current[tab.profileId]?.status === "running") {
         await stopProfileExecution(tab.profileId);
+      }
+      if (tab.mode === "run") {
+        await profileRunPromiseRef.current.get(tab.profileId)?.catch(() => undefined);
+        setProfileExecutions((current) => {
+          if (!current[tab.profileId]) return current;
+          const next = { ...current };
+          delete next[tab.profileId];
+          return next;
+        });
+        setProfileOutputFollowing((current) => {
+          if (!(tab.profileId in current)) return current;
+          const next = { ...current };
+          delete next[tab.profileId];
+          return next;
+        });
       }
       const currentTabIds = openProfileTabIdsRef.current;
       const remainingTabIds = currentTabIds.filter((candidate) => candidate !== tabId);
@@ -7022,6 +7413,45 @@ export function App() {
     onDragStateChange: setDraggingActivityButtonKey,
   } satisfies Omit<WorkbenchActivityBarProps, "side" | "items" | "activeSidebarId">;
 
+  explorerTreeActionsRef.current = {
+    onToggle: (entry) => invoke(() => toggleEntry(entry)),
+    onSelect: (entry, additive) => {
+      setSelectedExplorerPaths((current) => {
+        if (!additive) return new Set([entry.path]);
+        const next = new Set(current);
+        if (next.has(entry.path)) next.delete(entry.path);
+        else next.add(entry.path);
+        return next;
+      });
+      setSelectedExplorerPath((current) => additive && current === entry.path ? undefined : entry.path);
+    },
+    onOpen: (entry) => invoke(() => openEntry(entry)),
+    onContextMenu: (entry, x, y) => invoke(() => openResourceMenu(entry, x, y)),
+    onMove: (sourcePaths, targetPath) => invoke(() => moveExplorerEntries(sourcePaths, targetPath)),
+    onDraggingPathChange: (path) => setDraggingExplorerPaths(path
+      ? new Set(selectedExplorerPaths.has(path) ? selectedExplorerPaths : [path])
+      : new Set()),
+    onDropTargetPathChange: setDropTargetExplorerPath,
+    onShowHiddenDirectory: (path) => setExplorerRevealedHiddenPaths((current) => new Set(current).add(path)),
+    onShowIgnoredEntries: () => setExplorerShowIgnored(true),
+    onRenameNameChange: (name) => {
+      setExplorerRenameName(name);
+      setExplorerRenameError(undefined);
+    },
+    onRenameSubmit: () => { void renameSelectedExplorerEntry(); },
+    onRenameCancel: () => {
+      setExplorerRenamePath(undefined);
+      setExplorerRenameName("");
+      setExplorerRenameError(undefined);
+    },
+    onCreationNameChange: (name) => {
+      setExplorerCreationName(name);
+      setExplorerCreationError(undefined);
+    },
+    onCreationSubmit: () => { void createWorkspaceEntry(); },
+    onCreationCancel: cancelExplorerCreation,
+  };
+
   if (!restorationComplete) {
     return <div className="boot-screen">Inicializando tinyIde...</div>;
   }
@@ -7103,7 +7533,8 @@ export function App() {
                   onReconnect={() => invoke(reconnectWorkspace)}
                   onOpenProject={() => invoke(openProjectDialog)}
                 >
-                    <EntryTree
+                    <StableEntryTree
+                      actionsRef={explorerTreeActionsRef}
                       entries={entries}
                       parentPath=""
                       expanded={expanded}
@@ -7118,41 +7549,15 @@ export function App() {
                       selectedPath={selectedExplorerPath}
                       selectedPaths={selectedExplorerPaths}
                       resourceDecorations={resourceDecorations}
-                      onToggle={(entry) => invoke(() => toggleEntry(entry))}
-                      onSelect={(entry, additive) => {
-                        setSelectedExplorerPaths((current) => {
-                          if (!additive) return new Set([entry.path]);
-                          const next = new Set(current);
-                          if (next.has(entry.path)) next.delete(entry.path);
-                          else next.add(entry.path);
-                          return next;
-                        });
-                        setSelectedExplorerPath((current) => additive && current === entry.path ? undefined : entry.path);
-                      }}
-                      onOpen={(entry) => invoke(() => openEntry(entry))}
-                      onContextMenu={(entry, x, y) => invoke(() => openResourceMenu(entry, x, y))}
-                      onMove={(sourcePaths, targetPath) => invoke(() => moveExplorerEntries(sourcePaths, targetPath))}
                       draggingPaths={draggingExplorerPaths}
                       dropTargetPath={dropTargetExplorerPath}
-                      onDraggingPathChange={(path) => setDraggingExplorerPaths(path
-                        ? new Set(selectedExplorerPaths.has(path) ? selectedExplorerPaths : [path])
-                        : new Set())}
-                      onDropTargetPathChange={setDropTargetExplorerPath}
-                      onShowHiddenDirectory={(path) => setExplorerRevealedHiddenPaths((current) => new Set(current).add(path))}
-                      onShowIgnoredEntries={() => setExplorerShowIgnored(true)}
                       renamePath={explorerRenamePath}
                       renameName={explorerRenameName}
                       renameError={explorerRenameError}
-                      onRenameNameChange={(name) => { setExplorerRenameName(name); setExplorerRenameError(undefined); }}
-                      onRenameSubmit={() => { void renameSelectedExplorerEntry(); }}
-                      onRenameCancel={() => { setExplorerRenamePath(undefined); setExplorerRenameName(""); setExplorerRenameError(undefined); }}
                       creationKind={explorerCreation}
                       creationParentPath={explorerCreationParentPath}
                       creationName={explorerCreationName}
                       creationError={explorerCreationError}
-                      onCreationNameChange={(name) => { setExplorerCreationName(name); setExplorerCreationError(undefined); }}
-                      onCreationSubmit={() => { void createWorkspaceEntry(); }}
-                      onCreationCancel={cancelExplorerCreation}
                       workspaceName={workspaceName}
                       {...(workspaceRoot ? { workspaceRoot } : {})}
                     />
@@ -7288,7 +7693,7 @@ export function App() {
       {...(activeDebugVisibleLine ? { activeDebugVisibleLine } : {})}
       {...(activeEditorAttentionLines ? { attentionLines: activeEditorAttentionLines } : {})}
       inline={editorUsesHighlightScroller}
-      scrollTop={(highlightedEditorScrollRef.current ?? editorRef.current)?.scrollTop ?? activeDocument.scrollTop}
+      scrollTop={editorScrollTopRef.current}
       lineHeight={editorLayoutMetrics.lineHeight}
       lineTop={editorLineTop}
       breakpointLinesRef={editorBreakpointLinesRef}

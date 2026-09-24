@@ -5,6 +5,7 @@ import {
   highlightGenericSyntax,
   pluginLanguageProviderFor,
   resolveSyntaxHighlighter,
+  syntaxDialectFor,
 } from "./generic-syntax";
 
 function provider(id: string, extensions: readonly string[], marker: string): LanguageProvider {
@@ -70,5 +71,30 @@ describe("generic syntax highlighting", () => {
     const highlighter = resolveSyntaxHighlighter({ fileName: "app.toml", source }, []);
     expect(highlighter).toMatchObject({ id: "generic.config", origin: "generic" });
     expect(highlighter.highlight(source).length).toBeGreaterThan(0);
+  });
+
+  it("dá ao realçador o dialeto léxico do arquivo, inclusive quando vem de plugin", () => {
+    const pythonPlugin = provider("python", [".py"], "python");
+    expect(resolveSyntaxHighlighter({ fileName: "tasks.py", source: "" }, [pythonPlugin]))
+      .toMatchObject({ origin: "plugin", dialect: "python" });
+    expect(resolveSyntaxHighlighter({ fileName: "tasks.py", source: "" }, []))
+      .toMatchObject({ origin: "generic", dialect: "python" });
+  });
+});
+
+describe("syntaxDialectFor", () => {
+  it.each([
+    ["modulo.py", "python"],
+    ["tipos.pyi", "python"],
+    ["app.tsx", "c-like"],
+    ["Servico.java", "c-like"],
+    ["tema.scss", "stylesheet"],
+    ["pagina.vue", "markup"],
+    ["LEIAME.md", "markdown"],
+    ["compose.yaml", "hash"],
+    ["deploy.sh", "hash"],
+    ["CHANGELOG", "generic"],
+  ] as const)("resolve %s como %s", (fileName, dialect) => {
+    expect(syntaxDialectFor({ fileName })).toBe(dialect);
   });
 });

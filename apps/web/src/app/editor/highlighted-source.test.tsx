@@ -27,6 +27,7 @@ function render(element: ReactElement): HTMLPreElement {
 
 /** Marca cada palavra como keyword — um token por palavra, em qualquer posição do texto. */
 const wordProvider = {
+  dialect: "generic" as const,
   highlight(source: string): readonly SyntaxToken[] {
     const tokens: SyntaxToken[] = [];
     const pattern = /\w+/g;
@@ -73,6 +74,41 @@ describe("HighlightedSource com renderWindow", () => {
     // O pedaço visível do token cortado continua realçado.
     const spans = [...container.querySelectorAll("span.syntax-keyword")];
     expect(spans.some((span) => span.textContent === "vra40")).toBe(true);
+    expect(container.textContent).toBe(`${source}\n`);
+  });
+
+  it("entrega ao tokenizador só o recorte que contém a janela", () => {
+    const received: string[] = [];
+    const recordingProvider = {
+      dialect: "generic" as const,
+      highlight(text: string) {
+        received.push(text);
+        return wordProvider.highlight(text);
+      },
+    };
+    const start = source.indexOf("palavra40");
+    const end = source.indexOf("palavra45");
+    render(
+      <HighlightedSource source={source} provider={recordingProvider} renderWindow={{ start, end }} />,
+    );
+
+    expect(received.length).toBeGreaterThan(0);
+    for (const text of received) {
+      expect(text.length).toBeLessThan(source.length);
+      expect(text).toContain("palavra40");
+      expect(text).not.toContain("palavra0\n");
+    }
+  });
+
+  it("realça corretamente um token que começa antes da janela", () => {
+    const start = source.indexOf("palavra40") + 3;
+    const container = render(
+      <HighlightedSource source={source} provider={wordProvider} renderWindow={{ start, end: source.length }} />,
+    );
+    // O recorte começa no início da linha, então o token inteiro é reconhecido e só a parte
+    // visível dele recebe span — os offsets continuam sendo os do documento.
+    const spans = [...container.querySelectorAll("span.syntax-keyword")];
+    expect(spans.some((span) => span.textContent === "avra40")).toBe(true);
     expect(container.textContent).toBe(`${source}\n`);
   });
 

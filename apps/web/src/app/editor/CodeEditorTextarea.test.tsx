@@ -6,6 +6,8 @@ import { CodeEditorTextarea } from "./CodeEditorTextarea";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+const EDITOR_VALUE = "alpha\nbeta";
+
 let root: ReturnType<typeof createRoot> | undefined;
 let host: HTMLDivElement | undefined;
 
@@ -34,7 +36,7 @@ function renderEditor(highlighted: boolean) {
         editorRef={{ current: null }}
         highlighted={highlighted}
         folded={highlighted}
-        value="alpha\nbeta"
+        value={EDITOR_VALUE}
         readOnly={false}
         highlightedScrollRef={{ current: highlightedScroller }}
         onChange={onChange}
@@ -96,6 +98,20 @@ describe("CodeEditorTextarea", () => {
     expect(onKeyDown).toHaveBeenCalledOnce();
     expect(onMouseUp).toHaveBeenCalledOnce();
     expect(onDoubleClick).toHaveBeenCalledOnce();
+  });
+
+  it("renders the content it receives instead of a local buffer", () => {
+    const { textarea } = renderEditor(true);
+
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(textarea, `${EDITOR_VALUE}.`);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    // No modo realçado o texto do textarea é transparente e os glifos vêm da
+    // camada de sintaxe, alimentada por este mesmo `value`. Um buffer local
+    // adiantaria só o texto invisível e atrasaria o que se vê ao digitar.
+    expect(textarea.value).toBe(EDITOR_VALUE);
   });
 
   it("does not attach folded double-click handling to the plain editor", () => {

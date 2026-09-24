@@ -6,6 +6,7 @@ import {
   editorLineNumbers,
   editorVisibleLineRange,
   resolveEditorSettings,
+  syntaxHighlightPlan,
 } from "./editor-settings";
 
 describe("editor settings", () => {
@@ -60,5 +61,25 @@ describe("editor settings", () => {
   it("limits the ruler to visible lines plus overscan", () => {
     expect(editorVisibleLineRange(7_008, 50_000, 800)).toEqual({ start: 2_369, end: 2_432 });
     expect(editorVisibleLineRange(7_008, 0, 800)).toEqual({ start: 1, end: 51 });
+  });
+});
+
+describe("plano de realce de sintaxe", () => {
+  it("realça documentos pequenos por inteiro", () => {
+    expect(syntaxHighlightPlan(0)).toEqual({ windowed: false, enabled: true });
+    expect(syntaxHighlightPlan(3_999)).toEqual({ windowed: false, enabled: true });
+  });
+
+  it("janela a partir do limiar", () => {
+    expect(syntaxHighlightPlan(4_001)).toEqual({ windowed: true, enabled: true });
+  });
+
+  /**
+   * Um módulo Python de 14 mil linhas (~550 KB) abria sem realce nenhum: o teto global de 500 KB
+   * datava de quando cada tecla realçava o arquivo inteiro. Com a janela, o tamanho não decide.
+   */
+  it("mantém o realce em arquivos acima do antigo teto global", () => {
+    expect(syntaxHighlightPlan(550_000)).toEqual({ windowed: true, enabled: true });
+    expect(syntaxHighlightPlan(50_000_000)).toEqual({ windowed: true, enabled: true });
   });
 });

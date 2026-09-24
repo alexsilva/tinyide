@@ -41,6 +41,7 @@ function renderScroller(overrides: Partial<EditorHighlightScrollerProps> = {}) {
       id: "test.provider",
       name: "Test",
       origin: "generic",
+      dialect: "generic",
       highlight: () => [],
     },
     source: SOURCE,

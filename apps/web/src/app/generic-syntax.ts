@@ -1,4 +1,5 @@
 import { languageProviderForFile, type LanguageProvider, type SyntaxToken } from "@tinyide/plugin-api";
+import type { SyntaxDialect } from "./editor/syntax-window";
 
 export type GenericSyntaxKind =
   | "source"
@@ -20,6 +21,11 @@ export interface SyntaxHighlighter {
   readonly id: string;
   readonly name: string;
   readonly origin: "plugin" | "generic";
+  /**
+   * Regras léxicas do arquivo, usadas pelo recorte da janela de sintaxe para saber o que atravessa
+   * linhas. Vale também quando o realce vem de plugin: quem decide é a extensão, não o realçador.
+   */
+  readonly dialect: SyntaxDialect;
   highlight(source: string): readonly SyntaxToken[];
 }
 
@@ -226,6 +232,28 @@ export function genericSyntaxKindFor(context: Pick<SyntaxHighlightContext, "file
   return "plain";
 }
 
+const PYTHON_EXTENSIONS = new Set([".py", ".pyi", ".pyw"]);
+
+/**
+ * Dialeto léxico do arquivo. Python é o único caso em que a extensão importa dentro do mesmo
+ * `kind`: docstrings atravessam linhas e `#` comenta, o oposto das linguagens de chaves.
+ */
+export function syntaxDialectFor(
+  context: Pick<SyntaxHighlightContext, "fileName" | "mediaType">,
+): SyntaxDialect {
+  if (PYTHON_EXTENSIONS.has(extensionOf(context.fileName))) return "python";
+  switch (genericSyntaxKindFor(context)) {
+    case "markup": return "markup";
+    case "stylesheet": return "stylesheet";
+    case "markdown": return "markdown";
+    case "data":
+    case "config":
+    case "shell": return "hash";
+    case "source": return "c-like";
+    case "plain": return "generic";
+  }
+}
+
 export function highlightGenericSyntax(context: SyntaxHighlightContext): readonly SyntaxToken[] {
   const kind = genericSyntaxKindFor(context);
   switch (kind) {
@@ -262,12 +290,14 @@ export function resolveSyntaxHighlighter(
   context: SyntaxHighlightContext,
   providers: readonly LanguageProvider[],
 ): SyntaxHighlighter {
+  const dialect = syntaxDialectFor(context);
   const pluginProvider = pluginLanguageProviderFor(context, providers);
   if (pluginProvider) {
     return {
       id: pluginProvider.id,
       name: pluginProvider.name,
       origin: "plugin",
+      dialect,
       highlight: (source) => pluginProvider.highlight(source),
     };
   }
@@ -276,6 +306,7 @@ export function resolveSyntaxHighlighter(
     id: `generic.${kind}`,
     name: GENERIC_NAMES[kind],
     origin: "generic",
+    dialect,
     highlight: (source) => highlightGenericSyntax({ ...context, source }),
   };
 }

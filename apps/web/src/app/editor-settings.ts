@@ -54,6 +54,55 @@ export interface EditorDocumentIndex extends EditorDocumentMetrics {
 }
 
 /**
+ * A partir deste tamanho a camada de sintaxe materializa apenas a janela visível. O limiar é
+ * pouco acima do que cabe numa tela: abaixo dele a janela cobriria o arquivo inteiro e a
+ * virtualização não pagaria o próprio custo. Acima, cada tecla reescrevia o `pre` inteiro —
+ * um arquivo de 2.000 linhas gastava centenas de milissegundos por tecla só removendo e
+ * recriando spans que o usuário nem tinha na tela.
+ */
+export const SYNTAX_WINDOW_MIN_SOURCE_LENGTH = 4_000;
+
+/**
+ * Teto do realce **sem** janela: aí o tokenizador lê o documento inteiro a cada tecla e o custo
+ * cresce com o arquivo. Com a janela ativa ele recebe só o recorte visível, então o tamanho do
+ * arquivo deixa de decidir — por isso o teto vive acima do limiar da janela e nunca desliga o
+ * realce de um arquivo grande. Um teto global aplicado a todo documento (o que existia antes da
+ * janela) apagava o realce de arquivos legítimos, como um módulo Python de 14 mil linhas.
+ */
+export const MAX_UNWINDOWED_SYNTAX_SOURCE_LENGTH = 500_000;
+
+export interface SyntaxHighlightPlan {
+  /** O realçador recebe só o recorte da janela visível. */
+  readonly windowed: boolean;
+  /** Há realce; falso apenas para documentos grandes demais para serem realçados por inteiro. */
+  readonly enabled: boolean;
+}
+
+/**
+ * Decide, pelo tamanho do texto que chega à camada de sintaxe, se o realce é janelado e se cabe.
+ * O comprimento avaliado é o do conteúdo exibido (com blocos dobrados, o texto projetado), que é
+ * exatamente o que o realçador vai ler.
+ */
+export function syntaxHighlightPlan(displayedLength: number): SyntaxHighlightPlan {
+  const windowed = displayedLength > SYNTAX_WINDOW_MIN_SOURCE_LENGTH;
+  return { windowed, enabled: windowed || displayedLength <= MAX_UNWINDOWED_SYNTAX_SOURCE_LENGTH };
+}
+
+/**
+ * Conta linhas sem materializar nenhuma delas. `split("\n").length` aloca um array com o arquivo
+ * inteiro recortado só para ler `length` — caro o bastante para aparecer no caminho de digitação.
+ */
+export function countLines(source: string): number {
+  let lines = 1;
+  let at = source.indexOf("\n");
+  while (at !== -1) {
+    lines += 1;
+    at = source.indexOf("\n", at + 1);
+  }
+  return lines;
+}
+
+/**
  * Indexa métricas, offsets de linha e linha mais larga em uma única passagem. O editor de arquivos
  * grandes precisa dos três valores; calculá-los separadamente fazia 2-3 varreduras completas a
  * cada alteração de conteúdo.

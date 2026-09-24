@@ -1,8 +1,10 @@
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { CircleAlert, Code2, MoreVertical, Undo2, X } from "lucide-react";
 import { memo, useMemo, type CSSProperties, type ReactNode } from "react";
-import type { TextDiagnostic, TextEditorLineDecoration } from "@tinyide/plugin-api";
+import type { SyntaxToken, TextDiagnostic, TextEditorLineDecoration } from "@tinyide/plugin-api";
 import type { SyntaxHighlighter } from "../generic-syntax";
+import { resolveSyntaxSlice } from "./syntax-window";
+import { lineLengthsAt } from "./text-position";
 
 export const HighlightedSource = memo(function HighlightedSource({
   source,
@@ -13,7 +15,7 @@ export const HighlightedSource = memo(function HighlightedSource({
   virtualWindow,
 }: {
   readonly source: string;
-  readonly provider?: Pick<SyntaxHighlighter, "highlight">;
+  readonly provider?: Pick<SyntaxHighlighter, "highlight" | "dialect">;
   readonly highlight?: { readonly start: number; readonly end: number };
   readonly contextTarget?: { readonly start: number; readonly end: number };
   /**
@@ -37,10 +39,31 @@ export const HighlightedSource = memo(function HighlightedSource({
 }) {
   const windowStart = Math.max(0, Math.min(source.length, renderWindow?.start ?? 0));
   const windowEnd = Math.max(windowStart, Math.min(source.length, renderWindow?.end ?? source.length));
-  const tokens = useMemo(() => [...(provider?.highlight(source) ?? [])]
-    .filter((token) => token.start >= 0 && token.start < token.end && token.end <= source.length)
-    .filter((token) => token.end > windowStart && token.start < windowEnd)
-    .sort((left, right) => left.start - right.start), [provider, source, windowEnd, windowStart]);
+  /**
+   * Só o recorte que contém a janela vai ao tokenizador: pintar 80 linhas não exige ler o arquivo
+   * inteiro a cada tecla. Quando a janela já cobre o documento, o recorte é o próprio documento.
+   */
+  const dialect = provider?.dialect;
+  const slice = useMemo(
+    () => provider
+      ? resolveSyntaxSlice(source, windowStart, windowEnd, dialect)
+      : { start: 0, end: source.length },
+    [provider, dialect, source, windowEnd, windowStart],
+  );
+  const tokens = useMemo(() => {
+    if (!provider) return [] as SyntaxToken[];
+    const sliced = slice.start > 0 || slice.end < source.length;
+    const text = sliced ? source.slice(slice.start, slice.end) : source;
+    const collected: SyntaxToken[] = [];
+    for (const token of provider.highlight(text)) {
+      if (token.start < 0 || token.start >= token.end || token.end > text.length) continue;
+      const start = token.start + slice.start;
+      const end = token.end + slice.start;
+      if (end <= windowStart || start >= windowEnd) continue;
+      collected.push(sliced ? { ...token, start, end } : token);
+    }
+    return collected.sort((left, right) => left.start - right.start);
+  }, [provider, source, slice, windowEnd, windowStart]);
   const clampToWindow = (offset: number) => Math.max(windowStart, Math.min(windowEnd, offset));
   const ranges = ([
     [highlight, "editor-search-match"],
@@ -222,13 +245,14 @@ export const DiagnosticLayer = memo(function DiagnosticLayer({
   readonly source: string;
   readonly hoveredLine: number | undefined;
 }) {
-  const sourceLines = source.split(/\r?\n/);
   const diagnosticsByLine = new Map<number, TextDiagnostic[]>();
   diagnostics.forEach((diagnostic) => {
     const current = diagnosticsByLine.get(diagnostic.line) ?? [];
     current.push(diagnostic);
     diagnosticsByLine.set(diagnostic.line, current);
   });
+  // Só as linhas com diagnóstico são medidas: esta camada re-renderiza a cada tecla.
+  const lineLengths = lineLengthsAt(source, diagnosticsByLine.keys());
 
   return (
     <div className="diagnostic-layer">
@@ -238,7 +262,7 @@ export const DiagnosticLayer = memo(function DiagnosticLayer({
           : lineDiagnostics.some((diagnostic) => diagnostic.severity === "warning")
             ? "warning"
             : "information";
-        const lineLength = sourceLines[line - 1]?.length ?? 0;
+        const lineLength = lineLengths.get(line) ?? 0;
         return (
           <div
             className={`diagnostic-line diagnostic-line--${severity}${hoveredLine === line ? " is-hovered" : ""}`}

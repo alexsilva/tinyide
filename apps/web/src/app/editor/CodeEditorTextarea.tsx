@@ -54,6 +54,13 @@ export function CodeEditorTextarea({
     highlighted ? highlightedScrollRef.current ?? editor : editor
   );
 
+  /**
+   * O textarea é controlado de propósito: no modo realçado seu texto é
+   * transparente e quem desenha os glifos é a camada de sintaxe, alimentada pelo
+   * mesmo conteúdo que chega aqui por `value`. Um buffer local adiantaria só o
+   * texto invisível e deixaria o texto visível atrasado em relação ao que foi
+   * digitado.
+   */
   return (
     <textarea
       ref={editorRef}

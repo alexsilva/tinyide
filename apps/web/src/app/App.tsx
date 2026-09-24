@@ -3944,6 +3944,11 @@ export function App() {
     } else {
       setEditorAttentionHighlight(undefined);
     }
+    if (request.focus) {
+      window.requestAnimationFrame(() => {
+        editorRef.current?.focus({ preventScroll: true });
+      });
+    }
   };
 
   useEffect(() => {

@@ -205,6 +205,7 @@ context.extensions.registerWorkbenchPanelHook(hook);
 context.extensions.registerWorkbenchToolWindowHook(hook);
 context.extensions.registerTextEditorLineDecorationProvider(provider);
 context.extensions.registerWorkbenchResourceEditorProvider(provider);
+context.extensions.registerWorkspaceRevisionScopeProvider(provider);
 ```
 
 O plugin não recebe acesso direto ao `CapabilityRegistry`. O host converte chamadas da API pública em registros internos.
@@ -539,6 +540,23 @@ O plugin de ambientes pode contribuir:
 ```
 
 O Terminal combina as contribuições ao criar uma sessão. Nenhum dos dois importa o outro.
+
+O mesmo vale para o escopo de revisão do workspace — "em que branch estou":
+
+```text
+Git
+       │ registra WorkspaceRevisionScopeProvider
+       ▼
+Plugin API / registry
+       │ consumidores leem o escopo publicado
+       ▼
+Feature flags (perfis por escopo)
+```
+
+Quem precisa vincular estado à linha de trabalho corrente **não** lê `.git/HEAD` nem executa `git`:
+recriar a camada de versionamento dentro de outro plugin duplica regra (worktrees, submódulos,
+HEAD destacado) e assume um VCS específico. Sem provider registrado não há escopo, e o consumidor
+precisa funcionar assim: um workspace sem controle de versão é um workspace legítimo.
 
 Dependências obrigatórias podem ser declaradas no manifesto:
 

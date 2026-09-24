@@ -11,21 +11,55 @@ const FALLBACK_ICON_ID = "box";
 let activeIconMap = new Map<string, WorkbenchIconDefinition>();
 const listeners = new Set<() => void>();
 
+/**
+ * Packs com o mesmo id são mesclados, não substituídos: um plugin contribui o
+ * próprio ícone a todos os packs sem apagar os ícones de quem veio antes. A
+ * disputa acontece por ícone — dentro de um pack, vence o provider de maior
+ * prioridade que definiu aquele id.
+ */
 export function workbenchIconPacks(platform: TinyIdePlatform): readonly WorkbenchIconPackDefinition[] {
   const providers = platform.capabilities
     .getAll<WorkbenchIconProvider>("workbench.icon")
     .slice()
     .sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0) || left.id.localeCompare(right.id));
-  const selected = new Map<string, { pack: WorkbenchIconPackDefinition; priority: number }>();
+  const merged = new Map<string, { pack: WorkbenchIconPackDefinition; icons: Map<string, WorkbenchIconDefinition> }>();
   for (const provider of providers) {
-    const priority = provider.priority ?? 0;
-    for (const pack of provider.packs()) {
-      const previous = selected.get(pack.id);
-      if (!previous || priority > previous.priority) selected.set(pack.id, { pack, priority });
+    for (const contribution of provider.packs()) {
+      const existing = merged.get(contribution.id);
+      if (!existing) {
+        merged.set(contribution.id, {
+          pack: {
+            id: contribution.id,
+            label: contribution.label ?? contribution.id,
+            ...(contribution.description ? { description: contribution.description } : {}),
+            ...(contribution.order === undefined ? {} : { order: contribution.order }),
+            icons: [],
+          },
+          icons: new Map(contribution.icons.map((icon) => [icon.id, icon])),
+        });
+        continue;
+      }
+      // Providers já vêm da maior para a menor prioridade: quem chega depois só
+      // preenche o que ainda não existe, tanto em metadados quanto em ícones.
+      if (contribution.label && existing.pack.label === existing.pack.id) {
+        existing.pack = { ...existing.pack, label: contribution.label };
+      }
+      if (contribution.description && !existing.pack.description) {
+        existing.pack = { ...existing.pack, description: contribution.description };
+      }
+      if (contribution.order !== undefined && existing.pack.order === undefined) {
+        existing.pack = { ...existing.pack, order: contribution.order };
+      }
+      for (const icon of contribution.icons) {
+        if (!existing.icons.has(icon.id)) existing.icons.set(icon.id, icon);
+      }
     }
   }
-  return [...selected.values()]
-    .map(({ pack }) => pack)
+  return [...merged.values()]
+    .map(({ pack, icons }) => ({
+      ...pack,
+      icons: [...icons.values()].sort((left, right) => (left.order ?? 0) - (right.order ?? 0) || left.id.localeCompare(right.id)),
+    }))
     .sort((left, right) => (left.order ?? 0) - (right.order ?? 0) || left.label.localeCompare(right.label));
 }
 

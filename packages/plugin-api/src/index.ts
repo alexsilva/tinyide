@@ -169,6 +169,8 @@ export interface PluginExtensionApi {
   registerWorkbenchHtmlPreviewProvider(provider: WorkbenchHtmlPreviewProvider): Disposable;
   getWorkbenchHtmlPreviewProviders(): readonly WorkbenchHtmlPreviewProvider[];
   registerWorkbenchExecutionViewProvider(provider: WorkbenchExecutionViewProvider): Disposable;
+  registerWorkspaceRevisionScopeProvider(provider: WorkspaceRevisionScopeProvider): Disposable;
+  getWorkspaceRevisionScopeProviders(): readonly WorkspaceRevisionScopeProvider[];
 }
 
 export interface PluginModule {
@@ -1141,11 +1143,28 @@ export interface WorkbenchIconPackDefinition {
   readonly icons: readonly WorkbenchIconDefinition[];
 }
 
-/** Um provider pode adicionar packs ou substituir um pack existente pelo mesmo id. */
+/**
+ * O que um provider contribui. Usar o id de um pack existente adiciona ícones a
+ * ele — é assim que um plugin ganha ícone próprio em todos os packs sem
+ * redefinir o pack inteiro. `label` só é necessário ao criar um pack novo;
+ * contribuições a um pack existente o omitem e preservam o nome já publicado.
+ */
+export interface WorkbenchIconPackContribution {
+  readonly id: string;
+  readonly label?: string;
+  readonly description?: string;
+  readonly order?: number;
+  readonly icons: readonly WorkbenchIconDefinition[];
+}
+
+/**
+ * Providers de maior prioridade vencem ícone a ícone: contribuir um ícone com id
+ * já existente o substitui, e os demais do pack continuam intactos.
+ */
 export interface WorkbenchIconProvider {
   readonly id: string;
   readonly priority?: number;
-  packs(): readonly WorkbenchIconPackDefinition[];
+  packs(): readonly WorkbenchIconPackContribution[];
 }
 
 export const WORKBENCH_ICON_CAPABILITY = "workbench.icon";
@@ -1444,6 +1463,8 @@ export interface WorkbenchWorkspaceResourceOpenRequest {
   readonly endColumn?: number;
   /** Selects the resource in the Explorer, expanding its ancestors. */
   readonly reveal?: boolean;
+  /** Moves keyboard focus to the text editor after opening the resource. */
+  readonly focus?: boolean;
   /** Keeps the requested line or line range visually highlighted in the editor. */
   readonly highlight?: boolean;
 }
@@ -1807,6 +1828,37 @@ export interface WorkspaceResourcesChangedEvent {
 }
 
 export const WORKSPACE_RESOURCES_CHANGED_EVENT = "workspace.resources.changed";
+
+/**
+ * Onde o trabalho está acontecendo dentro do workspace — a branch do repositório,
+ * um commit destacado, ou o que a ferramenta de versionamento em uso chamar disso.
+ */
+export interface WorkspaceRevisionScope {
+  /** Estável entre sessões; é a chave que consumidores usam para guardar estado. */
+  readonly id: string;
+  readonly label: string;
+  readonly kind: "branch" | "revision";
+  /** Verdadeiro quando o escopo é um ponto fixo da história, não uma linha de trabalho. */
+  readonly transient?: boolean;
+}
+
+/**
+ * Publica o escopo de trabalho sem acoplar o consumidor a um sistema de versão
+ * específico: o plugin que fala com o repositório publica, e quem precisa vincular
+ * estado ao "onde estou" consome sem saber quem publicou. Sem provider registrado
+ * não existe escopo, e o consumidor precisa funcionar assim — um workspace sem
+ * controle de versão é um workspace legítimo.
+ */
+export interface WorkspaceRevisionScopeProvider {
+  readonly id: string;
+  readonly pluginId: string;
+  readonly priority?: number;
+  scope(): WorkspaceRevisionScope | undefined | Promise<WorkspaceRevisionScope | undefined>;
+  /** Notifica o host de que o escopo mudou — um checkout, por exemplo. */
+  subscribe?(listener: () => void): Disposable;
+}
+
+export const WORKSPACE_REVISION_SCOPE_CAPABILITY = "workspace.revisionScope";
 
 export interface TextEditorLineDecoration {
   /** One-based line number in the current document. */

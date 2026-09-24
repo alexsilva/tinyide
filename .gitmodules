@@ -37,3 +37,6 @@
 [submodule "plugins/aws"]
 	path = plugins/aws
 	url = git@github.com:alexsilva/tinyide.aws.git
+[submodule "plugins/splitconfig"]
+	path = plugins/splitconfig
+	url = git@github.com:alexsilva/tinyide.splitconfig.git

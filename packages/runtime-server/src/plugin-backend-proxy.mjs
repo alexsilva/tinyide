@@ -112,7 +112,13 @@ export function createPluginBackendProxy({ backendPath, workspaceRoot, pluginId,
     const id = randomUUID();
     const resultPromise = new Promise((resolve, reject) => requests.set(id, { resolve, reject }));
     const abort = () => {
-      if (requests.has(id)) worker.postMessage({ type: "abort", id });
+      const pending = requests.get(id);
+      if (!pending) return;
+      requests.delete(id);
+      worker.postMessage({ type: "abort", id });
+      const error = new Error(`Requisição ao backend do plugin '${pluginId}' foi cancelada.`);
+      error.name = "AbortError";
+      pending.reject(error);
     };
     request.once?.("aborted", abort);
     response.once?.("close", abort);

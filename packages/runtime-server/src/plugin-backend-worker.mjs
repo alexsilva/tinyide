@@ -83,6 +83,12 @@ class WorkerResponse extends EventEmitter {
     this.emit("finish");
     return this;
   }
+
+  abort() {
+    if (this.writableEnded) return;
+    this.writableEnded = true;
+    this.emit("close");
+  }
 }
 
 async function initialize() {
@@ -167,8 +173,10 @@ parentPort.on("message", (message) => {
   }
   if (message.type === "abort") {
     const active = activeRequests.get(message.id);
-    active?.request.emit("aborted");
-    active?.response.emit("close");
+    if (!active) return;
+    activeRequests.delete(message.id);
+    active.request.emit("aborted");
+    active.response.abort();
     return;
   }
   if (message.type === "dispose") {

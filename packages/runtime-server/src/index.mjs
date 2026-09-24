@@ -204,11 +204,14 @@ export function createTinyIdeRuntime(options) {
     ? resolve(options.initialWorkspaceRoot)
     : undefined;
   const initialScopeId = initialWorkspaceRoot ? workspaceScopeId(initialWorkspaceRoot) : undefined;
+  let initialWorkspaceRootAvailable = Boolean(initialWorkspaceRoot);
 
   function createWorkspaceContext(scopeId) {
+    const useInitialWorkspaceRoot = scopeId === initialScopeId && initialWorkspaceRootAvailable;
+    if (useInitialWorkspaceRoot) initialWorkspaceRootAvailable = false;
     const context = {
       scopeId,
-      workspaceRoot: scopeId === initialScopeId ? initialWorkspaceRoot : undefined,
+      workspaceRoot: useInitialWorkspaceRoot ? initialWorkspaceRoot : undefined,
       backendHandlers: new Map(),
       backendResolutions: new Map(),
       executionBackend: undefined,
@@ -259,9 +262,12 @@ export function createTinyIdeRuntime(options) {
     await resetExecutionBackend(context);
     context.workspaceRoot = undefined;
     context.clients.clear();
-    // O contexto vazio permanece no mapa de propósito: recriá-lo devolveria o
-    // `initialWorkspaceRoot` ao escopo inicial e o workspace fechado voltaria
-    // sozinho.
+    // Um workspace abandonado não deve continuar contando em cada troca futura.
+    // O root inicial só pode ser consumido na primeira criação do contexto; por
+    // isso remover o escopo daqui não faz o projeto inicial ressurgir sozinho.
+    if (workspaceContexts.get(context.scopeId) === context) {
+      workspaceContexts.delete(context.scopeId);
+    }
   }
 
   /**
@@ -515,7 +521,13 @@ export function createTinyIdeRuntime(options) {
       return;
     }
     const requestUrl = new URL(`${pathname}${rawUrl.search}`, "http://localhost");
-    const context = scopeId ? workspaceContext(scopeId) : unscopedContext;
+    // Não materialize um contexto só porque alguém enviou um scopeId sintaticamente
+    // válido. Em sessões longas (ou requests inválidos) isso fazia o Map crescer e,
+    // pior, criava um execution backend para cada id desconhecido. O contexto passa
+    // a existir somente quando o workspace é efetivamente aberto/anexado.
+    const context = scopeId
+      ? workspaceContexts.get(scopeId) ?? (scopeId === initialScopeId ? workspaceContext(scopeId) : undefined)
+      : unscopedContext;
 
     if ((requestUrl.pathname.startsWith("/core-api/") || requestUrl.pathname.startsWith("/plugin-api/"))
       && !requestOriginAllowed(request)) {
@@ -548,8 +560,9 @@ export function createTinyIdeRuntime(options) {
         return;
       }
       if (request.method === "DELETE") {
-        void removeWorkspaceScope(userDataRoot, requestedScopeId).then(() => {
-          workspaceContexts.delete(requestedScopeId);
+        void removeWorkspaceScope(userDataRoot, requestedScopeId).then(async () => {
+          const activeContext = workspaceContexts.get(requestedScopeId);
+          if (activeContext) await releaseWorkspaceContext(activeContext);
           writeJson(response, 204, undefined);
         }).catch((error) => writeJson(response, 500, {error: error instanceof Error ? error.message : String(error)}));
         return;
@@ -598,6 +611,10 @@ export function createTinyIdeRuntime(options) {
         writeJson(response, 400, {error: "Fechar um workspace exige o escopo na URL."});
         return;
       }
+      if (!context) {
+        writeJson(response, 204, undefined);
+        return;
+      }
       void releaseWorkspaceContext(context).then(() => {
         writeJson(response, 204, undefined);
       }).catch((error) => writeJson(response, 500, {error: error instanceof Error ? error.message : String(error)}));
@@ -619,7 +636,7 @@ export function createTinyIdeRuntime(options) {
 
     if (request.method === "POST" && requestUrl.pathname === "/core-api/workspace/open-in-file-manager") {
       void readJson(request).then(async (payload) => {
-        const directory = await workspaceDirectoryForFileManager(context.workspaceRoot, payload.path ?? "");
+        const directory = await workspaceDirectoryForFileManager(context?.workspaceRoot, payload.path ?? "");
         await openInFileManager(directory);
         writeJson(response, 200, { directory });
       }).catch((error) => writeJson(
@@ -632,7 +649,7 @@ export function createTinyIdeRuntime(options) {
 
     if (requestUrl.pathname === "/core-api/workspace/resources") {
       if (request.method === "GET") {
-        void workspaceResourcePath(context.workspaceRoot, requestUrl.searchParams.get("path") ?? "")
+        void workspaceResourcePath(context?.workspaceRoot, requestUrl.searchParams.get("path") ?? "")
           .then(async (directory) => {
             const directoryStat = await stat(directory);
             if (!directoryStat.isDirectory()) {
@@ -661,7 +678,7 @@ export function createTinyIdeRuntime(options) {
             error.statusCode = 400;
             throw error;
           }
-          const target = await workspaceResourcePath(context.workspaceRoot, path, payload.create === true);
+          const target = await workspaceResourcePath(context?.workspaceRoot, path, payload.create === true);
           if (existsSync(target)) {
             const targetStat = await stat(target);
             if ((kind === "directory") !== targetStat.isDirectory()) {
@@ -690,7 +707,7 @@ export function createTinyIdeRuntime(options) {
     if (requestUrl.pathname === "/core-api/workspace/resource") {
       const resourcePath = requestUrl.searchParams.get("path") ?? "";
       if (request.method === "GET") {
-        void workspaceResourcePath(context.workspaceRoot, resourcePath)
+        void workspaceResourcePath(context?.workspaceRoot, resourcePath)
           .then(async (target) => {
             const targetStat = await stat(target);
             if (!targetStat.isFile()) {
@@ -716,7 +733,7 @@ export function createTinyIdeRuntime(options) {
       }
       if (request.method === "PUT") {
         void Promise.all([
-          workspaceResourcePath(context.workspaceRoot, resourcePath),
+          workspaceResourcePath(context?.workspaceRoot, resourcePath),
           readBinary(request),
         ]).then(async ([target, bytes]) => {
           const targetStat = await stat(target);
@@ -735,9 +752,9 @@ export function createTinyIdeRuntime(options) {
         return;
       }
       if (request.method === "DELETE") {
-        void workspaceResourcePath(context.workspaceRoot, resourcePath)
+        void workspaceResourcePath(context?.workspaceRoot, resourcePath)
           .then(async (target) => {
-            if (target === context.workspaceRoot) {
+            if (target === context?.workspaceRoot) {
               const error = new Error("A raiz do workspace não pode ser removida.");
               error.statusCode = 400;
               throw error;
@@ -763,7 +780,14 @@ export function createTinyIdeRuntime(options) {
       // ele todos os PTYs de terminal hospedados neste runtime.
       const apiPath = requestUrl.pathname.slice("/core-api".length);
       void Promise.resolve(userDataBackend(request, response, apiPath, scopeId))
-        .then((handled) => handled ? undefined : context.executionBackend(request, response, apiPath))
+        .then((handled) => {
+          if (handled) return undefined;
+          if (!context) {
+            writeJson(response, 409, {error: "Abra um workspace antes de usar esta API."});
+            return undefined;
+          }
+          return context.executionBackend(request, response, apiPath);
+        })
         .catch((error) => {
           if (!response.headersSent && !response.writableEnded) {
             writeJson(response, 500, {error: error instanceof Error ? error.message : String(error)});
@@ -773,7 +797,7 @@ export function createTinyIdeRuntime(options) {
     }
 
     if (requestUrl.pathname.startsWith("/plugin-api/")) {
-      if (!context.workspaceRoot) {
+      if (!context?.workspaceRoot) {
         writeJson(response, 409, {error: "Abra um workspace antes de usar este plugin."});
         return;
       }
@@ -871,6 +895,9 @@ export function createTinyIdeRuntime(options) {
     // requisição.
     get workspaceRoot() {
       return initialScopeId ? workspaceContext(initialScopeId).workspaceRoot : undefined;
+    },
+    get activeWorkspaceContextCount() {
+      return workspaceContexts.size;
     },
     setWorkspaceRoot(path) {
       const nextWorkspaceRoot = path ? resolve(path) : undefined;

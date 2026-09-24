@@ -463,6 +463,51 @@ describe("runtime server hardening", () => {
     expect(invalido.status).toBe(400);
   });
 
+  it("does not allocate runtime contexts for unknown scoped requests", async () => {
+    const { runtime } = await fixture();
+    expect(runtime.activeWorkspaceContextCount).toBe(0);
+
+    for (let index = 0; index < 100; index += 1) {
+      const response = await fetch(
+        `${runtime.url}/w/unknown-${String(index).padStart(3, "0")}/plugin-api/search/status`,
+      );
+      expect(response.status).toBe(409);
+    }
+
+    expect(runtime.activeWorkspaceContextCount).toBe(0);
+  });
+
+  it("releases workspace processes before deleting a registered scope", async () => {
+    const { runtime, root, workspaceRoot, scoped } = await fixture();
+    const pidPath = join(root, "scope-delete-child.pid");
+    const started = await fetch(scoped("/core-api/execution/processes"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        executable: process.execPath,
+        arguments: ["-e", `require('fs').writeFileSync(${JSON.stringify(pidPath)}, String(process.pid)); setInterval(() => {}, 1000)`],
+        workingDirectory: workspaceRoot,
+      }),
+    });
+    expect(started.status).toBe(201);
+
+    let childPid;
+    for (let attempt = 0; attempt < 50 && !childPid; attempt += 1) {
+      try { childPid = Number(await readFile(pidPath, "utf8")); } catch {}
+      if (!childPid) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(childPid).toBeGreaterThan(0);
+
+    const scopeId = runtime.workspaceScopeId(workspaceRoot);
+    const deleted = await fetch(`${runtime.url}/core-api/workspace/scopes/${scopeId}`, {
+      method: "DELETE",
+    });
+    expect(deleted.status).toBe(204);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(() => process.kill(childPid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+    expect((await fetch(`${runtime.url}/core-api/workspace/scopes/${scopeId}`)).status).toBe(404);
+  });
+
   it("opens only workspace directories in the system file manager", async () => {
     const openedDirectories = [];
     const { workspaceRoot, scoped } = await fixture({

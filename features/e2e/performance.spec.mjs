@@ -101,6 +101,12 @@ test.describe("desempenho", () => {
         perKeystroke,
         `${perKeystroke.toFixed(0)}ms por caractere durante a indexação`,
       ).toBeLessThan(BUDGET.keystroke);
+
+      // O texto do textarea realçado é transparente: quem o usuário lê é a camada
+      // de sintaxe. Sem espera nenhuma — se ela só alcançasse o textarea depois de
+      // um intervalo, digitar pareceria travado mesmo com o valor já no elemento.
+      const highlighted = await window.locator(".syntax-layer").first().textContent();
+      expect(highlighted, "a camada de sintaxe ficou atrás do texto digitado").toContain(text);
     } finally {
       await ide.close();
       await workspace.dispose();

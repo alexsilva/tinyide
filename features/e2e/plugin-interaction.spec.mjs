@@ -16,9 +16,18 @@ test.describe("conjunto de plugins", () => {
   let startupConflictResponses;
 
   test.beforeAll(async () => {
+    const explorerLoad = Object.fromEntries(
+      Array.from({ length: 12 }, (_, directoryIndex) => (
+        Array.from({ length: 20 }, (_, fileIndex) => [
+          `fixtures/group-${String(directoryIndex).padStart(2, "0")}/file-${String(fileIndex).padStart(2, "0")}.txt`,
+          `fixture ${directoryIndex}/${fileIndex}\n`,
+        ])
+      )).flat(),
+    );
     workspace = await createWorkspace({
       "src/alvo.py": "MARCADOR_UNICO = 'texto procurado'\n",
       "notas.md": "# Notas\n\nlinha de markdown\n",
+      ...explorerLoad,
     });
     // Repositório real: o plugin de git precisa de algo para relatar.
     execFileSync("git", ["init", "-q"], { cwd: workspace.root });
@@ -91,6 +100,92 @@ test.describe("conjunto de plugins", () => {
     await window.getByLabel("Exibir Git").first().click();
     // O painel do plugin relata o estado do repositório criado para o teste.
     await expect(window.getByText(/alvo\.py|Alterações|src/).first()).toBeVisible({ timeout: 30_000 });
+  });
+
+  test("a mensagem de commit sobrevive a sair e voltar ao painel de alterações", async () => {
+    const { window } = ide;
+    await window.getByLabel("Alterações").first().click();
+    const message = window.getByLabel("Mensagem do commit", { exact: true }).first();
+    await message.waitFor({ timeout: 30_000 });
+    await message.fill("commit em rascunho");
+
+    // A superfície oculta é desmontada para não deixar timers e consultas de plugin rodando em
+    // segundo plano; o que o usuário escreveu não pode ir junto.
+    await window.getByLabel("Explorador").first().click();
+    await expect(window.getByLabel("Mensagem do commit", { exact: true })).toHaveCount(0);
+
+    await window.getByLabel("Alterações").first().click();
+    const restored = window.getByLabel("Mensagem do commit", { exact: true }).first();
+    await restored.waitFor({ timeout: 30_000 });
+    await expect(restored).toHaveValue("commit em rascunho");
+    await restored.fill("");
+    await window.getByLabel("Explorador").first().click();
+  });
+
+  test("digitação não degrada com Explorer expandido nem recalcula gitignore por tecla", async () => {
+    const { window } = ide;
+    const ignoredPayloadSizes = [];
+    const ignoredRequests = [];
+    const onRequest = (request) => {
+      if (!request.url().includes("/plugin-api/tinyide.git/ignored")) return;
+      ignoredRequests.push(request.url());
+      try {
+        const body = request.postDataJSON();
+        ignoredPayloadSizes.push(Array.isArray(body?.paths) ? body.paths.length : 0);
+      } catch {
+        ignoredPayloadSizes.push(-1);
+      }
+    };
+    window.on("request", onRequest);
+    try {
+      // Materializa uma árvore grande no estado do Explorer. O host deve consultar
+      // apenas os caminhos recém-descobertos, e não toda a árvore a cada expansão.
+      await window.locator('[data-explorer-path="fixtures"]').click();
+      for (let index = 0; index < 12; index += 1) {
+        const group = `fixtures/group-${String(index).padStart(2, "0")}`;
+        await window.locator(`[data-explorer-path="${group}"]`).click();
+        await expect(window.locator(`[data-explorer-path="${group}/file-19.txt"]`)).toBeVisible();
+      }
+      await window.waitForTimeout(500);
+      expect(ignoredPayloadSizes.length).toBeGreaterThan(0);
+
+      ignoredRequests.length = 0;
+      ignoredPayloadSizes.length = 0;
+      await openFile(window, "src/alvo.py");
+      const editor = window.locator("textarea.code-editor");
+      await editor.click();
+      await editor.press("Control+End");
+      // Abrir/revelar o arquivo pode descobrir novos caminhos do Explorer e
+      // legitimamente consultar ignore uma vez. A medição abaixo é exclusiva
+      // do caminho quente de digitação.
+      await window.waitForTimeout(100);
+      ignoredRequests.length = 0;
+      ignoredPayloadSizes.length = 0;
+
+      // Medido dentro da página: o relógio do automatizador conta também o ida e volta do
+      // protocolo por tecla, que numa máquina carregada supera o custo real do editor.
+      await window.evaluate(() => {
+        window.__typingLatency = [];
+        window.addEventListener("keydown", () => {
+          const startedAt = performance.now();
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            window.__typingLatency.push(performance.now() - startedAt);
+          }));
+        }, true);
+      });
+      await editor.pressSequentially("\nINTERACAO_PERFORMANCE = 'abcdefghijklmnopqrstuvwxyz'\n");
+      await expect(editor).toHaveValue(/INTERACAO_PERFORMANCE/);
+      await window.waitForTimeout(300);
+      const latency = await window.evaluate(() => {
+        const samples = [...window.__typingLatency].sort((left, right) => left - right);
+        return samples[Math.floor(samples.length / 2)] ?? 0;
+      });
+
+      expect(ignoredRequests, "editar um buffer não pode disparar git check-ignore").toEqual([]);
+      expect(latency, `${latency.toFixed(0)}ms por tecla com o Explorer expandido`).toBeLessThan(120);
+    } finally {
+      window.off("request", onRequest);
+    }
   });
 
   test("terminal abre e executa um comando no workspace", async () => {

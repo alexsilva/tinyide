@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { launchIde, openProject } from "./ide-app.mjs";
 
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const STRESS_DONE = "__TINYIDE_STRESS_DONE__";
 
 test("terminal aplica backpressure sob saída intensa e mantém a IDE responsiva", async () => {

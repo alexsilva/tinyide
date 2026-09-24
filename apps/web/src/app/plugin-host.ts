@@ -48,9 +48,16 @@ export class AppPluginHost implements PluginHost {
   async activate(plugin: PluginRecord, context: PluginContext): Promise<void> {
     const imported = (await this.#loadModule(plugin)) as ImportedPluginModule;
     const module = normalizeModule(imported);
-    await module.init(context);
-    await module.activate?.();
-    this.#modules.set(plugin.manifest.id, { module, context });
+    try {
+      await module.init(context);
+      await module.activate?.();
+      this.#modules.set(plugin.manifest.id, { module, context });
+    } catch (error) {
+      for (const subscription of [...context.subscriptions].reverse()) {
+        try { subscription.dispose(); } catch { /* keep cleaning remaining subscriptions */ }
+      }
+      throw error;
+    }
   }
 
   async deactivate(plugin: PluginRecord): Promise<void> {
@@ -60,12 +67,18 @@ export class AppPluginHost implements PluginHost {
       return;
     }
 
-    await active.module.deactivate?.();
-
-    for (const subscription of [...active.context.subscriptions].reverse()) {
-      subscription.dispose();
-    }
-
     this.#modules.delete(plugin.manifest.id);
+    let failure: unknown;
+    try {
+      await active.module.deactivate?.();
+    } catch (error) {
+      failure = error;
+    } finally {
+      for (const subscription of [...active.context.subscriptions].reverse()) {
+        try { subscription.dispose(); }
+        catch (error) { failure ??= error; }
+      }
+    }
+    if (failure) throw failure;
   }
 }

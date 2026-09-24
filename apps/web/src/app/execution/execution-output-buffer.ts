@@ -14,17 +14,27 @@ function trimFirstChunkAtLineBoundary(value: string, removeChars: number): strin
 
 function trimOutputChunksToBudget(chunks: string[], maxChars: number): void {
   let length = outputLength(chunks);
-  while (chunks.length && length > maxChars) {
-    const first = chunks[0]!;
+  let firstIndex = 0;
+  while (firstIndex < chunks.length && length > maxChars) {
+    const first = chunks[firstIndex]!;
     const overflow = length - maxChars;
-    if (first.length + (chunks.length > 1 ? 1 : 0) <= overflow) {
-      chunks.shift();
-      length = outputLength(chunks);
+    const remainingChunks = chunks.length - firstIndex;
+    const separator = remainingChunks > 1 ? 1 : 0;
+    if (first.length + separator <= overflow) {
+      length -= first.length + separator;
+      firstIndex += 1;
       continue;
     }
-    chunks[0] = trimFirstChunkAtLineBoundary(first, overflow);
-    if (!chunks[0]) chunks.shift();
-    length = outputLength(chunks);
+    const trimmed = trimFirstChunkAtLineBoundary(first, overflow);
+    length -= first.length - trimmed.length;
+    chunks[firstIndex] = trimmed;
+    if (!trimmed) {
+      if (remainingChunks > 1) length -= 1;
+      firstIndex += 1;
+    }
+  }
+  if (firstIndex > 0) {
+    chunks.splice(0, firstIndex);
   }
 }
 

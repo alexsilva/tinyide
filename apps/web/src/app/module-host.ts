@@ -36,10 +36,20 @@ export class AppModuleHost implements Disposable {
   async disposeAsync(): Promise<void> {
     const active = [...this.#active.values()].reverse();
     this.#active.clear();
+    let failure: unknown;
     for (const { module, context } of active) {
-      await module.dispose?.();
-      for (const subscription of [...context.subscriptions].reverse()) subscription.dispose();
+      try {
+        await module.dispose?.();
+      } catch (error) {
+        failure ??= error;
+      } finally {
+        for (const subscription of [...context.subscriptions].reverse()) {
+          try { subscription.dispose(); }
+          catch (error) { failure ??= error; }
+        }
+      }
     }
+    if (failure) throw failure;
   }
 
   dispose(): void {

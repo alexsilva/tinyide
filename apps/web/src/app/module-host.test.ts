@@ -42,4 +42,40 @@ describe("module host", () => {
     await host.initialize([module]);
     await expect(host.initialize([module])).rejects.toThrow("Module already initialized: html");
   });
+
+  it("continues disposing later modules and subscriptions after one module fails", async () => {
+    const disposed: string[] = [];
+    const failing: TinyIdeModule = {
+      id: "failing",
+      version: "0.1.0",
+      init(moduleContext) {
+        moduleContext.subscriptions.push({ dispose: () => disposed.push("failing-subscription") });
+      },
+      dispose() {
+        disposed.push("failing-module");
+        throw new Error("dispose failed");
+      },
+    };
+    const healthy: TinyIdeModule = {
+      id: "healthy",
+      version: "0.1.0",
+      init(moduleContext) {
+        moduleContext.subscriptions.push({ dispose: () => disposed.push("healthy-subscription") });
+      },
+      dispose() {
+        disposed.push("healthy-module");
+      },
+    };
+    const host = new AppModuleHost(() => context());
+    await host.initialize([failing, healthy]);
+
+    await expect(host.disposeAsync()).rejects.toThrow("dispose failed");
+    expect(disposed).toEqual([
+      "healthy-module",
+      "healthy-subscription",
+      "failing-module",
+      "failing-subscription",
+    ]);
+    expect(host.list()).toEqual([]);
+  });
 });

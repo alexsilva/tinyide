@@ -1,4 +1,11 @@
 export const EDITOR_HISTORY_LIMIT = 500;
+/**
+ * Teto de memória do histórico de um documento. Cada passo guarda o texto inteiro, então o teto
+ * também define quantos desfazimentos sobrevivem: num arquivo de 300 KB (600 KB por passo, em
+ * UTF-16) são algumas dezenas. Com o valor anterior, de 8 MB, um arquivo desse tamanho perdia o
+ * desfazer depois de dez teclas — barato em memória e caro no uso.
+ */
+export const EDITOR_HISTORY_BYTE_LIMIT = 32 * 1024 * 1024;
 
 export interface EditorHistorySnapshot {
   readonly content: string;
@@ -46,6 +53,7 @@ export function recordEditorHistory(
   history: EditorHistory,
   snapshot: EditorHistorySnapshot,
   limit = EDITOR_HISTORY_LIMIT,
+  byteLimit = EDITOR_HISTORY_BYTE_LIMIT,
 ): EditorHistory {
   const normalized = normalizeSnapshot(snapshot);
   const current = history.entries[history.index];
@@ -53,7 +61,24 @@ export function recordEditorHistory(
 
   const forwardHistoryRemoved = history.entries.slice(0, history.index + 1);
   const entries = [...forwardHistoryRemoved, normalized];
-  const retainedEntries = entries.slice(Math.max(0, entries.length - Math.max(1, limit)));
+  const entryLimit = Math.max(1, limit);
+  const memoryLimit = Math.max(1, byteLimit);
+  let retainedStart = Math.max(0, entries.length - entryLimit);
+  let retainedBytes = 0;
+  // Strings em JS são UTF-16 na representação comum. O orçamento é uma aproximação
+  // deliberadamente conservadora, que impede um único arquivo grande de manter centenas
+  // de cópias inteiras para sempre.
+  for (let index = entries.length - 1; index >= retainedStart; index -= 1) {
+    const entry = entries[index];
+    if (!entry) continue;
+    const entryBytes = entry.content.length * 2;
+    if (index < entries.length - 1 && retainedBytes + entryBytes > memoryLimit) {
+      retainedStart = index + 1;
+      break;
+    }
+    retainedBytes += entryBytes;
+  }
+  const retainedEntries = entries.slice(retainedStart);
   return {
     entries: retainedEntries,
     index: retainedEntries.length - 1,

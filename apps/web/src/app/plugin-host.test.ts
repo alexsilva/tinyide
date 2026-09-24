@@ -72,6 +72,60 @@ describe("AppPluginHost", () => {
     );
   });
 
+  it("cleans subscriptions when init fails after partially registering resources", async () => {
+    const disposed: string[] = [];
+    const host = new AppPluginHost({
+      loadModule: async () => ({
+        init(received: PluginContext) {
+          received.subscriptions.push({ dispose: () => disposed.push("first") });
+          received.subscriptions.push({ dispose: () => disposed.push("second") });
+          throw new Error("init failed");
+        },
+      }),
+    });
+
+    await expect(host.activate(plugin(), context())).rejects.toThrow("init failed");
+    expect(disposed).toEqual(["second", "first"]);
+  });
+
+  it("cleans subscriptions when activate fails", async () => {
+    const disposed: string[] = [];
+    const ctx = context();
+    const host = new AppPluginHost({
+      loadModule: async () => ({
+        init(received: PluginContext) {
+          received.subscriptions.push({ dispose: () => disposed.push("resource") });
+        },
+        activate() {
+          throw new Error("activate failed");
+        },
+      }),
+    });
+
+    await expect(host.activate(plugin(), ctx)).rejects.toThrow("activate failed");
+    expect(disposed).toEqual(["resource"]);
+  });
+
+  it("always tears down subscriptions even when deactivate fails", async () => {
+    const disposed: string[] = [];
+    const ctx = context();
+    ctx.subscriptions.push({ dispose: () => disposed.push("first") });
+    ctx.subscriptions.push({ dispose: () => disposed.push("second") });
+    const host = new AppPluginHost({
+      loadModule: async () => ({
+        init() {},
+        deactivate() {
+          throw new Error("deactivate failed");
+        },
+      }),
+    });
+
+    await host.activate(plugin(), ctx);
+    await expect(host.deactivate(plugin())).rejects.toThrow("deactivate failed");
+    expect(disposed).toEqual(["second", "first"]);
+    await host.deactivate(plugin());
+  });
+
   it("rejects a missing frontend entrypoint with the default loader", async () => {
     const host = new AppPluginHost();
     await expect(host.activate(plugin(), context())).rejects.toThrow(

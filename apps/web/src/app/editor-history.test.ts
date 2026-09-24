@@ -54,6 +54,30 @@ describe("editor history", () => {
     expect(createEditorHistory(snapshot("a", -10, 20)).entries[0]).toEqual(snapshot("a", 0, 1));
   });
 
+  it("bounds retained full-document snapshots by memory as files grow", () => {
+    const document = "x".repeat(1_000);
+    let history = createEditorHistory(snapshot(document));
+    for (let index = 1; index <= 10; index += 1) {
+      history = recordEditorHistory(
+        history,
+        snapshot(`${document}${index}`),
+        500,
+        6_100,
+      );
+    }
+
+    expect(history.entries.length).toBeLessThanOrEqual(3);
+    expect(history.entries.at(-1)?.content).toBe(`${document}10`);
+    expect(undoEditorHistory(history).snapshot).toBeDefined();
+  });
+
+  it("always retains the newest snapshot even when it alone exceeds the memory budget", () => {
+    const huge = "x".repeat(10_000);
+    let history = createEditorHistory(snapshot("small"));
+    history = recordEditorHistory(history, snapshot(huge), 500, 128);
+    expect(history.entries).toEqual([snapshot(huge)]);
+  });
+
   it("does not duplicate identical snapshots", () => {
     const history = createEditorHistory(snapshot("content", 2, 4));
     expect(recordEditorHistory(history, snapshot("content", 2, 4))).toBe(history);

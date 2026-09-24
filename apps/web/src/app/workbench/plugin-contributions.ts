@@ -30,6 +30,7 @@ export function expandWorkbenchToolWindowContribution(
     ...(contribution.icon ? { icon: contribution.icon } : {}),
     ...(contribution.activityBadge ? { activityBadge: contribution.activityBadge } : {}),
     ...(contribution.order !== undefined ? { order: contribution.order } : {}),
+    ...(contribution.retainWhenHidden ? { retainWhenHidden: true } : {}),
     mount({ container, headerContainer, tabs, state }) {
       container.replaceChildren();
       const views = [...contribution.views]
@@ -38,12 +39,75 @@ export function expandWorkbenchToolWindowContribution(
           || (left.order ?? 0) - (right.order ?? 0)
           || left.label.localeCompare(right.label));
       const sections = new Map<string, HTMLElement>();
+      const viewsById = new Map(views.map((view) => [view.id, view] as const));
       const tabDisposables: Array<{ dispose(): void }> = [];
-      const mountedDisposables: Array<{ dispose(): void }> = [];
+      const viewStates = new Map<string, {
+        generation: number;
+        mounted: boolean;
+        disposable?: { dispose(): void };
+      }>();
       let disposed = false;
 
+      const stateFor = (id: string) => {
+        let current = viewStates.get(id);
+        if (!current) {
+          current = { generation: 0, mounted: false };
+          viewStates.set(id, current);
+        }
+        return current;
+      };
+
+      const unmountView = (id: string, force = false) => {
+        const view = viewsById.get(id);
+        if (!view || (!force && view.retainWhenHidden)) return;
+        const current = stateFor(id);
+        if (!current.mounted && !current.disposable) return;
+        current.generation += 1;
+        current.mounted = false;
+        current.disposable?.dispose();
+        delete current.disposable;
+        sections.get(id)?.replaceChildren();
+      };
+
+      const mountView = (id: string) => {
+        if (disposed) return;
+        const view = viewsById.get(id);
+        const section = sections.get(id);
+        if (!view || !section) return;
+        const current = stateFor(id);
+        if (current.mounted) return;
+        current.mounted = true;
+        const generation = ++current.generation;
+        try {
+          const mounted = view.mount({ container: section, state });
+          if (mounted && typeof (mounted as PromiseLike<unknown>).then === "function") {
+            void Promise.resolve(mounted).then((result) => {
+              if (!result) return;
+              if (disposed || current.generation !== generation || !current.mounted) {
+                result.dispose();
+              } else {
+                current.disposable = result;
+              }
+            }).catch((cause) => {
+              if (!disposed && current.generation === generation && current.mounted) {
+                section.textContent = cause instanceof Error ? cause.message : String(cause);
+              }
+            });
+          } else if (mounted) {
+            current.disposable = mounted as { dispose(): void };
+          }
+        } catch (cause) {
+          section.textContent = cause instanceof Error ? cause.message : String(cause);
+        }
+      };
+
       const activate = (id: string) => {
-        for (const [viewId, section] of sections) section.hidden = viewId !== id;
+        for (const [viewId, section] of sections) {
+          const hidden = viewId !== id;
+          section.hidden = hidden;
+          if (hidden) unmountView(viewId);
+        }
+        mountView(id);
       };
 
       for (const view of views) {
@@ -61,30 +125,17 @@ export function expandWorkbenchToolWindowContribution(
           ...(view.mountStatus ? { mountStatus: view.mountStatus } : {}),
           onSelect: () => activate(view.id),
         }));
-        try {
-          const mounted = view.mount({ container: section, state });
-          if (mounted && typeof (mounted as PromiseLike<unknown>).then === "function") {
-            void Promise.resolve(mounted).then((result) => {
-              if (!result) return;
-              if (disposed) result.dispose();
-              else mountedDisposables.push(result);
-            }).catch((cause) => {
-              if (!disposed) section.textContent = cause instanceof Error ? cause.message : String(cause);
-            });
-          } else if (mounted) {
-            mountedDisposables.push(mounted as { dispose(): void });
-          }
-        } catch (cause) {
-          section.textContent = cause instanceof Error ? cause.message : String(cause);
-        }
       }
 
       const firstView = views[0];
-      if (firstView) tabs.select(firstView.id);
+      if (firstView) {
+        activate(firstView.id);
+        tabs.select(firstView.id);
+      }
       return {
         dispose() {
           disposed = true;
-          mountedDisposables.forEach((item) => item.dispose());
+          for (const id of viewsById.keys()) unmountView(id, true);
           tabDisposables.forEach((item) => item.dispose());
           container.replaceChildren();
         },

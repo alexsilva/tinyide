@@ -1256,6 +1256,13 @@ export interface WorkbenchToolWindowContribution {
   readonly icon?: WorkbenchActivityIcon;
   readonly activityBadge?: WorkbenchActivityBadgeProvider;
   readonly order?: number;
+  /**
+   * Mantém a superfície montada quando outra tool window ocupa o dock.
+   * Use apenas para estado vivo que não pode ser reconstruído (ex.: PTY/TUI).
+   * O padrão é desmontar a superfície oculta para não manter timers, observers
+   * e subscriptions de plugins que o usuário não está usando.
+   */
+  readonly retainWhenHidden?: boolean;
   mount(context: WorkbenchToolWindowMountContext): void | Disposable | Promise<void | Disposable>;
 }
 
@@ -1264,6 +1271,13 @@ export interface WorkbenchToolWindowViewContribution {
   readonly label: string;
   readonly order?: number;
   readonly placement?: "start" | "end";
+  /**
+   * Mantém esta view montada quando outra aba interna da mesma tool window é
+   * selecionada. O padrão é desmontar a view oculta para liberar timers,
+   * observers e subscriptions. Reserve para estado vivo que não pode ser
+   * reconstruído.
+   */
+  readonly retainWhenHidden?: boolean;
   /** Renders lightweight status content beside the view label in the panel tab. */
   mountStatus?(container: HTMLElement): void | Disposable;
   mount(context: WorkbenchPanelMountContext): void | Disposable | Promise<void | Disposable>;
@@ -1276,6 +1290,7 @@ export interface WorkbenchToolWindowGroupContribution {
   readonly icon?: WorkbenchActivityIcon;
   readonly activityBadge?: WorkbenchActivityBadgeProvider;
   readonly order?: number;
+  readonly retainWhenHidden?: boolean;
   readonly views: readonly WorkbenchToolWindowViewContribution[];
 }
 
@@ -1771,8 +1786,13 @@ export interface TextEditorDocumentSavedEvent {
   readonly document: TextEditorDocumentSnapshot;
 }
 
+export interface TextEditorDocumentClosedEvent {
+  readonly document: TextEditorDocumentSnapshot;
+}
+
 export const TEXT_EDITOR_DOCUMENT_CHANGED_EVENT = "textEditor.document.changed";
 export const TEXT_EDITOR_DOCUMENT_SAVED_EVENT = "textEditor.document.saved";
+export const TEXT_EDITOR_DOCUMENT_CLOSED_EVENT = "textEditor.document.closed";
 
 export interface WorkspaceResourcesChangedEvent {
   readonly source: string;

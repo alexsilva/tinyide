@@ -96,9 +96,10 @@ export function sidebarWidthForView(width: number, viewId: string): number {
 }
 
 /**
- * Tool windows já ativados permanecem montados (apenas ocultos) para preservar
- * estado vivo — um terminal com TUI não sobrevive a desmontar/remontar, porque a
- * reconexão reproduz o histórico cru do PTY. Remove apenas ids desinstalados.
+ * A tool window ativa sempre fica montada. Superfícies que declararam estado
+ * vivo podem permanecer montadas ocultas (ex.: terminal/PTY); as demais são
+ * liberadas assim que deixam de ser usadas para não acumular timers, observers,
+ * DOM e subscriptions ao longo da sessão.
  */
 export function retainMountedToolWindows(
   previous: ReadonlySet<string>,
@@ -106,10 +107,16 @@ export function retainMountedToolWindows(
     readonly activeToolWindowId?: string;
     readonly toolWindowVisible: boolean;
     readonly availableIds: readonly string[];
+    readonly retainedIds?: ReadonlySet<string>;
   },
 ): ReadonlySet<string> {
   const available = new Set(input.availableIds);
-  const next = new Set([...previous].filter((id) => available.has(id)));
+  const retained = input.retainedIds ?? new Set<string>();
+  const active = input.toolWindowVisible ? input.activeToolWindowId : undefined;
+  const next = new Set([...previous].filter((id) => (
+    available.has(id)
+    && (retained.has(id) || id === active)
+  )));
   if (input.toolWindowVisible && input.activeToolWindowId && available.has(input.activeToolWindowId)) {
     next.add(input.activeToolWindowId);
   }

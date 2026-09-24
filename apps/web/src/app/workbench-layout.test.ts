@@ -127,7 +127,7 @@ describe("mounted tool window retention", () => {
     }).size).toBe(0);
   });
 
-  it("keeps previously mounted tool windows alive when another becomes active", () => {
+  it("keeps only explicitly retained tool windows alive when another becomes active", () => {
     const previous = retainMountedToolWindows(new Set(), {
       activeToolWindowId: "terminal",
       toolWindowVisible: true,
@@ -137,16 +137,34 @@ describe("mounted tool window retention", () => {
       activeToolWindowId: "database",
       toolWindowVisible: true,
       availableIds: ["terminal", "database"],
+      retainedIds: new Set(["terminal"]),
     })].sort()).toEqual(["database", "terminal"]);
   });
 
-  it("keeps mounted tool windows when the region closes", () => {
+  it("releases non-retained tool windows when another becomes active", () => {
+    expect([...retainMountedToolWindows(new Set(["database"]), {
+      activeToolWindowId: "git",
+      toolWindowVisible: true,
+      availableIds: ["database", "git"],
+    })]).toEqual(["git"]);
+  });
+
+  it("keeps retained tool windows when the region closes", () => {
     const previous = new Set(["terminal"]);
     expect(retainMountedToolWindows(previous, {
       activeToolWindowId: "terminal",
       toolWindowVisible: false,
       availableIds: ["terminal"],
+      retainedIds: new Set(["terminal"]),
     })).toBe(previous);
+  });
+
+  it("unmounts a non-retained tool window when the region closes", () => {
+    expect(retainMountedToolWindows(new Set(["database"]), {
+      activeToolWindowId: "database",
+      toolWindowVisible: false,
+      availableIds: ["database"],
+    }).size).toBe(0);
   });
 
   it("prunes tool windows that are no longer available", () => {
@@ -163,6 +181,7 @@ describe("mounted tool window retention", () => {
       activeToolWindowId: "terminal",
       toolWindowVisible: true,
       availableIds: ["terminal", "database"],
+      retainedIds: new Set(["terminal"]),
     })).toBe(previous);
   });
 });

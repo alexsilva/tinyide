@@ -392,7 +392,11 @@ import {
   moveCollapsedEditorSelectionToPointer,
 } from "./editor/pointer-mapping";
 import { EditorLineRuler } from "./editor/EditorLineRuler";
-import { hydrateExpandedEntries, hydrateExplorerPath } from "./explorer/hydration";
+import {
+  hydrateExpandedEntries,
+  hydrateExplorerPath,
+  refreshExpandedEntriesAfterChanges,
+} from "./explorer/hydration";
 import { defaultLintSettings } from "./workspace/legacy-state";
 import {
   createEditorViewportStore,
@@ -577,7 +581,13 @@ const EDITOR_DOCUMENT_CHANGE_NOTICE_DELAY_MS = 250;
  * aparecem quando as faixas correspondem ao texto atual — durante a digitação eles ficam ocultos
  * de qualquer maneira, e recalcular a cada tecla só gastava a thread principal.
  */
-const EDITOR_FOLDING_RANGES_DELAY_MS = 120;
+/**
+ * Pausa que caracteriza o fim de uma rajada de digitação. Abaixo do intervalo
+ * humano típico entre teclas (~150-250ms), o recálculo rodava a cada tecla — em
+ * um módulo de 14 mil linhas o parser de faixas dobráveis custava ~10ms/tecla
+ * na main thread, contra a intenção declarada de rodar uma vez por rajada.
+ */
+const EDITOR_FOLDING_RANGES_DELAY_MS = 400;
 const EDITOR_NAVIGATION_LOADING_DELAY_MS = 150;
 const EDITOR_NAVIGATION_LOADING_MINIMUM_MS = 350;
 const EDITOR_BUSY_MINIMUM_MS = 300;
@@ -683,6 +693,8 @@ export function App() {
   const [workspaceName, setWorkspaceName] = useState(initialSession.workspaceName);
   const [workspaceRoot, setWorkspaceRoot] = useState<string | undefined>(initialSession.workspaceRoot);
   const [entries, setEntries] = useState<readonly WorkspaceEntry[]>([]);
+  const entriesRef = useRef<readonly WorkspaceEntry[]>(entries);
+  entriesRef.current = entries;
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set(initialSession.expandedDirectories));
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
@@ -796,7 +808,6 @@ export function App() {
   const [editorDecorationRevision, setEditorDecorationRevision] = useState(0);
   const [resourceDecorations, setResourceDecorations] = useState<ReadonlyMap<string, ResourceDecoration>>(new Map());
   const [resourceDecorationRevision, setResourceDecorationRevision] = useState(0);
-  const [resourceDecorationPathBatch, setResourceDecorationPathBatch] = useState<readonly string[]>([]);
   const [restorationComplete, setRestorationComplete] = useState(false);
   const restorationStartedRef = useRef(false);
   const [error, setErrorState] = useState<string>();
@@ -901,6 +912,8 @@ export function App() {
    */
   const editorScrollTopRef = useRef(0);
   const editorScrollTopDocumentRef = useRef<string | undefined>(undefined);
+  /** Documento/conteúdo da última solicitação de decorações de linha: distingue digitação de troca de arquivo. */
+  const editorLineDecorationRunRef = useRef<{ id: string; content: string } | undefined>(undefined);
   const completionAbortRef = useRef<AbortController | undefined>(undefined);
   const completionTimerRef = useRef<number | undefined>(undefined);
   const lintTimerRef = useRef<number | undefined>(undefined);
@@ -1029,7 +1042,13 @@ export function App() {
   const userSettingsWriteQueueRef = useRef<Promise<UserSettings>>(Promise.resolve(EMPTY_USER_SETTINGS));
   const workspaceSettingsRef = useRef<WorkspaceSettings>(EMPTY_WORKSPACE_SETTINGS);
   const workspaceSettingsWriteQueueRef = useRef<Promise<WorkspaceSettings>>(Promise.resolve(EMPTY_WORKSPACE_SETTINGS));
-  const settingsProviders = pluginSettingsProviders();
+  // CapabilityRegistry#getAll devolve um array novo. Sem estabilizar pela revisão
+  // real de plugins, qualquer render recriava resolvedPluginSettings e notificava
+  // todos os subscribers de workbenchState — alguns deles fazem I/O (Git refresh).
+  const settingsProviders = useMemo(
+    () => pluginSettingsProviders(),
+    [platformSnapshot.plugins],
+  );
   const resolvedPluginSettings = useMemo(() => {
     const grouped = new Map<string, PluginSettingValues>();
     for (const provider of settingsProviders) {
@@ -2391,35 +2410,6 @@ export function App() {
   }, [platformSnapshot.plugins]);
 
   useEffect(() => {
-    const pendingPaths = new Set<string>();
-    let flushTimer: number | undefined;
-    const flushPaths = () => {
-      flushTimer = undefined;
-      if (!pendingPaths.size) return;
-      const paths = [...pendingPaths];
-      pendingPaths.clear();
-      setResourceDecorationPathBatch(paths);
-    };
-    const subscriptions = resourceDecorationProviders()
-      .map((provider) => provider.onDidChange?.((paths) => {
-        if (!paths?.length) {
-          if (flushTimer !== undefined) window.clearTimeout(flushTimer);
-          flushTimer = undefined;
-          pendingPaths.clear();
-          setResourceDecorationRevision((current) => current + 1);
-          return;
-        }
-        for (const path of paths) pendingPaths.add(path);
-        if (flushTimer === undefined) flushTimer = window.setTimeout(flushPaths, 80);
-      }))
-      .filter((subscription): subscription is { dispose(): void } => Boolean(subscription));
-    return () => {
-      if (flushTimer !== undefined) window.clearTimeout(flushTimer);
-      subscriptions.forEach((subscription) => subscription.dispose());
-    };
-  }, [platformSnapshot.plugins]);
-
-  useEffect(() => {
     const subscriptions = platform.capabilities
       .getAll<WorkbenchResourceEditorProvider>("workbench.resourceEditor")
       .map((provider) => provider.onDidChange?.(() => setResourceEditorRevision((current) => current + 1)))
@@ -2451,6 +2441,72 @@ export function App() {
   const dirtyDocumentPaths = useMemo(() => new Set<string>(
     dirtyDocumentPathsKey ? JSON.parse(`[${dirtyDocumentPathsKey}]`) : [],
   ), [dirtyDocumentPathsKey]);
+  const workspaceEntriesByPathRef = useRef(workspaceEntriesByPath);
+  workspaceEntriesByPathRef.current = workspaceEntriesByPath;
+  const dirtyDocumentPathsRef = useRef(dirtyDocumentPaths);
+  dirtyDocumentPathsRef.current = dirtyDocumentPaths;
+
+  useEffect(() => {
+    const providers = resourceDecorationProviders();
+    // O dispose do coalescer não interrompe um lote já em execução: sem este
+    // flag, decorações resolvidas para o workspace anterior aterrissariam no
+    // estado do novo (os caminhos relativos costumam coincidir entre projetos).
+    let cancelled = false;
+    const coalescer = createAsyncCoalescer<readonly string[]>({
+      delayMs: 80,
+      merge: (current, next) => [...new Set([...current, ...next])],
+      run: async (paths) => {
+        if (cancelled || !providers.length || workspaceName === "Sem workspace") return;
+        const entriesByPath = workspaceEntriesByPathRef.current;
+        const dirtyPaths = dirtyDocumentPathsRef.current;
+        const requestedEntries = paths
+          .map((path) => entriesByPath.get(path))
+          .filter((entry): entry is WorkspaceEntry => Boolean(entry));
+        if (!requestedEntries.length) return;
+        const updates = await Promise.all(requestedEntries.map(async (entry) => {
+          const resource: ResourceContext = {
+            kind: entry.kind,
+            name: entry.name,
+            path: entry.path,
+            workspaceName,
+            ...(workspaceRoot ? { workspaceRoot } : {}),
+            ...(entry.kind === "file" ? { isDirty: dirtyPaths.has(entry.path) } : {}),
+          };
+          const decorations = (await Promise.all(providers.map(async (provider) => {
+            try { return await provider.provideDecoration(resource); }
+            catch { return undefined; }
+          }))).filter((value): value is ResourceDecoration => Boolean(value));
+          const decoration = decorations.sort(
+            (left, right) => (right.priority ?? 0) - (left.priority ?? 0),
+          )[0];
+          return [entry.path, decoration] as const;
+        }));
+        if (cancelled) return;
+        setResourceDecorations((current) => {
+          const next = new Map(current);
+          for (const [path, decoration] of updates) {
+            if (decoration) next.set(path, decoration);
+            else next.delete(path);
+          }
+          return next;
+        });
+      },
+    });
+    const subscriptions = providers
+      .map((provider) => provider.onDidChange?.((paths) => {
+        if (!paths?.length) {
+          setResourceDecorationRevision((current) => current + 1);
+          return;
+        }
+        coalescer.push(paths);
+      }))
+      .filter((subscription): subscription is { dispose(): void } => Boolean(subscription));
+    return () => {
+      cancelled = true;
+      coalescer.dispose();
+      subscriptions.forEach((subscription) => subscription.dispose());
+    };
+  }, [platformSnapshot.plugins, workspaceName, workspaceRoot]);
 
   useEffect(() => {
     const providers = resourceDecorationProviders();
@@ -2491,56 +2547,22 @@ export function App() {
   ]);
 
   useEffect(() => {
-    if (!resourceDecorationPathBatch.length) return;
-    const providers = resourceDecorationProviders();
-    if (!providers.length || workspaceName === "Sem workspace") return;
-    const requestedEntries = resourceDecorationPathBatch
-      .map((path) => workspaceEntriesByPath.get(path))
-      .filter((entry): entry is WorkspaceEntry => Boolean(entry));
-    if (!requestedEntries.length) return;
-    let cancelled = false;
-    const resolveDecoration = async (entry: WorkspaceEntry) => {
-      const resource: ResourceContext = {
-        kind: entry.kind,
-        name: entry.name,
-        path: entry.path,
-        workspaceName,
-        ...(workspaceRoot ? { workspaceRoot } : {}),
-        ...(entry.kind === "file" ? { isDirty: dirtyDocumentPaths.has(entry.path) } : {}),
-      };
-      const decorations = (await Promise.all(providers.map(async (provider) => {
-        try { return await provider.provideDecoration(resource); }
-        catch { return undefined; }
-      }))).filter((value): value is ResourceDecoration => Boolean(value));
-      const decoration = decorations.sort((left, right) => (right.priority ?? 0) - (left.priority ?? 0))[0];
-      return [entry.path, decoration] as const;
-    };
-    void Promise.all(requestedEntries.map(resolveDecoration)).then((updates) => {
-      if (cancelled) return;
-      setResourceDecorations((current) => {
-        const next = new Map(current);
-        for (const [path, decoration] of updates) {
-          if (decoration) next.set(path, decoration);
-          else next.delete(path);
-        }
-        return next;
-      });
-    });
-    return () => { cancelled = true; };
-  }, [
-    dirtyDocumentPaths,
-    platformSnapshot.plugins,
-    resourceDecorationPathBatch,
-    workspaceEntriesByPath,
-    workspaceName,
-    workspaceRoot,
-  ]);
-
-  useEffect(() => {
     if (activeDocument?.kind !== "text" || activeResourceEditorProvider || !activeDocument.path || !workspaceRoot) {
       setEditorLineDecorations([]);
       return;
     }
+    /**
+     * Cada execução envia o documento inteiro aos providers (o Git calcula o
+     * diff por linha do buffer). Num arquivo de 546 KB, o debounce de 140ms —
+     * mais curto que o intervalo humano entre teclas — repetia esse POST a
+     * praticamente cada tecla: ~9,5 MB serializados em 20 caracteres digitados.
+     * Digitação espera o fim da rajada; abrir arquivo ou eventos de plugin
+     * (commit, stage) continuam rápidos.
+     */
+    const previousRun = editorLineDecorationRunRef.current;
+    const isTypingBurst = previousRun?.id === activeDocument.id
+      && previousRun.content !== activeDocument.content;
+    editorLineDecorationRunRef.current = { id: activeDocument.id, content: activeDocument.content };
     let cancelled = false;
     const timer = window.setTimeout(() => {
       const document = {
@@ -2560,7 +2582,7 @@ export function App() {
       })).then((items) => {
         if (!cancelled) setEditorLineDecorations(items.flat());
       });
-    }, 140);
+    }, isTypingBurst ? 450 : 140);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
@@ -5311,9 +5333,17 @@ export function App() {
       if (cancelled) return;
       const detectedAt = Date.now();
       setWorkspaceExternalSync({ status: "checking", affected: event.paths?.length ?? 0 });
-      const nextEntries = await listDirectory(workspaceHandle);
-      if (cancelled) return;
-      const hydratedEntries = await hydrateExpandedEntries(nextEntries, expandedRef.current);
+      const hydratedEntries = event.paths?.length
+        ? await refreshExpandedEntriesAfterChanges(
+            workspaceHandle,
+            entriesRef.current,
+            expandedRef.current,
+            event.paths,
+          )
+        : await hydrateExpandedEntries(
+            await listDirectory(workspaceHandle),
+            expandedRef.current,
+          );
       if (cancelled) return;
       setEntries(hydratedEntries);
       const sourceDocuments = documentsRef.current;
@@ -5517,13 +5547,6 @@ export function App() {
       ? explorerIgnoreResolution
       : undefined;
   const explorerIgnoredPaths = currentExplorerIgnoreResolution?.ignoredPaths ?? new Set<string>();
-  const explorerPendingIgnoredPaths = useMemo(() => {
-    if (explorerShowIgnored || !explorerIgnoreProviders.length) return new Set<string>();
-    const resolvedPaths = currentExplorerIgnoreResolution?.resolvedPaths ?? new Set<string>();
-    const unresolved = explorerIgnorePaths.filter((path) => !resolvedPaths.has(path));
-    return unresolved.length ? new Set(unresolved) : new Set<string>();
-  }, [currentExplorerIgnoreResolution, explorerIgnorePaths, explorerIgnoreProviders.length, explorerShowIgnored]);
-
   useEffect(() => {
     explorerIgnoreRequestContextRef.current = explorerIgnoreRequestContextKey;
     explorerIgnoreRequestedPathsRef.current = new Set();
@@ -7231,7 +7254,10 @@ export function App() {
   const packageManagerEnvironment = packageManagerEnvironmentId
     ? environments.find((environment) => environment.id === packageManagerEnvironmentId)
     : undefined;
-  const registeredEnvironmentProviders = environmentProviders();
+  const registeredEnvironmentProviders = useMemo(
+    () => environmentProviders(),
+    [platformSnapshot.plugins],
+  );
   const activeEnvironmentManagerProvider = environmentProviderById(environmentManagerProviderId)
     ?? registeredEnvironmentProviders[0];
   const providerEnvironments = activeEnvironmentManagerProvider
@@ -7546,7 +7572,6 @@ export function App() {
                       showHidden={explorerShowHidden || explorerFilterActive}
                       showIgnored={explorerShowIgnored || explorerFilterActive}
                       ignoredPaths={explorerIgnoredPaths}
-                      pendingIgnoredPaths={explorerPendingIgnoredPaths}
                       revealHidden={explorerShowHidden || explorerFilterActive}
                       revealedHiddenPaths={explorerRevealedHiddenPaths}
                       filterVisiblePaths={explorerFilterResult?.visiblePaths}

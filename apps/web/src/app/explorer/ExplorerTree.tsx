@@ -16,7 +16,6 @@ import { resourceIconFor } from "../runtime";
 const EXPLORER_VIRTUALIZE_THRESHOLD = 400;
 const EXPLORER_ROW_HEIGHT = 27;
 const EXPLORER_VIRTUAL_OVERSCAN = 24;
-const EMPTY_PATH_SET: ReadonlySet<string> = new Set();
 
 interface ExplorerVirtualRange {
   readonly start: number;
@@ -150,7 +149,6 @@ export function EntryTree({
   showHidden,
   showIgnored,
   ignoredPaths,
-  pendingIgnoredPaths = EMPTY_PATH_SET,
   revealHidden,
   revealedHiddenPaths,
   filterVisiblePaths,
@@ -191,7 +189,6 @@ export function EntryTree({
   readonly showHidden: boolean;
   readonly showIgnored: boolean;
   readonly ignoredPaths: ReadonlySet<string>;
-  readonly pendingIgnoredPaths?: ReadonlySet<string>;
   readonly revealHidden: boolean;
   readonly revealedHiddenPaths: ReadonlySet<string>;
   readonly filterVisiblePaths: ReadonlySet<string> | undefined;
@@ -229,9 +226,12 @@ export function EntryTree({
   const filteredEntries = filterVisiblePaths
     ? entries.filter((entry) => filterVisiblePaths.has(entry.path))
     : entries;
+  // Ignore providers podem depender de I/O (Git check-ignore, backend remoto).
+  // Enquanto a resposta não chega, renderize otimisticamente. Esconder caminhos
+  // "pendentes" fazia o Explorer inteiro parecer vazio durante o startup e em
+  // rajadas de alterações; somente uma confirmação positiva deve ocultar algo.
   const visibleEntries = filteredEntries.filter((entry) => (
-    (showIgnored || !pendingIgnoredPaths.has(entry.path))
-    && explorerEntryVisible(entry, revealHidden, showIgnored, ignoredPaths)
+    explorerEntryVisible(entry, revealHidden, showIgnored, ignoredPaths)
   ));
   const creationIndex = creationKind && creationParentPath === parentPath
     ? explorerCreationInsertionIndex(visibleEntries, creationKind, creationName.trim())
@@ -431,7 +431,6 @@ export function EntryTree({
                   showHidden={showHidden}
                   showIgnored={showIgnored}
                   ignoredPaths={ignoredPaths}
-                  pendingIgnoredPaths={pendingIgnoredPaths}
                   revealHidden={showHidden || revealedHiddenPaths.has(entry.path)}
                   revealedHiddenPaths={revealedHiddenPaths}
                   filterVisiblePaths={filterVisiblePaths}
@@ -488,7 +487,6 @@ export function EntryTree({
                   showHidden={showHidden}
                   showIgnored={showIgnored}
                   ignoredPaths={ignoredPaths}
-                  pendingIgnoredPaths={pendingIgnoredPaths}
                   revealHidden={showHidden || revealedHiddenPaths.has(entry.path)}
                   revealedHiddenPaths={revealedHiddenPaths}
                   filterVisiblePaths={filterVisiblePaths}

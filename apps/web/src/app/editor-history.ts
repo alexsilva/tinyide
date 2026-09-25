@@ -16,6 +16,8 @@ export interface EditorHistorySnapshot {
 export interface EditorHistory {
   readonly entries: readonly EditorHistorySnapshot[];
   readonly index: number;
+  /** Soma aproximada dos snapshots retidos; evita revarrer todo o histórico a cada tecla. */
+  readonly retainedBytes: number;
 }
 
 export interface EditorHistoryNavigation {
@@ -43,9 +45,11 @@ function snapshotsEqual(left: EditorHistorySnapshot, right: EditorHistorySnapsho
 }
 
 export function createEditorHistory(snapshot: EditorHistorySnapshot): EditorHistory {
+  const normalized = normalizeSnapshot(snapshot);
   return {
-    entries: [normalizeSnapshot(snapshot)],
+    entries: [normalized],
     index: 0,
+    retainedBytes: normalized.content.length * 2,
   };
 }
 
@@ -59,29 +63,29 @@ export function recordEditorHistory(
   const current = history.entries[history.index];
   if (current && snapshotsEqual(current, normalized)) return history;
 
-  const forwardHistoryRemoved = history.entries.slice(0, history.index + 1);
-  const entries = [...forwardHistoryRemoved, normalized];
+  const forwardHistoryRemoved = history.entries.slice(history.index + 1);
+  const retainedHistory = history.entries.slice(0, history.index + 1);
+  const entries = [...retainedHistory, normalized];
   const entryLimit = Math.max(1, limit);
   const memoryLimit = Math.max(1, byteLimit);
+  let retainedBytes = history.retainedBytes
+    - forwardHistoryRemoved.reduce((total, entry) => total + entry.content.length * 2, 0)
+    + normalized.content.length * 2;
   let retainedStart = Math.max(0, entries.length - entryLimit);
-  let retainedBytes = 0;
-  // Strings em JS são UTF-16 na representação comum. O orçamento é uma aproximação
-  // deliberadamente conservadora, que impede um único arquivo grande de manter centenas
-  // de cópias inteiras para sempre.
-  for (let index = entries.length - 1; index >= retainedStart; index -= 1) {
-    const entry = entries[index];
-    if (!entry) continue;
-    const entryBytes = entry.content.length * 2;
-    if (index < entries.length - 1 && retainedBytes + entryBytes > memoryLimit) {
-      retainedStart = index + 1;
-      break;
-    }
-    retainedBytes += entryBytes;
+  for (let index = 0; index < retainedStart; index += 1) {
+    retainedBytes -= (entries[index]?.content.length ?? 0) * 2;
+  }
+  // Strings em JS são normalmente UTF-16. Remove somente da frente, mantendo
+  // sempre o snapshot mais novo mesmo quando ele sozinho excede o orçamento.
+  while (retainedBytes > memoryLimit && retainedStart < entries.length - 1) {
+    retainedBytes -= (entries[retainedStart]?.content.length ?? 0) * 2;
+    retainedStart += 1;
   }
   const retainedEntries = entries.slice(retainedStart);
   return {
     entries: retainedEntries,
     index: retainedEntries.length - 1,
+    retainedBytes,
   };
 }
 

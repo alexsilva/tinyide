@@ -28,7 +28,7 @@ function files(count: number): WorkspaceEntry[] {
 function renderTree(
   entries: readonly WorkspaceEntry[],
   selectedPath?: string,
-  options: { readonly showIgnored?: boolean; readonly pendingIgnoredPaths?: ReadonlySet<string> } = {},
+  options: { readonly showIgnored?: boolean } = {},
 ) {
   host = document.createElement("div");
   host.style.height = "400px";
@@ -44,7 +44,6 @@ function renderTree(
       showHidden
       showIgnored={options.showIgnored ?? true}
       ignoredPaths={new Set()}
-      {...(options.pendingIgnoredPaths ? { pendingIgnoredPaths: options.pendingIgnoredPaths } : {})}
       revealHidden
       revealedHiddenPaths={new Set()}
       filterVisiblePaths={undefined}
@@ -96,17 +95,14 @@ describe("Explorer large directory virtualization", () => {
     expect(container.querySelectorAll(".tree-entry-row").length).toBeLessThan(200);
   });
 
-  it("does not render a path while ignore classification is pending", () => {
+  it("keeps paths visible until an ignore provider positively hides them", () => {
     const entries: WorkspaceEntry[] = [
       { name: "generated", path: "generated", kind: "directory" },
       { name: "main.py", path: "main.py", kind: "file" },
     ];
-    const container = renderTree(entries, undefined, {
-      showIgnored: false,
-      pendingIgnoredPaths: new Set(["generated"]),
-    });
+    const container = renderTree(entries, undefined, { showIgnored: false });
 
-    expect(container.querySelector('[data-explorer-path="generated"]')).toBeNull();
+    expect(container.querySelector('[data-explorer-path="generated"]')).not.toBeNull();
     expect(container.querySelector('[data-explorer-path="main.py"]')).not.toBeNull();
   });
 

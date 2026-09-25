@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
-import { createPluginBackendProxy } from "./plugin-backend-proxy.mjs";
+import { BACKEND_WORKER_RESOURCE_LIMITS, createPluginBackendProxy } from "./plugin-backend-proxy.mjs";
 
 class TestResponse extends EventEmitter {
   constructor() {
@@ -126,8 +126,37 @@ test("fails pending requests when the backend worker exits unexpectedly", async 
   await expect(
     proxy(request("GET", "/exit-worker"), new TestResponse(), "/exit-worker"),
   ).rejects.toThrow(/terminou inesperadamente com código 7/);
+  expect(proxy.isDead()).toBe(true);
   await proxy.dispose({ reason: "test" });
 });
+
+test("backend workers run under the shared memory ceiling", async () => {
+  const proxy = createProxy();
+  const response = new TestResponse();
+  try {
+    await proxy(request("GET", "/heap-limit"), response, "/heap-limit");
+    const heapLimit = Number(response.body.toString());
+    const ceiling = BACKEND_WORKER_RESOURCE_LIMITS.maxOldGenerationSizeMb * 1024 * 1024;
+    // O limite efetivo soma old space e semi-spaces: aceita a margem, mas não
+    // o default do V8 (~4 GB), que é o que vigora quando o teto não é aplicado.
+    expect(heapLimit).toBeGreaterThanOrEqual(ceiling);
+    expect(heapLimit).toBeLessThan(ceiling * 1.5);
+  } finally {
+    await proxy.dispose({ reason: "test" });
+  }
+});
+
+test("a backend that exhausts its memory fails recoverably instead of aborting the host", async () => {
+  const proxy = createProxy({ pluginId: "test.oom" });
+  try {
+    await expect(
+      proxy(request("GET", "/exhaust-memory"), new TestResponse(), "/exhaust-memory"),
+    ).rejects.toThrow(/excedeu o limite de memória|terminou inesperadamente/);
+    expect(proxy.isDead()).toBe(true);
+  } finally {
+    await proxy.dispose({ reason: "test" });
+  }
+}, 30_000);
 
 test("propagates dispose errors and makes disposal idempotent", async () => {
   const proxy = createProxy();

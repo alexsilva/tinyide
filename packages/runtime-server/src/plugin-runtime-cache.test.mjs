@@ -110,6 +110,24 @@ describe("plugin runtime cache", () => {
     });
   });
 
+  it("replaces a dead backend handler on the next resolution", async () => {
+    const fixture = backendFixture();
+    const byId = new Map([["sample", descriptor()]]);
+
+    const first = await fixture.resolve(fixture.context, "sample", "/workspace", byId);
+    first.isDead = () => true;
+
+    const replacement = await fixture.resolve(fixture.context, "sample", "/workspace", byId);
+    expect(replacement).not.toBe(first);
+    expect(fixture.disposeBackend).toHaveBeenCalledWith(first);
+    expect(fixture.createBackendProxy).toHaveBeenCalledTimes(2);
+
+    // O substituto saudável volta a ser reutilizado normalmente.
+    replacement.isDead = () => false;
+    const cached = await fixture.resolve(fixture.context, "sample", "/workspace", byId);
+    expect(cached).toBe(replacement);
+  });
+
   it("deduplicates concurrent resolution and does not erase a newer pending operation", async () => {
     let releaseStat;
     const statBackend = vi.fn(() => new Promise((resolve) => { releaseStat = resolve; }));

@@ -67,7 +67,11 @@ export function createPluginBackendResolver({
     }
 
     const cached = context.backendHandlers.get(cacheKey);
-    if (cached?.mtime === backendInfo.mtimeMs) return cached.handler;
+    // Um worker que morreu (crash, estouro de memória) deixa o handler inerte:
+    // mantê-lo no cache condenaria o plugin até a IDE reiniciar. Descartar aqui
+    // faz a próxima requisição subir um backend novo.
+    const cachedAlive = cached && cached.handler.isDead?.() !== true;
+    if (cachedAlive && cached.mtime === backendInfo.mtimeMs) return cached.handler;
     if (cached) {
       context.backendHandlers.delete(cacheKey);
       await disposeBackend(cached.handler);

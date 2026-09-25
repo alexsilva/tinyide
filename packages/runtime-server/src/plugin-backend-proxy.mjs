@@ -4,6 +4,15 @@ import { pathToFileURL } from "node:url";
 
 const DISPOSE_TIMEOUT_MS = 2_000;
 
+/**
+ * Teto de heap por backend. Todos os isolates do processo (main e workers)
+ * dividem a mesma cage de ponteiros do V8 (~4 GB no Electron): sem teto
+ * individual, um backend que crescer demais esgota a cage e o V8 aborta o
+ * processo inteiro com FATAL ERROR — a IDE fecha sem aviso. Com o teto, o
+ * estouro vira ERR_WORKER_OUT_OF_MEMORY, que mata só o worker e é recuperável.
+ */
+export const BACKEND_WORKER_RESOURCE_LIMITS = Object.freeze({ maxOldGenerationSizeMb: 512 });
+
 function errorFromPayload(payload, fallback) {
   const error = new Error(payload?.message ?? fallback);
   if (payload?.stack) error.stack = payload.stack;
@@ -23,10 +32,12 @@ export function createPluginBackendProxy({ backendPath, workspaceRoot, pluginId,
       workspaceRoot,
       pluginId,
     },
+    resourceLimits: BACKEND_WORKER_RESOURCE_LIMITS,
   });
   const requests = new Map();
   const control = new Map();
   let disposed = false;
+  let dead = false;
   let startupError;
   let readyResolve;
   let readyReject;
@@ -95,11 +106,19 @@ export function createPluginBackendProxy({ backendPath, workspaceRoot, pluginId,
     }
   });
   worker.on("error", (error) => {
-    readyReject(error);
-    failPending(error);
+    dead = true;
+    const failure = error?.code === "ERR_WORKER_OUT_OF_MEMORY"
+      ? Object.assign(
+        new Error(`Backend do plugin '${pluginId}' excedeu o limite de memória (${BACKEND_WORKER_RESOURCE_LIMITS.maxOldGenerationSizeMb} MB) e foi encerrado.`),
+        { statusCode: 503, cause: error },
+      )
+      : error;
+    readyReject(failure);
+    failPending(failure);
   });
   worker.on("exit", (code) => {
     if (disposed) return;
+    dead = true;
     const error = startupError ?? new Error(`Backend do plugin '${pluginId}' terminou inesperadamente com código ${code}.`);
     readyReject(error);
     failPending(error);
@@ -154,6 +173,8 @@ export function createPluginBackendProxy({ backendPath, workspaceRoot, pluginId,
 
   proxy.listMcpTools = () => controlRequest("mcp-tools:list");
   proxy.invokeMcpTool = (name, args) => controlRequest("mcp-tools:invoke", { name, args });
+  /** Worker morto sem dispose: o resolver descarta este proxy e cria outro. */
+  proxy.isDead = () => dead && !disposed;
 
   proxy.dispose = async ({ reason } = {}) => {
     if (disposed) return;

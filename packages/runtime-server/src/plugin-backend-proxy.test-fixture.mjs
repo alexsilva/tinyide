@@ -18,6 +18,17 @@ export function createBackend({ runtime }) {
     if (relativePath === "/exit-worker") {
       process.exit(7);
     }
+    if (relativePath === "/heap-limit") {
+      const { getHeapStatistics } = await import("node:v8");
+      response.statusCode = 200;
+      response.end(String(getHeapStatistics().heap_size_limit));
+      return;
+    }
+    if (relativePath === "/exhaust-memory") {
+      // Nunca responde: cresce até o worker atingir o resourceLimits e morrer.
+      const retained = [];
+      for (;;) retained.push(new Array(1024 * 1024).fill(Math.random()));
+    }
   };
   handler.mcpTools = [
     {

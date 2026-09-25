@@ -8,6 +8,7 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: ".",
   testMatch: "**/*.spec.mjs",
+  outputDir: "../../.tmp/playwright-results",
   // Um teste de fumaça que demora é um teste que ninguém roda.
   timeout: 90_000,
   expect: { timeout: 15_000 },

@@ -419,7 +419,13 @@ async function startRuntime() {
     workspaceSearchRoot: process.env.TINYIDE_WORKSPACES_ROOT || app.getPath("home"),
     requireWorkspacePath: true,
     workspacePathAllowed(candidate) {
-      return workspaceRegistry.isRegistered(candidate);
+      // O runtime nasce antes da primeira BrowserWindow. Nesse instante o
+      // workspace inicial já foi validado pelo host e embutido no próprio
+      // runtime, mas ainda não passou pelo registro de handles do renderer.
+      // Autorizar exatamente esse caminho evita uma corrida no boot sem abrir
+      // exceção para qualquer outro diretório.
+      return (initialWorkspace !== undefined && resolve(candidate) === initialWorkspace)
+        || workspaceRegistry.isRegistered(candidate);
     },
     hostId: "desktop",
     ...(initialWorkspace ? { initialWorkspaceRoot: initialWorkspace } : {}),
@@ -445,12 +451,14 @@ function mainWindowUrl() {
 }
 
 function createWindow(url, bounds = {}) {
+  const keepWindowInvisible = process.env.TINYIDE_E2E_HEADLESS === "1";
   const window = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 900,
     minHeight: 600,
     ...bounds,
+    ...(keepWindowInvisible ? { opacity: 0, skipTaskbar: true } : {}),
     backgroundColor: "#0e1116",
     show: false,
     autoHideMenuBar: true,
@@ -460,6 +468,7 @@ function createWindow(url, bounds = {}) {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
+      backgroundThrottling: !keepWindowInvisible,
       devTools: !app.isPackaged,
       plugins: false,
       webviewTag: false,

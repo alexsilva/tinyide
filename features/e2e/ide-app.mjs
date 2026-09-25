@@ -1,7 +1,7 @@
 import { _electron as electron } from "@playwright/test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -106,8 +106,18 @@ export async function launchIde(workspaceRoot, options = {}) {
     env: {
       ...process.env,
       ...(options.env ?? {}),
+      // O renderer continua com geometria normal e sem throttling, mas a
+      // BrowserWindow fica transparente e fora da taskbar.
+      TINYIDE_E2E_HEADLESS: options.headless === false ? "0" : "1",
       TINYIDE_WORKSPACE: workspaceRoot,
       TINYIDE_WORKSPACES_ROOT: dirname(workspaceRoot),
+      // Os workspaces E2E vivem em <repo>/.tmp. Sem um teto explícito, Git
+      // sobe até o próprio repositório do TinyIDE e herda seu .git/info/exclude,
+      // fazendo todos os recursos do fixture parecerem ignorados. O teto mantém
+      // cada fixture isolado, mas ainda permite repositórios criados DENTRO dele.
+      GIT_CEILING_DIRECTORIES: [process.env.GIT_CEILING_DIRECTORIES, dirname(workspaceRoot)]
+        .filter(Boolean)
+        .join(delimiter),
       // Gancho já existente no processo principal: dispensa o seletor nativo de
       // diretório, que o teste não conseguiria operar.
       TINYIDE_TEST_WORKSPACE_PICKER_PATH: options.pickerPath ?? workspaceRoot,
@@ -132,6 +142,8 @@ export async function launchIde(workspaceRoot, options = {}) {
 export async function openProjectPicker(window) {
   await window.locator(".welcome-actions").getByRole("button", { name: /^Projeto/ }).click();
   await window.getByRole("menuitem", { name: "Abrir projeto" }).click();
+  const currentTarget = window.getByRole("radio", { name: "Tela atual" });
+  if (await currentTarget.isVisible().catch(() => false)) await currentTarget.check();
   await window.getByText("Escolher outro projeto", { exact: true }).click();
 }
 
@@ -140,8 +152,47 @@ export async function openProjectPicker(window) {
  * seleção. Retorna quando o Explorer já lista o conteúdo do workspace.
  */
 export async function openProject(window) {
+  const readme = window.getByText("README.md", { exact: true }).first();
+  const expandRoot = window.getByRole("button", { name: "Expandir próximo nível" }).first();
+  try {
+    if (await expandRoot.isVisible({ timeout: 10_000 }).catch(() => false)) await expandRoot.click();
+    await readme.waitFor({ timeout: 10_000 });
+    return;
+  } catch {
+    // Sem workspace inicial/restaurável: aí sim percorre o fluxo do seletor.
+  }
   await openProjectPicker(window);
-  await window.waitForSelector("text=README.md", { timeout: 45_000 });
+  if (await readme.count() === 0) {
+    if (await expandRoot.isVisible().catch(() => false)) await expandRoot.click();
+  }
+  await readme.waitFor({ timeout: 45_000 });
+}
+
+/**
+ * Ativa todo plugin instalado no perfil isolado do E2E. Alguns plugins
+ * opcionais (como Pytest) são instalados mas começam desativados; benchmarks de
+ * fan-out precisam incluí-los para representar o pior caso do host.
+ */
+export async function activateAllPlugins(window) {
+  await window.getByLabel("Plugins").first().click();
+  const installedCards = window.locator(".plugin-card:not(.available)");
+  const installedCount = await installedCards.count();
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const activate = installedCards.getByRole("button", { name: "Ativar", exact: true }).first();
+    if (await activate.count() === 0) break;
+    await activate.click();
+    await activate.waitFor({ state: "detached", timeout: 15_000 }).catch(() => undefined);
+  }
+  const activeCount = await installedCards.getByRole("button", { name: "Desativar", exact: true }).count();
+  if (activeCount !== installedCount) {
+    throw new Error(`Esperava ${installedCount} plugins ativos, mas encontrei ${activeCount}.`);
+  }
+  if (await window.locator(".plugin-card.available").count() !== 0) {
+    throw new Error("O catálogo contém plugins empacotados que não foram instalados.");
+  }
+  await window.getByLabel("Explorador").first().click();
+  return installedCount;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createWorkspace, launchIde, openFile, openProject } from "./ide-app.mjs";
+import { activateAllPlugins, createWorkspace, launchIde, openFile, openProject } from "./ide-app.mjs";
 
 /**
  * Latência de digitação medida dentro da página, com teclas reais: do `keydown` até o segundo
@@ -115,11 +115,13 @@ async function installProbe(window, caretOffset = 0) {
 
 async function readProbe(window) {
   return window.evaluate(() => {
-    const samples = [...window.__typingLatency].sort((left, right) => left - right);
+    const ordered = [...window.__typingLatency];
+    const samples = [...ordered].sort((left, right) => left - right);
     return {
       median: samples[Math.floor(samples.length / 2)] ?? 0,
       worst: samples.at(-1) ?? 0,
       samples: samples.length,
+      ordered,
     };
   });
 }
@@ -142,6 +144,7 @@ test.describe("latência de digitação", () => {
     const typed = "abcdefghijklmnopqrst";
     try {
       await openProject(window);
+      await activateAllPlugins(window);
       // Indexação da busca e runtimes de plugin assentam antes da medição.
       await window.waitForTimeout(6_000);
 
@@ -187,6 +190,7 @@ test.describe("latência de digitação", () => {
     const { window } = ide;
     try {
       await openProject(window);
+      await activateAllPlugins(window);
       await window.waitForTimeout(6_000);
       await openFile(window, "enorme.py");
       await window.locator("textarea.code-editor").waitFor({ timeout: 20_000 });
@@ -199,7 +203,7 @@ test.describe("latência de digitação", () => {
       // recuar até a abertura da docstring mais próxima, que é o caminho caro da janela.
       const huge = await measureTyping(window, "abcdefghijklmnopqrst", Math.floor(source.length / 2));
       await expect(layer.locator("span.syntax-keyword").first()).toBeVisible({ timeout: 20_000 });
-      console.log(`[medida] enorme: mediana ${huge.median.toFixed(0)}ms, pior ${huge.worst.toFixed(0)}ms, amostras ${huge.samples}`);
+      console.log(`[medida] enorme: mediana ${huge.median.toFixed(0)}ms, pior ${huge.worst.toFixed(0)}ms, amostras ${huge.samples}; ordem ${huge.ordered.map((value) => value.toFixed(0)).join(",")}`);
       expect(huge.samples).toBeGreaterThan(10);
       expect(
         huge.median,
@@ -224,6 +228,7 @@ test.describe("latência de digitação", () => {
     const { window } = ide;
     try {
       await openProject(window);
+      await activateAllPlugins(window);
       await window.waitForTimeout(6_000);
       await openFile(window, "rolagem.py");
       await window.locator("textarea.code-editor").waitFor({ timeout: 20_000 });

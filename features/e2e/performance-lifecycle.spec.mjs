@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createWorkspace, launchIde, openFile, openProject } from "./ide-app.mjs";
+import { activateAllPlugins, createWorkspace, launchIde, openFile, openProject } from "./ide-app.mjs";
 
 test.describe("ciclo de vida e uso prolongado", () => {
   /** @type {Awaited<ReturnType<typeof createWorkspace>>} */
@@ -25,6 +25,8 @@ test.describe("ciclo de vida e uso prolongado", () => {
         AWS_EC2_METADATA_DISABLED: "true",
       },
     });
+    await openProject(ide.window);
+    await activateAllPlugins(ide.window);
   });
 
   test.afterAll(async () => {
@@ -111,7 +113,6 @@ test.describe("ciclo de vida e uso prolongado", () => {
 
   test("processa rajadas de alterações externas e mantém a IDE responsiva", async () => {
     const { window } = ide;
-    await openProject(window);
     await openFile(window, "src/main.py");
     const editor = window.locator("textarea.code-editor");
     await expect(editor).toBeVisible();

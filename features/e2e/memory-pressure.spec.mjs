@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { mkdir, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { launchIde, openProject } from "./ide-app.mjs";
+import { activateAllPlugins, launchIde, openProject } from "./ide-app.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const STRESS_DONE = "__TINYIDE_STRESS_DONE__";
@@ -13,6 +13,7 @@ test("terminal aplica backpressure sob saída intensa e mantém a IDE responsiva
   const ide = await launchIde(repositoryRoot, { userDataDir });
   try {
     await openProject(ide.window);
+    await activateAllPlugins(ide.window);
     await ide.window.getByLabel("Exibir TERMINAL").click();
     const input = ide.window.getByLabel("Terminal input");
     await expect(input).toBeVisible({ timeout: 30_000 });

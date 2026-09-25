@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { createWorkspace, launchIde, openFile, openProject } from "./ide-app.mjs";
+import { activateAllPlugins, createWorkspace, launchIde, openFile, openProject } from "./ide-app.mjs";
 
 /**
  * Os plugins não vivem isolados: dividem o event loop do runtime, a barra de atividades,
@@ -58,6 +58,13 @@ test.describe("conjunto de plugins", () => {
       .map((element) => element.getAttribute("aria-label") ?? element.getAttribute("title") ?? "")
       .filter((label) => /falha|failed|erro:/i.test(label)));
     expect(failures, `rótulos com falha: ${failures.join(" | ")}`).toEqual([]);
+
+    // O benchmark desta suíte só é válido com o conjunto inteiro ativo. A
+    // contagem no status inclui instalados desativados, então confirma o estado
+    // real pelo gerenciador antes dos testes de interação.
+    const installedCount = await activateAllPlugins(window);
+    expect(installedCount).toBeGreaterThan(0);
+    console.log(`[medida] plugins ativos: ${installedCount}`);
   });
 
   test("as ferramentas de cada plugin estão acessíveis na barra de atividades", async () => {
@@ -124,11 +131,21 @@ test.describe("conjunto de plugins", () => {
 
   test("digitação não degrada com Explorer expandido nem recalcula gitignore por tecla", async () => {
     const { window } = ide;
+    const openGitToolWindow = window.locator('button[aria-label^="Ocultar Git"]').first();
+    if (await openGitToolWindow.isVisible().catch(() => false)) {
+      await openGitToolWindow.click();
+      await expect(window.locator('button[aria-label^="Exibir Git"]').first()).toHaveAttribute("aria-pressed", "false");
+    }
     const ignoredPayloadSizes = [];
     const ignoredRequests = [];
+    const gitRefreshRequests = [];
     const onRequest = (request) => {
-      if (!request.url().includes("/plugin-api/tinyide.git/ignored")) return;
-      ignoredRequests.push(request.url());
+      const url = request.url();
+      if (/\/plugin-api\/tinyide\.git\/(?:status|branches|submodules|remotes)(?:\?|$)/.test(url)) {
+        gitRefreshRequests.push(url);
+      }
+      if (!url.includes("/plugin-api/tinyide.git/ignored")) return;
+      ignoredRequests.push(url);
       try {
         const body = request.postDataJSON();
         ignoredPayloadSizes.push(Array.isArray(body?.paths) ? body.paths.length : 0);
@@ -161,6 +178,7 @@ test.describe("conjunto de plugins", () => {
       await window.waitForTimeout(100);
       ignoredRequests.length = 0;
       ignoredPayloadSizes.length = 0;
+      gitRefreshRequests.length = 0;
 
       // Medido dentro da página: o relógio do automatizador conta também o ida e volta do
       // protocolo por tecla, que numa máquina carregada supera o custo real do editor.
@@ -182,6 +200,27 @@ test.describe("conjunto de plugins", () => {
       });
 
       expect(ignoredRequests, "editar um buffer não pode disparar git check-ignore").toEqual([]);
+      const gitRequestsByRoute = Object.groupBy(
+        gitRefreshRequests,
+        (url) => new URL(url).pathname.split("/").at(-1),
+      );
+      console.log(
+        `[medida] requests Git durante digitação: ${JSON.stringify(Object.fromEntries(
+          Object.entries(gitRequestsByRoute).map(([route, requests]) => [route, requests?.length ?? 0]),
+        ))}`,
+      );
+      expect(
+        gitRequestsByRoute.branches?.length ?? 0,
+        "digitar não pode provocar refresh repetido de branches",
+      ).toBeLessThanOrEqual(1);
+      expect(gitRequestsByRoute.submodules?.length ?? 0).toBeLessThanOrEqual(1);
+      expect(gitRequestsByRoute.remotes?.length ?? 0).toBeLessThanOrEqual(1);
+      // Um /status adicional é esperado quando o documento fica dirty: a
+      // decoração do próprio arquivo precisa descobrir seu estado Git.
+      expect(gitRequestsByRoute.status?.length ?? 0).toBeLessThanOrEqual(2);
+      console.log(
+        `[medida] todos os plugins: ${latency.toFixed(0)}ms/tecla; requests Git durante digitação: ${gitRefreshRequests.length}`,
+      );
       expect(latency, `${latency.toFixed(0)}ms por tecla com o Explorer expandido`).toBeLessThan(120);
     } finally {
       window.off("request", onRequest);

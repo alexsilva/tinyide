@@ -24,7 +24,13 @@ test.describe("IDE em uso", () => {
   });
 
   test("abre a janela com a interface e os plugins carregados", async () => {
-    const { window } = ide;
+    const { application, window } = ide;
+    const visibleOpacity = await application.evaluate(({ BrowserWindow }) => {
+      return BrowserWindow.getAllWindows()
+        .filter((candidate) => candidate.isVisible())
+        .map((candidate) => candidate.getOpacity());
+    });
+    expect(visibleOpacity.every((opacity) => opacity === 0), "E2E não deve produzir janela visível").toBe(true);
     expect(await window.title()).toContain("tinyIde");
     await expect(window.getByText("EXPLORER")).toBeVisible();
     await expect(window.getByText(/plugin\(s\)/)).toBeVisible();

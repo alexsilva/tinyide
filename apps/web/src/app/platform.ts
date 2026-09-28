@@ -20,9 +20,12 @@ import type {
   WorkbenchApi,
   WorkbenchConfirmRequest,
   WorkbenchDialogContribution,
+  WorkbenchEnvApi,
+  WorkbenchUiKind,
   WorkbenchExecutionProfileUpdateOptions,
   WorkbenchExecutionSnapshot,
   WorkbenchVirtualDocumentRequest,
+  WorkbenchWorkspaceFolderOpenRequest,
   WorkbenchWorkspaceResourceOpenRequest,
   WorkbenchTextEditorReplaceContentRequest,
   WorkbenchTextEditorBusyRequest,
@@ -126,6 +129,7 @@ export interface PlatformSnapshot {
 type SnapshotListener = () => void;
 
 interface WorkbenchBinding {
+  readonly uiKind: WorkbenchUiKind;
   openSidebar(id: string): void;
   openToolWindow(id: string, viewId?: string): void;
   notifyError(message: string): void;
@@ -137,6 +141,7 @@ interface WorkbenchBinding {
   highlightText(request: WorkbenchTextHighlightRequest): WorkbenchTextHighlightResult;
   openWorkspaceResource(request: WorkbenchWorkspaceResourceOpenRequest): Promise<void>;
   readWorkspaceResource(path: string): Promise<Blob>;
+  openWorkspaceFolder(request: WorkbenchWorkspaceFolderOpenRequest): Promise<boolean>;
   openVirtualDocument(request: WorkbenchVirtualDocumentRequest): Promise<string>;
   updateVirtualDocument(
     id: string,
@@ -160,6 +165,14 @@ interface WorkbenchBinding {
 
 class AppWorkbenchApi implements WorkbenchApi {
   #binding: WorkbenchBinding | undefined;
+
+  // O getter precisa do `self`: dentro do literal, `this` seria o próprio `env`.
+  readonly env: WorkbenchEnvApi = ((self: AppWorkbenchApi) => ({
+    get uiKind(): WorkbenchUiKind {
+      if (!self.#binding) throw new Error("O workbench ainda não está disponível.");
+      return self.#binding.uiKind;
+    },
+  }))(this);
 
   readonly dialogs = {
     confirm: async (request: WorkbenchConfirmRequest): Promise<boolean> => {
@@ -209,6 +222,10 @@ class AppWorkbenchApi implements WorkbenchApi {
     readResource: async (path: string): Promise<Blob> => {
       if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
       return this.#binding.readWorkspaceResource(path);
+    },
+    openFolder: async (request: WorkbenchWorkspaceFolderOpenRequest): Promise<boolean> => {
+      if (!this.#binding) throw new Error("O workbench ainda não está disponível.");
+      return this.#binding.openWorkspaceFolder(request);
     },
   };
 

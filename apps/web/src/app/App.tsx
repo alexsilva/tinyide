@@ -2187,6 +2187,7 @@ export function App() {
   }, [panelWindowReference]);
 
   useEffect(() => platform.workbench.bind({
+    uiKind: isDesktopHost() ? "desktop" : "web",
     notifyError(message) {
       setPluginNotificationError(message);
     },
@@ -2297,6 +2298,28 @@ export function App() {
     },
     async openWorkspaceResource(request) {
       await openWorkspaceResourceRef.current(request);
+    },
+    async openWorkspaceFolder({ path, target }) {
+      const folderPath = typeof path === "string" ? path.trim() : "";
+      if (!folderPath) return false;
+      if (target === "new-window") {
+        if (isDesktopHost()) return openDesktopProjectWindow(folderPath);
+        // No navegador, "nova janela" é uma aba que nasce declarando o caminho
+        // na URL; o boot dela valida o path no runtime, como qualquer janela.
+        const opened = window.open("about:blank", "_blank");
+        if (!opened) throw new Error("O navegador bloqueou a abertura da nova aba.");
+        opened.opener = null;
+        opened.location.href = projectWindowUrl({ projectPath: folderPath });
+        return true;
+      }
+      if (target !== "current-window") return false;
+      const name = folderPath.split("/").filter(Boolean).at(-1) ?? folderPath;
+      await openRecentProject(
+        { id: crypto.randomUUID(), name, kind: "project", path: folderPath, lastOpenedAt: Date.now() },
+        "current",
+        false,
+      );
+      return true;
     },
     confirm(request) {
       // Uma confirmação nova substitui a anterior, que é resolvida como cancelamento.
@@ -3580,6 +3603,9 @@ export function App() {
   const openRecentProject = async (
     project: RecentProject,
     target: Exclude<ProjectOpenTarget, "ask"> = projectOpenTarget,
+    // Plugins abrem pastas (worktrees) por aqui sem tocar na preferência que o
+    // usuário escolheu para os próprios diálogos de projeto.
+    persistChoice = true,
   ) => {
     const reservedBrowserTab = target === "new" && !isDesktopHost()
       ? window.open("about:blank", "_blank")
@@ -3587,7 +3613,7 @@ export function App() {
     setProjectOpenBusy(true);
     try {
       if (target === "new") {
-        await persistProjectOpenChoice(target);
+        if (persistChoice) await persistProjectOpenChoice(target);
         if (isDesktopHost()) {
           if (!project.path) throw new Error("O caminho deste projeto recente não está mais disponível.");
           await openDesktopProjectWindow(project.path);
@@ -3636,7 +3662,7 @@ export function App() {
         kind: classifyOpenedDirectory(rootEntries),
       });
       setRecentProjects(await readRecentProjects());
-      await persistProjectOpenChoice(target);
+      if (persistChoice) await persistProjectOpenChoice(target);
       setProjectOpenDialog(false);
     } catch (cause) {
       reservedBrowserTab?.close();

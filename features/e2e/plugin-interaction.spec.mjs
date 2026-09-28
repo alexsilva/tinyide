@@ -215,9 +215,13 @@ test.describe("conjunto de plugins", () => {
       ).toBeLessThanOrEqual(1);
       expect(gitRequestsByRoute.submodules?.length ?? 0).toBeLessThanOrEqual(1);
       expect(gitRequestsByRoute.remotes?.length ?? 0).toBeLessThanOrEqual(1);
-      // Um /status adicional é esperado quando o documento fica dirty: a
-      // decoração do próprio arquivo precisa descobrir seu estado Git.
-      expect(gitRequestsByRoute.status?.length ?? 0).toBeLessThanOrEqual(2);
+      // Três fontes legítimas podem cair na mesma janela: o tick do painel, o
+      // tick de 15s da titlebar (cuja fase depende da duração dos testes
+      // anteriores) e o /status extra do documento dirty, cuja decoração
+      // precisa descobrir o estado Git do arquivo. O que este teto caça é o
+      // vazamento por tecla — dezenas de requests —, não a coincidência de
+      // fase entre pollers independentes.
+      expect(gitRequestsByRoute.status?.length ?? 0).toBeLessThanOrEqual(3);
       console.log(
         `[medida] todos os plugins: ${latency.toFixed(0)}ms/tecla; requests Git durante digitação: ${gitRefreshRequests.length}`,
       );

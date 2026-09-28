@@ -1469,10 +1469,25 @@ export interface WorkbenchWorkspaceResourceOpenRequest {
   readonly highlight?: boolean;
 }
 
+export interface WorkbenchWorkspaceFolderOpenRequest {
+  /** Caminho local absoluto da pasta a abrir como workspace. */
+  readonly path: string;
+  /** Nova janela do aplicativo (aba, no navegador) ou a troca do workspace da janela atual. */
+  readonly target: "new-window" | "current-window";
+}
+
 export interface WorkbenchWorkspaceApi {
   openResource(request: WorkbenchWorkspaceResourceOpenRequest): Promise<void>;
   /** Reads a workspace-relative file without opening it in the editor. */
   readResource(path: string): Promise<Blob>;
+  /**
+   * Abre uma pasta local como workspace. O host valida e registra o caminho;
+   * na janela atual, alterações não salvas pedem confirmação ao usuário. No
+   * app desktop `new-window` abre outra janela do SO; no navegador, outra aba
+   * que declara o caminho na URL e o valida no runtime ao carregar. Devolve
+   * `false` quando o ambiente não oferece o destino pedido.
+   */
+  openFolder(request: WorkbenchWorkspaceFolderOpenRequest): Promise<boolean>;
 }
 
 export interface WorkbenchOutputFollowOptions {
@@ -1543,6 +1558,18 @@ export interface WorkbenchExecutionApi {
   stopProfile(profileId: string): Promise<void>;
 }
 
+/** Superfície onde o host materializa "novas janelas": janelas do SO no app desktop, abas no navegador. */
+export type WorkbenchUiKind = "desktop" | "web";
+
+export interface WorkbenchEnvApi {
+  /**
+   * Constante durante a vida da janela. Existe para o plugin nomear destinos
+   * de abertura com a palavra do ambiente — "nova janela" no app, "nova aba"
+   * no navegador — sem inspecionar o host por conta própria.
+   */
+  readonly uiKind: WorkbenchUiKind;
+}
+
 export interface WorkbenchApi {
   readonly dialogs: WorkbenchDialogApi;
   readonly notifications: WorkbenchNotificationApi;
@@ -1552,6 +1579,7 @@ export interface WorkbenchApi {
   readonly documents: WorkbenchDocumentsApi;
   readonly output: WorkbenchOutputApi;
   readonly execution: WorkbenchExecutionApi;
+  readonly env: WorkbenchEnvApi;
   openSidebar(id: string): void;
   openToolWindow(id: string, viewId?: string): void;
 }

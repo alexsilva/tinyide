@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createWorkspace,
   executionProfile,
@@ -54,6 +56,8 @@ test.describe("execução e depuração", () => {
   let workspace;
   /** @type {Awaited<ReturnType<typeof launchIde>>} */
   let ide;
+  /** @type {string | undefined} */
+  let venvRoot;
 
   test.beforeAll(async () => {
     workspace = await createWorkspace({
@@ -61,11 +65,18 @@ test.describe("execução e depuração", () => {
       "ambiente.py": ENVIRONMENT_PROGRAM,
       "saudacao.py": SAVE_PROGRAM,
     });
-    const environment = pythonEnvironment(python);
+    // O backend de depuração prefere debugpy quando o interpretador o oferece,
+    // e aí a sessão não imprime os marcadores do PDB que este spec asserta.
+    // Um venv sem site-packages (e sem pip) garante o caminho PDB em qualquer
+    // máquina, em vez de depender do que o python3 local tem instalado.
+    venvRoot = await mkdtemp(join(tmpdir(), "tinyide-e2e-venv-"));
+    execFileSync(python, ["-m", "venv", "--without-pip", join(venvRoot, "venv")]);
+    const pdbPython = join(venvRoot, "venv", "bin", "python3");
+    const environment = pythonEnvironment(pdbPython);
     const profile = {
       ...executionProfile({
         name: "programa",
-        executable: python,
+        executable: pdbPython,
         parameters: [workspace.file("programa.py")],
         workingDirectory: workspace.root,
       }),
@@ -75,7 +86,7 @@ test.describe("execução e depuração", () => {
     };
     const environmentProfile = executionProfile({
       name: "ambiente",
-      executable: python,
+      executable: pdbPython,
       parameters: [workspace.file("ambiente.py")],
       workingDirectory: workspace.root,
     });
@@ -83,7 +94,7 @@ test.describe("execução e depuração", () => {
     // a exibe ligada, então a execução precisa tratá-la como ligada também.
     const { saveBeforeRun: _defaultOn, ...saveProfile } = executionProfile({
       name: "saudacao",
-      executable: python,
+      executable: pdbPython,
       parameters: [workspace.file("saudacao.py")],
       workingDirectory: workspace.root,
     });
@@ -99,6 +110,7 @@ test.describe("execução e depuração", () => {
   test.afterAll(async () => {
     await ide?.close();
     await workspace?.dispose();
+    if (venvRoot) await rm(venvRoot, { recursive: true, force: true });
   });
 
   test("carrega o perfil gravado no workspace com execução e depuração ativas", async () => {

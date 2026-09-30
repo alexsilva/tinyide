@@ -157,8 +157,12 @@ test.describe("latência de digitação", () => {
       const large = await measureTyping(window, typed);
 
       // O texto tem de estar na camada que o usuário lê, não só no valor do textarea.
-      const rendered = await window.locator(".syntax-layer").first().textContent();
-      expect(rendered?.startsWith(typed), "a camada de sintaxe ficou atrás do texto digitado").toBe(true);
+      // O realce assenta por debounce adaptativo, então a leitura espera o repaint
+      // em vez de fotografar um instante fixo; a latência já é cobrada nas medianas.
+      await expect.poll(
+        async () => (await window.locator(".syntax-layer").first().textContent())?.startsWith(typed) ?? false,
+        { timeout: 5_000, message: "a camada de sintaxe ficou atrás do texto digitado" },
+      ).toBe(true);
 
       console.log(`[medida] medio: ${medium.median.toFixed(0)}ms | grande: ${large.median.toFixed(0)}ms`);
       expect(medium.samples).toBeGreaterThan(10);

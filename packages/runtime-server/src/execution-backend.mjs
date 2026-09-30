@@ -255,12 +255,25 @@ function waitForProcessExit(record, timeoutMs) {
   ]);
 }
 
+function processGroupAlive(pid) {
+  if (!Number.isInteger(pid)) return false;
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
 async function stopProcessRecord(record, timeoutMs = 1_500) {
   if (record.status !== "running") return;
   record.stopRequested = true;
   if (process.platform === "win32") forceStopProcessTree(record);
   else signalProcessTree(record, "SIGTERM");
-  if (await waitForProcessExit(record, timeoutMs)) return;
+  const leaderExited = await waitForProcessExit(record, timeoutMs);
+  // O líder sair não prova a árvore morta: um descendente que ignora SIGTERM
+  // segue vivo no grupo e escaparia da escalada se o retorno fosse aqui.
+  if (leaderExited && (process.platform === "win32" || !processGroupAlive(record.child.pid))) return;
   forceStopProcessTree(record);
   await waitForProcessExit(record, timeoutMs);
 }

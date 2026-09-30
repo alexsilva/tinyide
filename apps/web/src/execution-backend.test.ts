@@ -257,14 +257,19 @@ describe("execution backend sessions", () => {
     let descendantPid: number | undefined;
 
     try {
+      // O descendente confirma pelo stdout que o handler de SIGTERM já está
+      // instalado; o pai só expõe o pid depois disso. Sem a confirmação o teste
+      // vira corrida: um SIGTERM entregue antes do handler mata o descendente e
+      // deixa a escalada para SIGKILL sem exercício.
       const childProgram = [
         "process.on('SIGTERM', () => {});",
+        "process.stdout.write('armed');",
         "setInterval(() => {}, 1000);",
       ].join("");
       const parentProgram = [
         "const { spawn } = require('node:child_process');",
-        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childProgram)}], { stdio: 'ignore' });`,
-        "console.log(child.pid);",
+        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childProgram)}], { stdio: ['ignore', 'pipe', 'ignore'] });`,
+        "child.stdout.once('data', () => console.log(child.pid));",
         "setInterval(() => {}, 1000);",
       ].join("");
       const started = await callBackend<{ readonly id: string }>(

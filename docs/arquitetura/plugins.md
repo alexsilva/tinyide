@@ -415,6 +415,15 @@ export function init(context) {
 
 O app consulta providers registrados; não há condição específica para o ID do plugin.
 
+## Como contribuir decorações de linha
+
+Um `TextEditorLineDecorationProvider` publica uma decoração por linha do documento, com um `kind` (`added`, `modified`, `deleted`, `information`, `warning` ou `error`). O host apresenta o mesmo resultado em dois lugares, sem que o provider precise saber disso:
+
+- na régua de linhas, ao lado do número, com o peek de `change` e as `actions` no hover;
+- na faixa de visão geral à direita da scrollbar, onde linhas consecutivas do mesmo `kind` viram uma única marca, posicionada na altura proporcional do trecho no documento. Clicar na marca, ou perto dela, leva o editor até a primeira linha do trecho.
+
+Para que um bloco apareça como um alvo único na faixa, publique todas as suas linhas com o mesmo `kind`. A faixa só aparece quando o documento tem alguma marca; um arquivo sem decorações não reserva a coluna.
+
 ## Como contribuir uma tool window
 
 Uma tool window é montada pelo plugin dentro de um container fornecido pelo workbench:

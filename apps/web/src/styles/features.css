@@ -2,7 +2,9 @@
 .resize-handle { position: relative; z-index: 8; background: transparent; }
 .resize-handle:hover { background: var(--accent); }
 .resize-handle--sidebar { grid-column: 3; grid-row: 1; width: 5px; cursor: col-resize; }
-.resize-handle--problems { grid-column: 5; grid-row: 1; width: 5px; cursor: col-resize; }
+/* A alça direita encosta na faixa de visão geral do editor; o agarre avança 3px sobre a borda do painel
+   para deixar uma folga inerte entre as duas, sem roubar largura do editor. */
+.resize-handle--problems { grid-column: 5; grid-row: 1; width: 5px; cursor: col-resize; transform: translateX(3px); }
 .resize-handle--panel { position: absolute; top: 0; left: 0; width: 100%; height: 5px; cursor: row-resize; }
 
 /* overflow-anchor: none — a janela de sintaxe muda o DOM dentro do scroller a cada rolagem;
@@ -416,10 +418,10 @@
 .editor-external-file-notice__message span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-external-file-notice__actions { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; }
 .editor-external-file-notice__actions button:not(.icon-button) { height: 24px; border: 1px solid #66512f; border-radius: 4px; padding: 0 8px; background: #362a19; color: inherit; font: inherit; cursor: pointer; }
-.editor-external-file-notice.is-reloaded .editor-external-file-notice__actions button { border-color: #355a78; background: #20394f; }
+.editor-external-file-notice.is-reloaded .editor-external-file-notice__actions button:not(.icon-button) { border-color: #355a78; background: #20394f; }
 .editor-external-file-notice__actions button:hover { filter: brightness(1.12); }
 .editor-external-file-notice__actions .icon-button { border: 0; background: transparent; }
-.editor-external-file-notice__actions .icon-button:hover:not(:disabled) { border: 0; background: rgb(255 255 255 / 8%); }
+.editor-external-file-notice__actions .icon-button:hover:not(:disabled) { border: 0; background: transparent; color: #c7dff4; }
 .external-file-notice { display: flex; flex: 0 0 auto; align-items: center; gap: 9px; min-height: 34px; padding: 4px 8px 4px 10px; border-bottom: 1px solid #4b3c24; background: #2a2115; color: #e7d8b7; font-size: 11px; }
 .external-file-notice--reloaded { border-bottom-color: #29445c; background: #17283a; color: #c7dff4; }
 .external-file-notice > svg { flex: 0 0 auto; }
@@ -443,11 +445,25 @@
 .resource-editor__message small { color: var(--text-subtle); }
 .resource-editor__message.is-error svg,
 .resource-editor__message.is-error strong { color: var(--danger); }
-.editor-canvas { --editor-gutter-width: 0px; position: relative; display: grid; min-width: 0; min-height: 0; overflow: hidden; grid-template-columns: minmax(0, 1fr); background: var(--surface-editor); }
+.editor-canvas { --editor-gutter-width: 0px; --editor-overview-ruler-width: 9px; --editor-decoration-added: #55b876; --editor-decoration-modified: #d2a84a; --editor-decoration-deleted: #e06c75; --editor-decoration-information: #6d91df; --editor-decoration-warning: #d2a84a; --editor-decoration-error: #e06c75; position: relative; display: grid; min-width: 0; min-height: 0; overflow: hidden; grid-template-columns: minmax(0, 1fr); background: var(--surface-editor); }
 .editor-canvas.has-editor-gutter { grid-template-columns: var(--editor-gutter-width, 52px) minmax(0, 1fr); }
 .editor-canvas.has-editor-gutter:not(.has-line-numbers) { --editor-gutter-width: 20px; grid-template-columns: 20px minmax(0, 1fr); }
 .editor-canvas > .code-editor,
 .editor-canvas > .highlight-editor { min-width: 0; min-height: 0; }
+/* Faixa de visão geral (estilo JetBrains): coluna própria à direita da scrollbar, fora do scroller.
+   O padding encolhe a grade do editor; a faixa ocupa a sobra em posição absoluta e não rola. */
+.editor-canvas.has-overview-ruler { padding-right: var(--editor-overview-ruler-width); }
+.editor-overview-ruler { position: absolute; z-index: 4; top: 0; right: 0; bottom: 0; width: var(--editor-overview-ruler-width); border-left: 1px solid var(--border); background: color-mix(in srgb, var(--surface-editor) 72%, var(--surface-3)); }
+/* O clique é resolvido pela faixa inteira (marca mais próxima dentro da tolerância), não pelo pixel da barra. */
+.editor-overview-ruler.is-pointing { cursor: pointer; }
+.editor-overview-ruler__mark { position: absolute; left: 2px; right: 2px; min-height: 4px; border: 0; border-radius: 1px; padding: 0; background: transparent; cursor: pointer; }
+.editor-overview-ruler__mark.is-hot { z-index: 1; left: 1px; right: 1px; filter: brightness(1.25); box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 55%, transparent); }
+.editor-overview-ruler__mark.is-added { background: var(--editor-decoration-added); }
+.editor-overview-ruler__mark.is-modified { background: var(--editor-decoration-modified); }
+.editor-overview-ruler__mark.is-deleted { height: 4px; margin-top: -2px; background: var(--editor-decoration-deleted); }
+.editor-overview-ruler__mark.is-information { background: var(--editor-decoration-information); }
+.editor-overview-ruler__mark.is-warning { background: var(--editor-decoration-warning); }
+.editor-overview-ruler__mark.is-error { background: var(--editor-decoration-error); }
 .code-editor.is-navigation-modifier { cursor: pointer; }
 .editor-canvas.is-symbol-navigation-loading,
 .editor-canvas.is-symbol-navigation-loading * { cursor: progress !important; }
@@ -531,12 +547,12 @@
 .editor-line-ruler__line.is-debug-current { background: color-mix(in srgb, var(--accent-soft) 64%, var(--surface-3)); color: var(--text); }
 /* Linha com breakpoint: régua e corpo do editor ganham a faixa vermelha (como no JetBrains). */
 .editor-line-ruler__line.has-breakpoint { background: color-mix(in srgb, #e05252 22%, transparent); color: var(--text); }
-.editor-line-ruler__line.has-added .editor-line-ruler__marker::before { background: #55b876; }
-.editor-line-ruler__line.has-modified .editor-line-ruler__marker::before { background: #d2a84a; }
-.editor-line-ruler__line.has-deleted .editor-line-ruler__marker::before { top: -2px; height: 4px; background: #e06c75; box-shadow: 0 0 0 1px color-mix(in srgb, var(--surface-editor) 72%, var(--surface-3)); }
-.editor-line-ruler__line.has-information .editor-line-ruler__marker::before { background: #6d91df; }
-.editor-line-ruler__line.has-warning .editor-line-ruler__marker::before { background: #d2a84a; }
-.editor-line-ruler__line.has-error .editor-line-ruler__marker::before { background: #e06c75; }
+.editor-line-ruler__line.has-added .editor-line-ruler__marker::before { background: var(--editor-decoration-added); }
+.editor-line-ruler__line.has-modified .editor-line-ruler__marker::before { background: var(--editor-decoration-modified); }
+.editor-line-ruler__line.has-deleted .editor-line-ruler__marker::before { top: -2px; height: 4px; background: var(--editor-decoration-deleted); box-shadow: 0 0 0 1px color-mix(in srgb, var(--surface-editor) 72%, var(--surface-3)); }
+.editor-line-ruler__line.has-information .editor-line-ruler__marker::before { background: var(--editor-decoration-information); }
+.editor-line-ruler__line.has-warning .editor-line-ruler__marker::before { background: var(--editor-decoration-warning); }
+.editor-line-ruler__line.has-error .editor-line-ruler__marker::before { background: var(--editor-decoration-error); }
 .editor-line-ruler__line.has-added .editor-line-ruler__marker:hover::before,
 .editor-line-ruler__line.has-modified .editor-line-ruler__marker:hover::before,
 .editor-line-ruler__line.has-deleted .editor-line-ruler__marker:hover::before,

@@ -392,6 +392,7 @@ import {
   moveCollapsedEditorSelectionToPointer,
 } from "./editor/pointer-mapping";
 import { EditorLineRuler } from "./editor/EditorLineRuler";
+import { EditorOverviewRuler, editorOverviewMarks } from "./editor/EditorOverviewRuler";
 import {
   hydrateExpandedEntries,
   hydrateExplorerPath,
@@ -1849,6 +1850,8 @@ export function App() {
    */
   const fileLineByVisibleLine = activeFoldProjection?.fileLineByVisibleLine;
   const fileLineOf = (visibleLine: number) => fileLineByVisibleLine?.[visibleLine - 1] ?? visibleLine;
+  // `editorMetrics.lineCount` conta as linhas visíveis; com blocos dobrados o arquivo tem mais.
+  const editorFileLineCount = activeFoldProjection?.visibleLineByFileLine.length ?? editorMetrics.lineCount;
   const editorLineTop = (line: number) => (
     editorLayoutMetrics.contentPadding + (line - 1) * editorLayoutMetrics.lineHeight
   );
@@ -1869,6 +1872,7 @@ export function App() {
     }
     return grouped;
   }, [editorLineDecorations, activeFoldProjection]);
+  const editorOverviewMarkList = useMemo(() => editorOverviewMarks(editorLineDecorations), [editorLineDecorations]);
   /**
    * Breakpoints só fazem sentido quando algum debug adapter registrado suporta a
    * extensão do arquivo ativo; adapters sem `extensions` declaradas valem como curinga.
@@ -2068,6 +2072,14 @@ export function App() {
     && activeDocument,
   );
   const editorInlineGutter = showEditorGutter && editorUsesHighlightScroller;
+  /**
+   * A faixa só existe com alguma marca: arquivo sem alteração nem diagnóstico não reserva a coluna.
+   * O texto é alinhado à esquerda, então a primeira marca ao digitar move só a scrollbar.
+   */
+  const showEditorOverviewRuler = activeDocument?.kind === "text"
+    && !activeResourceEditorProvider
+    && Boolean(activeDocument.path && workspaceRoot)
+    && editorOverviewMarkList.length > 0;
 
   useEffect(() => {
     const snapshot: WorkbenchStateSnapshot = {
@@ -3894,7 +3906,7 @@ export function App() {
 
   const goToEditorLine = (requestedLine: number) => {
     if (!activeDocument || activeDocument.kind !== "text") return;
-    const line = Math.min(Math.max(1, Math.trunc(requestedLine)), editorMetrics.lineCount);
+    const line = Math.min(Math.max(1, Math.trunc(requestedLine)), editorFileLineCount);
     const offset = textOffsetAtPosition(activeEditorContent, { line, column: 1 });
     setDocuments((current) => current.map((document) => document.id === activeDocument.id
       ? { ...document, selectionStart: offset, selectionEnd: offset }
@@ -3911,6 +3923,10 @@ export function App() {
       }
     }));
   };
+  // Callback estável para a faixa de visão geral, que é memo e não deve re-renderizar a cada tecla.
+  const goToEditorLineRef = useRef(goToEditorLine);
+  goToEditorLineRef.current = goToEditorLine;
+  const navigateToEditorOverviewMark = useCallback((fileLine: number) => goToEditorLineRef.current(fileLine), []);
 
   const openWorkspaceResource = async (request: WorkbenchWorkspaceResourceOpenRequest) => {
     const path = request.path.split("/").filter(Boolean).join("/");
@@ -7955,7 +7971,7 @@ export function App() {
                   goToLineProps={{
                     open: goToLineOpen,
                     value: goToLineValue,
-                    lineCount: editorMetrics.lineCount,
+                    lineCount: editorFileLineCount,
                     disabled: !activeDocument || activeDocument.kind !== "text" || Boolean(activeResourceEditorProvider),
                     inputRef: goToLineInputRef,
                     onOpen: () => openGoToLine(),
@@ -7999,7 +8015,7 @@ export function App() {
                     }}
                   >
                   <div
-                    className={`editor-canvas${showEditorGutter ? " has-editor-gutter" : ""}${editorInlineGutter ? " has-inline-gutter" : ""}${editorSettings.lineNumbers ? " has-line-numbers" : ""}${editorNavigationLoading ? " is-symbol-navigation-loading" : ""}${activeEditorBusyOperation ? " is-editor-operation-busy" : ""}`}
+                    className={`editor-canvas${showEditorGutter ? " has-editor-gutter" : ""}${editorInlineGutter ? " has-inline-gutter" : ""}${showEditorOverviewRuler ? " has-overview-ruler" : ""}${editorSettings.lineNumbers ? " has-line-numbers" : ""}${editorNavigationLoading ? " is-symbol-navigation-loading" : ""}${activeEditorBusyOperation ? " is-editor-operation-busy" : ""}`}
                     aria-busy={editorNavigationLoading || Boolean(activeEditorBusyOperation)}
                     style={{
                       "--editor-gutter-width": `${showEditorGutter && !editorSettings.lineNumbers ? 20 : editorMetrics.gutterWidth}px`,
@@ -8046,6 +8062,14 @@ export function App() {
                       renderCodeEditorTextarea(false)
                     )}
                     {editorInlineGutter ? null : editorFoldOverlayElement}
+                    {showEditorOverviewRuler ? (
+                      <EditorOverviewRuler
+                        marks={editorOverviewMarkList}
+                        lineCount={editorMetrics.lineCount}
+                        visibleLineByFileLine={activeFoldProjection?.visibleLineByFileLine}
+                        onNavigate={navigateToEditorOverviewMark}
+                      />
+                    ) : null}
                     {foldPreview ? (
                       <EditorFoldPreview
                         text={foldPreview.text}

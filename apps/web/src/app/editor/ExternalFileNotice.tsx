@@ -1,4 +1,5 @@
 import { CheckCircle2, FileWarning, RefreshCw, RotateCw, X } from "lucide-react";
+import { ButtonTooltip } from "../workbench/activity-components";
 
 export interface ExternalFileNoticeState {
   readonly kind: "reloaded" | "conflict";
@@ -51,9 +52,11 @@ export function ExternalFileNotice({
             <button type="button" onClick={onKeep}>Manter alterações locais</button>
           </>
         ) : (
-          <button className="icon-button small" type="button" aria-label="Dispensar aviso de atualização externa" onClick={onDismiss}>
-            <X size={13} />
-          </button>
+          <ButtonTooltip label="Fechar aviso">
+            <button className="icon-button small" type="button" aria-label="Fechar aviso" onClick={onDismiss}>
+              <X size={13} />
+            </button>
+          </ButtonTooltip>
         )}
       </div>
     </div>

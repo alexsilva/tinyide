@@ -36,7 +36,10 @@ export function WorkbenchPluginDialog({
     <Dialog.Root open={Boolean(dialog)} onOpenChange={(open) => { if (!open) requestClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay className="dialog-overlay" />
-        <Dialog.Content className={`workbench-plugin-dialog workbench-plugin-dialog--${dialog?.size ?? dialog?.contribution.size ?? "large"}`}>
+        <Dialog.Content
+          className={`workbench-plugin-dialog workbench-plugin-dialog--${dialog?.size ?? dialog?.contribution.size ?? "large"}`}
+          {...(dialog?.contribution.description ? {} : { "aria-describedby": undefined })}
+        >
           <div className="dialog-heading">
             <div>
               {dialog?.contribution.showPluginLabel === false ? null : <span className="eyebrow">PLUGIN</span>}

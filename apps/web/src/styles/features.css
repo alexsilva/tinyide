@@ -125,7 +125,13 @@
 .workbench-plugin-dialog { position: fixed; z-index: 70; top: 50%; left: 50%; display: grid; grid-template-rows: auto minmax(0, 1fr); max-height: calc(100vh - 32px); transform: translate(-50%, -50%); overflow: hidden; border: 1px solid var(--border-strong); border-radius: 10px; padding: 18px; background: var(--surface-raised); box-shadow: 0 30px 90px rgb(0 0 0 / 38%); }
 .workbench-plugin-dialog--medium { width: min(760px, calc(100vw - 32px)); height: min(680px, calc(100vh - 32px)); }
 .workbench-plugin-dialog--large { width: min(1180px, calc(100vw - 32px)); height: min(820px, calc(100vh - 32px)); }
-.workbench-plugin-dialog--full { width: calc(100vw - 24px); height: calc(100vh - 24px); max-height: none; }
+.workbench-plugin-dialog--full { width: calc(100vw - 24px); height: calc(100vh - 24px); max-height: none; padding: 10px; }
+/* Em tela cheia o foco é o conteúdo: o cabeçalho vira uma linha só. */
+.workbench-plugin-dialog--full > .dialog-heading { height: auto; align-items: center; padding: 5px 6px 5px 12px; }
+.workbench-plugin-dialog--full > .dialog-heading > div { display: flex; min-width: 0; align-items: baseline; gap: 10px; }
+.workbench-plugin-dialog--full > .dialog-heading h2 { margin: 0; font-size: 14px; white-space: nowrap; }
+.workbench-plugin-dialog--full > .dialog-heading p { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workbench-plugin-dialog--full > .dialog-heading .icon-button { width: 27px; min-height: 27px; }
 .plugin-dialog-host { min-width: 0; min-height: 0; overflow: hidden; }
 .settings-dialog { position: fixed; z-index: 70; top: 50%; left: 50%; display: flex; width: min(900px, calc(100vw - 32px)); height: min(720px, calc(100vh - 32px)); transform: translate(-50%, -50%); flex-direction: column; border: 1px solid var(--border-strong); border-radius: 12px; padding: 0; background: var(--surface-raised); box-shadow: 0 30px 90px rgb(0 0 0 / 64%); overflow: hidden; }
 .settings-dialog__heading { min-height: 84px; padding: 16px 18px; border-bottom: 1px solid var(--border); background: var(--surface-2); }

@@ -1,5 +1,12 @@
 export function createBackend({ runtime }) {
+  /** Último fechamento visto por um canal do fixture, para o teste observar. */
+  let lastChannelClose;
   const handler = async (request, response, relativePath) => {
+    if (relativePath === "/channel/last-close") {
+      response.statusCode = 200;
+      response.end(JSON.stringify(lastChannelClose ?? null));
+      return;
+    }
     if (relativePath === "/never") {
       await new Promise(() => {});
       return;
@@ -48,6 +55,28 @@ export function createBackend({ runtime }) {
       invoke: async (args) => runtime.mcpTools.invoke("upstream", args),
     },
   ];
+  handler.openChannel = (channel, relativePath) => {
+    if (relativePath === "/channel/reject") {
+      channel.close(4404, "fixture channel rejected");
+      return;
+    }
+    if (relativePath === "/channel/throw") throw new Error("fixture channel failed");
+    channel.send(JSON.stringify({ hello: relativePath, url: channel.url, header: channel.headers["x-fixture"] ?? null }));
+    channel.on("close", (code, reason) => {
+      lastChannelClose = { code, reason };
+    });
+    channel.on("message", (data, binary) => {
+      if (binary) {
+        channel.send(Buffer.from(data).reverse());
+        return;
+      }
+      if (data === "close-me") {
+        channel.close(4000, "closed by backend");
+        return;
+      }
+      channel.send(`echo:${data}`);
+    });
+  };
   handler.dispose = async ({ reason } = {}) => {
     if (reason === "fail") throw new Error("fixture dispose failed");
     if (reason === "never") await new Promise(() => {});

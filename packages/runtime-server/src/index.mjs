@@ -7,6 +7,7 @@ import { createExecutionBackend } from "./execution-backend.mjs";
 import { createPluginBackendProxy } from "./plugin-backend-proxy.mjs";
 import { createPluginBackendResolver, createPluginManifestSnapshot } from "./plugin-runtime-cache.mjs";
 import { createUserDataBackend, defaultTinyIdeUserDataRoot } from "./user-data-backend.mjs";
+import { acceptWebSocket, isWebSocketUpgradeRequest, rejectWebSocketUpgrade } from "./websocket.mjs";
 import {
   assertWorkspaceScopeId,
   listWorkspaceScopes,
@@ -327,6 +328,24 @@ export function createTinyIdeRuntime(options) {
       scopeId: assertWorkspaceScopeId(decodeURIComponent(rawScopeId)),
       pathname: separator < 0 ? "/" : rest.slice(separator),
     };
+  }
+  /**
+   * `/plugin-api/<pluginId>/<rota>` → identidade do plugin e rota relativa.
+   * Lança com `statusCode: 400` para ids malformados, antes de qualquer
+   * backend ser resolvido.
+   */
+  function parsePluginApiPath(pathname) {
+    const segments = pathname.slice("/plugin-api/".length).split("/");
+    let pluginId;
+    try {
+      pluginId = decodeURIComponent(segments.shift() ?? "");
+    } catch {
+      throw Object.assign(new Error("Identificador de plugin inválido."), { statusCode: 400 });
+    }
+    if (!/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(pluginId)) {
+      throw Object.assign(new Error("Identificador de plugin inválido."), { statusCode: 400 });
+    }
+    return { pluginId, relativePath: `/${segments.join("/")}` };
   }
   const openInFileManager = options.openInFileManager ?? openSystemFileManager;
 
@@ -801,19 +820,14 @@ export function createTinyIdeRuntime(options) {
         writeJson(response, 409, {error: "Abra um workspace antes de usar este plugin."});
         return;
       }
-      const segments = requestUrl.pathname.slice("/plugin-api/".length).split("/");
       let pluginId;
+      let relativePath;
       try {
-        pluginId = decodeURIComponent(segments.shift() ?? "");
-      } catch {
-        writeJson(response, 400, {error: "Identificador de plugin inválido."});
+        ({ pluginId, relativePath } = parsePluginApiPath(requestUrl.pathname));
+      } catch (error) {
+        writeJson(response, 400, {error: error instanceof Error ? error.message : String(error)});
         return;
       }
-      if (!/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(pluginId)) {
-        writeJson(response, 400, {error: "Identificador de plugin inválido."});
-        return;
-      }
-      const relativePath = `/${segments.join("/")}`;
       void resolveBackend(context, pluginId).then((handler) => {
         if (!handler) {
           writeJson(response, 404, {error: "Plugin backend not found."});
@@ -873,8 +887,89 @@ export function createTinyIdeRuntime(options) {
     next();
   };
 
+  /**
+   * Upgrade WebSocket para `/w/<scopeId>/plugin-api/<pluginId>/<rota>`: abre um
+   * canal persistente entre o frontend e o backend do plugin, fora do limite
+   * de seis conexões HTTP por origem do Chromium. Toda recusa sai como resposta
+   * HTTP comum no mesmo socket, com o mesmo critério das rotas de requisição.
+   */
+  async function handleUpgrade(request, socket, head) {
+    socket.on("error", () => undefined);
+    if (!isWebSocketUpgradeRequest(request)) {
+      rejectWebSocketUpgrade(socket, 400, "Upgrade WebSocket inválido.");
+      return;
+    }
+    const rawUrl = new URL(request.url ?? "/", "http://localhost");
+    let scopeId;
+    let pathname;
+    try {
+      ({ scopeId, pathname } = splitScopedPath(rawUrl.pathname));
+    } catch (error) {
+      rejectWebSocketUpgrade(socket, 400, error instanceof Error ? error.message : String(error));
+      return;
+    }
+    if (!pathname.startsWith("/plugin-api/")) {
+      rejectWebSocketUpgrade(socket, 404, "Rota sem suporte a canais.");
+      return;
+    }
+    if (!requestOriginAllowed(request)) {
+      rejectWebSocketUpgrade(socket, 403, "Origem da requisição não autorizada.");
+      return;
+    }
+    const context = scopeId
+      ? workspaceContexts.get(scopeId) ?? (scopeId === initialScopeId ? workspaceContext(scopeId) : undefined)
+      : unscopedContext;
+    if (!context?.workspaceRoot) {
+      rejectWebSocketUpgrade(socket, 409, "Abra um workspace antes de usar este plugin.");
+      return;
+    }
+    let pluginId;
+    let relativePath;
+    try {
+      ({ pluginId, relativePath } = parsePluginApiPath(pathname));
+    } catch (error) {
+      rejectWebSocketUpgrade(socket, 400, error instanceof Error ? error.message : String(error));
+      return;
+    }
+    let handler;
+    try {
+      handler = await resolveBackend(context, pluginId);
+    } catch (error) {
+      rejectWebSocketUpgrade(socket, 500, error instanceof Error ? error.message : String(error));
+      return;
+    }
+    if (!handler) {
+      rejectWebSocketUpgrade(socket, 404, "Plugin backend not found.");
+      return;
+    }
+    let supportsChannels = false;
+    try {
+      supportsChannels = typeof handler.openChannel === "function" && (await handler.supportsChannels?.()) === true;
+    } catch (error) {
+      rejectWebSocketUpgrade(socket, 500, error instanceof Error ? error.message : String(error));
+      return;
+    }
+    if (!supportsChannels) {
+      rejectWebSocketUpgrade(socket, 404, "O backend deste plugin não oferece canais.");
+      return;
+    }
+    if (socket.destroyed) return;
+    const connection = acceptWebSocket(request, socket, head);
+    try {
+      await handler.openChannel({
+        relativePath,
+        url: `${pathname}${rawUrl.search}`,
+        headers: request.headers,
+        connection,
+      });
+    } catch (error) {
+      connection.close(1011, error instanceof Error ? error.message : String(error));
+    }
+  }
+
   return {
     middleware,
+    handleUpgrade,
     userDataRoot,
     pluginsRoot,
     webRoot,
@@ -936,6 +1031,9 @@ export async function startTinyIdeRuntime(options) {
   const runtime = createTinyIdeRuntime(options);
   await runtime.registerInitialWorkspaceScope();
   const server = createServer((request, response) => runtime.middleware(request, response));
+  server.on("upgrade", (request, socket, head) => {
+    void runtime.handleUpgrade(request, socket, head);
+  });
   server.maxHeadersCount = 100;
   // O runtime só atende loopback e um único consumidor (o renderer). Manter o idle de
   // keep-alive acima do pool do Chromium evita a race em que o Node envia FIN no exato

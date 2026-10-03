@@ -148,6 +148,21 @@ describe("plugin source refresh", () => {
 });
 
 describe("plugin backend lifecycle", () => {
+  it("does not open a channel before a workspace is ready", async () => {
+    setActiveHostWorkspaceRoot(undefined);
+    try {
+      await expect(pluginBackend("tinyide.sample").openChannel!("/sessions/1/stream")).rejects.toMatchObject({
+        message: "Abra um workspace antes de usar este plugin.",
+        statusCode: 409,
+      });
+      await expect(pluginBackend("tinyide.sample").openChannel!("//escape")).rejects.toThrow(
+        "O caminho do backend do plugin deve ser relativo ao próprio plugin.",
+      );
+    } finally {
+      setActiveHostWorkspaceRoot(undefined);
+    }
+  });
+
   it("does not hit the runtime before a workspace is ready", async () => {
     const originalFetch = globalThis.fetch;
     const fetchMock = vi.fn();

@@ -77,6 +77,13 @@ function runtimePlugin() {
   function install(server) {
     installTransformedPluginModules(server);
     server.middlewares.use(runtime.middleware);
+    // O Vite só trata os upgrades do próprio HMR (`vite-hmr`/`vite-ping`) e
+    // ignora os demais; os canais de plugin passam pelo runtime.
+    server.httpServer?.on("upgrade", (request, socket, head) => {
+      const protocol = request.headers["sec-websocket-protocol"];
+      if (protocol === "vite-hmr" || protocol === "vite-ping") return;
+      void runtime.handleUpgrade(request, socket, head);
+    });
     const watchedPluginFiles = readdirSync(pluginsRoot).flatMap((directoryName) => [
       join(pluginsRoot, directoryName, "plugin.json"),
       join(pluginsRoot, directoryName, "dist/frontend.js"),

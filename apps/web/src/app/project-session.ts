@@ -108,6 +108,14 @@ function renewScopeAbort(): void {
 }
 
 /**
+ * Sinal do escopo corrente, para recursos de vida longa (canais WebSocket)
+ * que precisam morrer junto com a troca de projeto, como as requisições.
+ */
+export function workspaceScopeAbortSignal(): AbortSignal | undefined {
+  return scopeAbort?.signal;
+}
+
+/**
  * `true` quando a falha veio da troca de workspace, e não do servidor. Aceita
  * também a mensagem já convertida em texto porque é assim que a maior parte da
  * aplicação repassa erros para a barra de avisos.

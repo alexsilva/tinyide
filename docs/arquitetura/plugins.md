@@ -256,6 +256,17 @@ const result = await context.backend.request("/status");
 
 O plugin não conhece o prefixo HTTP, seu ID na rota ou a implementação de transporte. O host aplica o escopo automaticamente.
 
+Para fluxos contínuos — saída de um terminal, de um processo, eventos que o backend empurra — existe o canal persistente:
+
+```js
+const channel = await context.backend.openChannel("/sessions/abc/stream");
+channel.onMessage((data) => render(JSON.parse(data)));
+channel.onClose(({code}) => { if (code === 1012) reconnect(); });
+channel.send(JSON.stringify({type: "read", offset: 0}));
+```
+
+`openChannel` é opcional no host: detecte com `typeof context.backend.openChannel === "function"` e caia para `request` quando faltar. Use-o em vez de long-poll: o navegador limita a seis as conexões HTTP simultâneas por origem, compartilhadas por todas as janelas, e cada long-poll aberto ocupa uma delas o tempo inteiro — com alguns terminais abertos, qualquer requisição curta (uma tecla, salvar um arquivo) ficava segundos na fila. O canal é um WebSocket, que não entra nessa conta. Quando o backend é recarregado, o canal fecha com o código 1012 e o frontend deve reconectar; códigos 4000–4999 são decisões finais do próprio plugin.
+
 ## Como implementar um plugin frontend
 
 Estrutura mínima recomendada:
@@ -517,6 +528,24 @@ export function init(context) {
 ```
 
 O frontend não deve montar manualmente URLs como `/plugin-api/acme.hello/status`. Esse roteamento pertence ao host.
+
+Para atender canais, o handler devolvido por `createBackend()` expõe `openChannel(channel, relativePath)`. O `channel` entrega `send(texto)`, `close(code, reason)`, `url`, `headers` e os eventos `message(data, isBinary)` e `close(code, reason)`; o socket real fica no processo principal e só as mensagens atravessam para o worker do plugin:
+
+```js
+export function createBackend({ workspaceRoot }) {
+  const handle = async function handle(request, response, relativePath) { /* … */ };
+  handle.openChannel = (channel, relativePath) => {
+    if (relativePath !== "/events") {
+      channel.close(4404, "Rota sem canal.");
+      return;
+    }
+    channel.on("message", (data) => channel.send(`eco: ${data}`));
+  };
+  return handle;
+}
+```
+
+Um backend sem `openChannel` responde 404 a qualquer upgrade — o host nunca aceita um canal que ninguém vai atender.
 
 ## Comunicação entre plugins
 

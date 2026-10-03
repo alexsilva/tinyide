@@ -3,6 +3,8 @@ import { Worker } from "node:worker_threads";
 import { pathToFileURL } from "node:url";
 
 const DISPOSE_TIMEOUT_MS = 2_000;
+/** Código de fechamento WebSocket "Service Restart": o cliente deve reconectar. */
+export const CHANNEL_RESTART_CLOSE_CODE = 1012;
 
 /**
  * Teto de heap por backend. Todos os isolates do processo (main e workers)
@@ -25,6 +27,18 @@ async function readRequestBody(request) {
   return chunks.length ? Buffer.concat(chunks) : Buffer.alloc(0);
 }
 
+/**
+ * Só códigos que o navegador aceita receber: 1000-1003, 1007-1014 e a faixa
+ * privada 3000-4999. Qualquer outro (1005/1006 são reservados ao próprio
+ * protocolo) derrubaria a conexão como erro de protocolo no cliente.
+ */
+export function sanitizeCloseCode(code) {
+  const value = Number(code);
+  if (!Number.isInteger(value)) return 1000;
+  if ((value >= 1000 && value <= 1003) || (value >= 1007 && value <= 1014) || (value >= 3000 && value <= 4999)) return value;
+  return 1000;
+}
+
 export function createPluginBackendProxy({ backendPath, workspaceRoot, pluginId, runtimeRequest }) {
   const worker = new Worker(new URL("./plugin-backend-worker.mjs", import.meta.url), {
     workerData: {
@@ -36,6 +50,8 @@ export function createPluginBackendProxy({ backendPath, workspaceRoot, pluginId,
   });
   const requests = new Map();
   const control = new Map();
+  const channels = new Map();
+  let channelsSupported = false;
   let disposed = false;
   let dead = false;
   let startupError;
@@ -46,16 +62,25 @@ export function createPluginBackendProxy({ backendPath, workspaceRoot, pluginId,
     readyReject = reject;
   });
 
+  const closeChannels = (code, reason) => {
+    for (const [id, connection] of channels) {
+      channels.delete(id);
+      connection.close(code, reason);
+    }
+  };
+
   const failPending = (error) => {
     for (const pending of requests.values()) pending.reject(error);
     requests.clear();
     for (const pending of control.values()) pending.reject(error);
     control.clear();
+    closeChannels(CHANNEL_RESTART_CLOSE_CODE, error instanceof Error ? error.message : String(error));
   };
 
   worker.on("message", (message) => {
     if (!message || typeof message !== "object") return;
     if (message.type === "ready") {
+      channelsSupported = message.channels === true;
       readyResolve();
       return;
     }
@@ -92,6 +117,19 @@ export function createPluginBackendProxy({ backendPath, workspaceRoot, pluginId,
       control.delete(message.id);
       if (message.type === "control-error") pending.reject(errorFromPayload(message.error, `Falha no backend do plugin '${pluginId}'.`));
       else pending.resolve(message.result);
+      return;
+    }
+    if (message.type === "channel-message") {
+      const connection = channels.get(message.id);
+      if (!connection) return;
+      connection.send(message.binary === true ? Buffer.from(message.data) : String(message.data ?? ""));
+      return;
+    }
+    if (message.type === "channel-close") {
+      const connection = channels.get(message.id);
+      if (!connection) return;
+      channels.delete(message.id);
+      connection.close(sanitizeCloseCode(message.code), typeof message.reason === "string" ? message.reason : "");
       return;
     }
     if (message.type === "disposed" || message.type === "dispose-error") {
@@ -175,6 +213,52 @@ export function createPluginBackendProxy({ backendPath, workspaceRoot, pluginId,
   proxy.invokeMcpTool = (name, args) => controlRequest("mcp-tools:invoke", { name, args });
   /** Worker morto sem dispose: o resolver descarta este proxy e cria outro. */
   proxy.isDead = () => dead && !disposed;
+
+  /** `true` quando o `createBackend()` do plugin expõe `openChannel`. */
+  proxy.supportsChannels = async () => {
+    await ready;
+    return channelsSupported;
+  };
+
+  /**
+   * Liga uma conexão WebSocket já aceita ao backend. O socket fica no
+   * processo principal; só as mensagens atravessam para o worker, e um
+   * backend que reinicia fecha o canal com 1012 para o cliente reconectar.
+   */
+  proxy.openChannel = async ({ relativePath, url, headers, connection }) => {
+    if (disposed) {
+      connection.close(CHANNEL_RESTART_CLOSE_CODE, `Backend do plugin '${pluginId}' foi reiniciado.`);
+      return;
+    }
+    try {
+      await ready;
+    } catch (error) {
+      connection.close(1011, error instanceof Error ? error.message : String(error));
+      return;
+    }
+    if (!channelsSupported) {
+      connection.close(1011, "O backend deste plugin não oferece canais.");
+      return;
+    }
+    if (connection.closed) return;
+    const id = randomUUID();
+    channels.set(id, connection);
+    connection.on("message", (data, binary) => {
+      if (channels.get(id) !== connection) return;
+      worker.postMessage({
+        type: "channel-message",
+        id,
+        data: binary ? new Uint8Array(data) : data,
+        binary: binary === true,
+      });
+    });
+    connection.on("close", (code, reason) => {
+      if (channels.get(id) !== connection) return;
+      channels.delete(id);
+      worker.postMessage({ type: "channel-close", id, code, reason });
+    });
+    worker.postMessage({ type: "channel-open", id, relativePath, url, headers });
+  };
 
   proxy.dispose = async ({ reason } = {}) => {
     if (disposed) return;

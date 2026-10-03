@@ -51,6 +51,7 @@ Verificados contra o aplicativo em execução — se algum mudar, o teste falha 
 | `plugin-interaction.spec.mjs` | todos os plugins ativos sem falha, busca abrindo no editor, git, terminal, banco de dados, abas convivendo |
 | `aws-secrets.spec.mjs` | Secrets Manager com adapter fake: listagem, consulta sob demanda, edição e proteção contra vazamento no console |
 | `performance.spec.mjs` | orçamentos de tempo de abertura, carga do projeto, edição e execução, e resposta do editor durante a indexação |
+| `terminal-typing-latency.spec.mjs` | latência de tecla no terminal medida na página, com uma e com sete sessões abertas; prova que nenhuma tecla passa pela fila de conexões HTTP |
 
 ## Depuração Python
 

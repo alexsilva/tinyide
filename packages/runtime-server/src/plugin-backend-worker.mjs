@@ -8,6 +8,7 @@ if (!parentPort) throw new Error("Plugin backend worker requires a parent port."
 
 const activeRequests = new Map();
 const runtimeRequests = new Map();
+const channels = new Map();
 let backendHandler;
 
 function serializedError(error) {
@@ -91,6 +92,54 @@ class WorkerResponse extends EventEmitter {
   }
 }
 
+/**
+ * Lado do backend de um canal WebSocket aberto pelo frontend do plugin. O
+ * socket real vive no processo principal; aqui chegam só as mensagens, pelo
+ * `parentPort`. Eventos: `message(data, isBinary)` e `close(code, reason)`.
+ */
+class WorkerChannel extends EventEmitter {
+  constructor(id, { relativePath, url, headers }) {
+    super();
+    this.id = id;
+    this.relativePath = relativePath;
+    this.url = url;
+    this.headers = headers ?? {};
+    this.closed = false;
+  }
+
+  send(data) {
+    if (this.closed) return false;
+    const binary = Buffer.isBuffer(data) || data instanceof Uint8Array;
+    parentPort.postMessage({
+      type: "channel-message",
+      id: this.id,
+      data: binary ? new Uint8Array(data) : String(data),
+      binary,
+    });
+    return true;
+  }
+
+  close(code = 1000, reason = "") {
+    if (this.closed) return;
+    this.closed = true;
+    channels.delete(this.id);
+    parentPort.postMessage({ type: "channel-close", id: this.id, code, reason });
+    this.emit("close", code, reason);
+  }
+
+  receive(data, binary) {
+    if (this.closed) return;
+    this.emit("message", binary ? Buffer.from(data) : data, binary);
+  }
+
+  remoteClosed(code, reason) {
+    if (this.closed) return;
+    this.closed = true;
+    channels.delete(this.id);
+    this.emit("close", code, reason);
+  }
+}
+
 async function initialize() {
   const imported = await import(workerData.backendUrl);
   if (typeof imported.createBackend !== "function") {
@@ -106,7 +155,7 @@ async function initialize() {
       },
     },
   });
-  parentPort.postMessage({ type: "ready" });
+  parentPort.postMessage({ type: "ready", channels: typeof backendHandler?.openChannel === "function" });
 }
 
 async function handleRequest(message) {
@@ -124,6 +173,20 @@ async function handleRequest(message) {
     }
   } finally {
     activeRequests.delete(message.id);
+  }
+}
+
+async function handleChannelOpen(message) {
+  const channel = new WorkerChannel(message.id, message);
+  channels.set(message.id, channel);
+  if (typeof backendHandler?.openChannel !== "function") {
+    channel.close(1011, "O backend deste plugin não oferece canais.");
+    return;
+  }
+  try {
+    await backendHandler.openChannel(channel, message.relativePath);
+  } catch (error) {
+    channel.close(1011, error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -177,6 +240,18 @@ parentPort.on("message", (message) => {
     activeRequests.delete(message.id);
     active.request.emit("aborted");
     active.response.abort();
+    return;
+  }
+  if (message.type === "channel-open") {
+    void handleChannelOpen(message);
+    return;
+  }
+  if (message.type === "channel-message") {
+    channels.get(message.id)?.receive(message.data, message.binary === true);
+    return;
+  }
+  if (message.type === "channel-close") {
+    channels.get(message.id)?.remoteClosed(message.code ?? 1005, message.reason ?? "");
     return;
   }
   if (message.type === "dispose") {

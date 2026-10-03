@@ -85,11 +85,38 @@ export interface PluginBackendRequestOptions {
   readonly signal?: AbortSignal;
 }
 
+export interface PluginBackendChannelCloseEvent {
+  /** Código de fechamento WebSocket (1000 normal, 1012 backend reiniciado, 4xxx definido pelo plugin). */
+  readonly code: number;
+  readonly reason: string;
+}
+
+/**
+ * Canal bidirecional persistente entre o frontend e o backend do próprio
+ * plugin. Mensagens são texto; o plugin define o protocolo em cima delas.
+ */
+export interface PluginBackendChannel {
+  /** `false` quando o canal já fechou e nada foi enviado. */
+  send(data: string): boolean;
+  close(code?: number, reason?: string): void;
+  onMessage(listener: (data: string) => void): Disposable;
+  onClose(listener: (event: PluginBackendChannelCloseEvent) => void): Disposable;
+  readonly closed: boolean;
+}
+
 export interface PluginBackendApi {
   request<Response = unknown>(
     path: string,
     options?: PluginBackendRequestOptions,
   ): Promise<Response>;
+  /**
+   * Abre um canal persistente (WebSocket) com o backend do plugin, atendido por
+   * `createBackend().openChannel(channel, relativePath)`. Fica fora do limite
+   * de conexões HTTP simultâneas do navegador, por isso é o transporte certo
+   * para fluxos contínuos (terminal, saída de processos) no lugar de long-poll.
+   * Ausente em hosts sem suporte: detecte e caia para `request`.
+   */
+  openChannel?(path: string): Promise<PluginBackendChannel>;
 }
 
 export interface PluginContext {
@@ -2012,6 +2039,23 @@ export interface TerminalSessionHookProvider {
   ): Promise<TerminalSessionHookContribution | undefined> | TerminalSessionHookContribution | undefined;
 }
 
+/**
+ * Fluxo persistente de uma sessão. A leitura é puxada: o host chama `read`
+ * com o offset que já tem, recebe um trecho em `onOutput` e só pede o
+ * seguinte depois de desenhá-lo — a mesma contrapressão do par read/write,
+ * sem uma requisição HTTP por trecho nem por tecla.
+ */
+export interface TerminalSessionStream {
+  /** Pede o trecho seguinte a partir de `offset`. `false` se o fluxo já fechou. */
+  read(offset: number): boolean;
+  write(data: string): boolean;
+  resize(cols: number, rows: number): boolean;
+  close(): void;
+  onOutput(listener: (output: TerminalSessionOutput) => void): Disposable;
+  onClose(listener: (event: PluginBackendChannelCloseEvent) => void): Disposable;
+  readonly closed: boolean;
+}
+
 export interface TerminalProvider {
   readonly id: string;
   readonly label: string;
@@ -2021,6 +2065,11 @@ export interface TerminalProvider {
   write(sessionId: string, data: string): Promise<void>;
   resize(sessionId: string, cols: number, rows: number): Promise<void>;
   close(sessionId: string): Promise<void>;
+  /**
+   * Fluxo persistente para uma sessão. Opcional: quando ausente, ou quando
+   * resolve `undefined` (host sem canais), o painel usa `read`/`write`.
+   */
+  connect?(sessionId: string): Promise<TerminalSessionStream | undefined>;
 }
 
 export const TERMINAL_PROVIDER_CAPABILITY = "terminal.provider";
@@ -2029,6 +2078,7 @@ export const TERMINAL_SESSION_HOOK_CAPABILITY = "terminal.session.hook";
 /** Generic interactive byte-stream session rendered by a workbench host. */
 export type InteractiveSessionInfo = TerminalSessionInfo;
 export type InteractiveSessionOutput = TerminalSessionOutput;
+export type InteractiveSessionStream = TerminalSessionStream;
 export type InteractiveSessionCreateOptions = TerminalSessionCreateOptions;
 export type InteractiveSessionIndicator = TerminalSessionIndicator;
 export type InteractiveSessionHookContext = TerminalSessionHookContext;

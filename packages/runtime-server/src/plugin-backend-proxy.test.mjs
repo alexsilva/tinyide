@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
-import { BACKEND_WORKER_RESOURCE_LIMITS, createPluginBackendProxy } from "./plugin-backend-proxy.mjs";
+import { BACKEND_WORKER_RESOURCE_LIMITS, CHANNEL_RESTART_CLOSE_CODE, createPluginBackendProxy, sanitizeCloseCode } from "./plugin-backend-proxy.mjs";
 
 class TestResponse extends EventEmitter {
   constructor() {
@@ -196,4 +196,170 @@ test("aborted plugin requests reject immediately instead of staying pending", as
   // A resposta tardia do worker não deve manter o proxy bloqueado nem impedir
   // o descarte do runtime do plugin.
   await proxy.dispose({ reason: "test" });
+});
+
+/** Conexão WebSocket de mentira: só o que o proxy usa (send/close/eventos). */
+class FakeConnection extends EventEmitter {
+  constructor() {
+    super();
+    this.sent = [];
+    this.closed = false;
+    this.closure = undefined;
+  }
+
+  send(data) {
+    if (this.closed) return false;
+    this.sent.push(data);
+    return true;
+  }
+
+  close(code, reason) {
+    if (this.closed) return;
+    this.closed = true;
+    this.closure = [code, reason];
+    this.emit("close", code, reason);
+  }
+
+  async nextSent(timeoutMs = 2_000) {
+    const deadline = Date.now() + timeoutMs;
+    while (!this.sent.length) {
+      if (Date.now() > deadline) throw new Error("O backend não enviou nada pelo canal.");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    return this.sent.shift();
+  }
+
+  async closedEventually(timeoutMs = 2_000) {
+    const deadline = Date.now() + timeoutMs;
+    while (!this.closed) {
+      if (Date.now() > deadline) throw new Error("O canal não fechou.");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    return this.closure;
+  }
+}
+
+test("bridges channel messages between the connection and the backend worker", async () => {
+  const proxy = createProxy();
+  const connection = new FakeConnection();
+  try {
+    expect(await proxy.supportsChannels()).toBe(true);
+    await proxy.openChannel({
+      relativePath: "/channel/echo",
+      url: "/channel/echo?offset=3",
+      headers: { "x-fixture": "header-value" },
+      connection,
+    });
+    expect(JSON.parse(await connection.nextSent())).toEqual({
+      hello: "/channel/echo",
+      url: "/channel/echo?offset=3",
+      header: "header-value",
+    });
+    connection.emit("message", "ping", false);
+    expect(await connection.nextSent()).toBe("echo:ping");
+    connection.emit("message", Buffer.from([1, 2, 3]), true);
+    const reversed = await connection.nextSent();
+    expect([...reversed]).toEqual([3, 2, 1]);
+    connection.emit("message", "close-me", false);
+    expect(await connection.closedEventually()).toEqual([4000, "closed by backend"]);
+  } finally {
+    await proxy.dispose({ reason: "test" });
+  }
+});
+
+test("closes channels the backend rejects or fails to open", async () => {
+  const proxy = createProxy();
+  const rejected = new FakeConnection();
+  const failed = new FakeConnection();
+  try {
+    await proxy.openChannel({ relativePath: "/channel/reject", url: "/channel/reject", headers: {}, connection: rejected });
+    expect(await rejected.closedEventually()).toEqual([4404, "fixture channel rejected"]);
+    await proxy.openChannel({ relativePath: "/channel/throw", url: "/channel/throw", headers: {}, connection: failed });
+    expect(await failed.closedEventually()).toEqual([1011, "fixture channel failed"]);
+  } finally {
+    await proxy.dispose({ reason: "test" });
+  }
+});
+
+test("closes open channels with 1012 when the backend is disposed", async () => {
+  const proxy = createProxy();
+  const connection = new FakeConnection();
+  await proxy.openChannel({ relativePath: "/channel/echo", url: "/channel/echo", headers: {}, connection });
+  await connection.nextSent();
+  await proxy.dispose({ reason: "test" });
+  expect(connection.closed).toBe(true);
+  expect(connection.closure[0]).toBe(CHANNEL_RESTART_CLOSE_CODE);
+  const late = new FakeConnection();
+  await proxy.openChannel({ relativePath: "/channel/echo", url: "/channel/echo", headers: {}, connection: late });
+  expect(late.closure[0]).toBe(CHANNEL_RESTART_CLOSE_CODE);
+});
+
+test("closes open channels with 1012 when the backend worker dies", async () => {
+  const proxy = createProxy();
+  const connection = new FakeConnection();
+  await proxy.openChannel({ relativePath: "/channel/echo", url: "/channel/echo", headers: {}, connection });
+  await connection.nextSent();
+  await expect(proxy(request("GET", "/exit-worker"), new TestResponse(), "/exit-worker")).rejects.toThrow(/código 7/);
+  expect(await connection.closedEventually()).toEqual([CHANNEL_RESTART_CLOSE_CODE, expect.stringContaining("código 7")]);
+  expect(proxy.isDead()).toBe(true);
+  await proxy.dispose({ reason: "test" });
+});
+
+test("closes channels with 1011 when the backend failed to start", async () => {
+  const proxy = createPluginBackendProxy({
+    backendPath: fixturePath("plugin-backend-proxy.invalid-fixture.mjs"),
+    workspaceRoot: process.cwd(),
+    pluginId: "test.invalid",
+  });
+  const connection = new FakeConnection();
+  try {
+    await proxy.openChannel({ relativePath: "/x", url: "/x", headers: {}, connection });
+    expect(connection.closure).toEqual([1011, expect.stringContaining("Plugin backend must export createBackend()")]);
+  } finally {
+    await proxy.dispose({ reason: "test" });
+  }
+});
+
+test("forwards client-side closes to the backend and stops bridging afterwards", async () => {
+  const proxy = createProxy();
+  const connection = new FakeConnection();
+  try {
+    await proxy.openChannel({ relativePath: "/channel/echo", url: "/channel/echo", headers: {}, connection });
+    await connection.nextSent();
+    // O navegador fechou: o backend vê o código e a razão originais, e nada
+    // que a conexão ainda emita depois disso chega ao worker.
+    connection.close(1001, "going away");
+    connection.emit("message", "late", false);
+    const lastClose = async () => {
+      const response = new TestResponse();
+      await proxy(request("GET", "/channel/last-close"), response, "/channel/last-close");
+      return JSON.parse(response.body.toString("utf8"));
+    };
+    await expect.poll(lastClose, { timeout: 2_000 }).toEqual({ code: 1001, reason: "going away" });
+    expect(connection.sent).toEqual([]);
+  } finally {
+    await proxy.dispose({ reason: "test" });
+  }
+});
+
+test("reports missing channel support without opening a worker channel", async () => {
+  const proxy = createProxy({ backendPath: fixturePath("plugin-backend-proxy.no-channel-fixture.mjs") });
+  const connection = new FakeConnection();
+  try {
+    expect(await proxy.supportsChannels()).toBe(false);
+    await proxy.openChannel({ relativePath: "/x", url: "/x", headers: {}, connection });
+    expect(connection.closure).toEqual([1011, "O backend deste plugin não oferece canais."]);
+  } finally {
+    await proxy.dispose({ reason: "test" });
+  }
+});
+
+test("sanitizes close codes the browser would refuse", () => {
+  expect(sanitizeCloseCode(1000)).toBe(1000);
+  expect(sanitizeCloseCode(1012)).toBe(1012);
+  expect(sanitizeCloseCode(4404)).toBe(4404);
+  expect(sanitizeCloseCode(1005)).toBe(1000);
+  expect(sanitizeCloseCode(1006)).toBe(1000);
+  expect(sanitizeCloseCode(2000)).toBe(1000);
+  expect(sanitizeCloseCode("abc")).toBe(1000);
 });

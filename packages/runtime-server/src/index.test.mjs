@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -957,5 +958,155 @@ describe("runtime server hardening", () => {
     expect(runtime.server.keepAliveTimeout).toBeGreaterThanOrEqual(60_000);
     expect(runtime.server.headersTimeout).toBeGreaterThan(runtime.server.keepAliveTimeout);
     expect(runtime.server.requestTimeout).toBeGreaterThan(runtime.server.headersTimeout);
+  });
+});
+
+describe("plugin backend channels", () => {
+  async function channelPlugin(pluginsRoot, id = "channelled") {
+    const pluginRoot = join(pluginsRoot, id);
+    await mkdir(pluginRoot);
+    await writeFile(join(pluginRoot, "plugin.json"), JSON.stringify({
+      id,
+      name: "Channelled",
+      version: "1.0.0",
+      entrypoints: { backend: "backend.mjs" },
+    }));
+    await writeFile(join(pluginRoot, "backend.mjs"), `
+      export function createBackend({ workspaceRoot }) {
+        const handler = (_request, response) => {
+          response.setHeader("Content-Type", "application/json");
+          response.end(JSON.stringify({ ok: true }));
+        };
+        handler.openChannel = (channel, relativePath) => {
+          if (relativePath === "/missing") {
+            channel.close(4404, "sem sessão");
+            return;
+          }
+          channel.send(JSON.stringify({ relativePath, url: channel.url, origin: channel.headers.origin ?? null, workspaceRoot }));
+          channel.on("message", (data) => channel.send("echo:" + data));
+        };
+        return handler;
+      }
+    `);
+    return pluginRoot;
+  }
+
+  function wsUrl(httpUrl) {
+    return httpUrl.replace(/^http:/, "ws:");
+  }
+
+  function event(target, name) {
+    return new Promise((resolve) => target.addEventListener(name, resolve, { once: true }));
+  }
+
+  it("opens a WebSocket channel to a plugin backend inside the workspace scope", async () => {
+    const { runtime, pluginsRoot, workspaceRoot, scoped } = await fixture();
+    await channelPlugin(pluginsRoot);
+    runtime.clearManifestCache();
+
+    const socket = new WebSocket(wsUrl(scoped("/plugin-api/channelled/sessions/abc/stream?offset=7")));
+    await event(socket, "open");
+    const greeting = JSON.parse((await event(socket, "message")).data);
+    expect(greeting).toEqual({
+      relativePath: "/sessions/abc/stream",
+      url: "/plugin-api/channelled/sessions/abc/stream?offset=7",
+      origin: null,
+      workspaceRoot,
+    });
+    socket.send("hello");
+    expect((await event(socket, "message")).data).toBe("echo:hello");
+    socket.close(1000, "done");
+    await event(socket, "close");
+  });
+
+  it("propagates application close codes chosen by the backend", async () => {
+    const { runtime, pluginsRoot, scoped } = await fixture();
+    await channelPlugin(pluginsRoot);
+    runtime.clearManifestCache();
+
+    const socket = new WebSocket(wsUrl(scoped("/plugin-api/channelled/missing")));
+    const closed = await event(socket, "close");
+    expect(closed.code).toBe(4404);
+    expect(closed.reason).toBe("sem sessão");
+  });
+
+  it("refuses upgrades outside the plugin API, from foreign origins and without channel support", async () => {
+    const { runtime, pluginsRoot, scoped } = await fixture();
+    await channelPlugin(pluginsRoot);
+    const plainRoot = join(pluginsRoot, "plain");
+    await mkdir(plainRoot);
+    await writeFile(join(plainRoot, "plugin.json"), JSON.stringify({
+      id: "plain",
+      name: "Plain",
+      version: "1.0.0",
+      entrypoints: { backend: "backend.mjs" },
+    }));
+    await writeFile(join(plainRoot, "backend.mjs"), "export function createBackend() { return (_q, r) => r.end('ok'); }");
+    runtime.clearManifestCache();
+
+    // `fetch` recusa cabeçalhos de upgrade; a sonda usa o cliente HTTP cru.
+    const upgrade = (url, headers = {}) => new Promise((resolve, reject) => {
+      const target = new URL(url);
+      const probe = httpRequest({
+        hostname: target.hostname,
+        port: target.port,
+        path: `${target.pathname}${target.search}`,
+        method: "GET",
+        headers: {
+          Connection: "Upgrade",
+          Upgrade: "websocket",
+          "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+          "Sec-WebSocket-Version": "13",
+          ...headers,
+        },
+      });
+      probe.on("response", (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => { body += chunk; });
+        response.on("end", () => resolve({ status: response.statusCode, body: body ? JSON.parse(body) : undefined }));
+      });
+      probe.on("upgrade", (_response, socket) => {
+        socket.destroy();
+        resolve({ status: 101 });
+      });
+      probe.on("error", reject);
+      probe.end();
+    });
+
+    expect(await upgrade(scoped("/core-api/workspace/resources"))).toMatchObject({ status: 404 });
+    expect(await upgrade(scoped("/plugin-api/channelled/x"), { Origin: "http://evil.example" })).toMatchObject({
+      status: 403,
+      body: { error: "Origem da requisição não autorizada." },
+    });
+    expect(await upgrade(scoped("/plugin-api/plain/x"))).toMatchObject({
+      status: 404,
+      body: { error: "O backend deste plugin não oferece canais." },
+    });
+    expect(await upgrade(scoped("/plugin-api/unknown-plugin/x"))).toMatchObject({ status: 404 });
+    expect(await upgrade(scoped("/plugin-api/..%2Fbad/x"))).toMatchObject({ status: 400 });
+    expect(await upgrade(`${runtime.url}/w/ghost-0123456789abcdef/plugin-api/channelled/x`)).toMatchObject({
+      status: 409,
+      body: { error: "Abra um workspace antes de usar este plugin." },
+    });
+
+    // Um upgrade legítimo com a origem do próprio runtime continua passando.
+    const socket = new WebSocket(wsUrl(scoped("/plugin-api/channelled/ok")));
+    await event(socket, "open");
+    socket.close();
+    await event(socket, "close");
+  });
+
+  it("closes channels with 1012 when the plugin backend is reloaded", async () => {
+    const { runtime, pluginsRoot, scoped } = await fixture();
+    await channelPlugin(pluginsRoot);
+    runtime.clearManifestCache();
+
+    const socket = new WebSocket(wsUrl(scoped("/plugin-api/channelled/live")));
+    await event(socket, "open");
+    await event(socket, "message");
+    const closed = event(socket, "close");
+    await runtime.clearBackendCache();
+    expect((await closed).code).toBe(1012);
   });
 });

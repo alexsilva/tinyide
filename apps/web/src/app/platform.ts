@@ -34,7 +34,8 @@ import type {
   WorkbenchTextHighlightResult,
   Disposable,
 } from "@tinyide/plugin-api";
-import { projectRuntimeFetch, runtimeFetch } from "./project-session";
+import { projectRuntimeFetch, runtimeFetch, workspaceScopeAbortSignal, workspaceScopedPath } from "./project-session";
+import { openRuntimeChannel, runtimeChannelUrl } from "./plugin-channel";
 import { getActiveHostWorkspaceRoot } from "./host-workspace-state";
 import { AppPluginHost } from "./plugin-host";
 import { createOutputFollowControl } from "./output-follow";
@@ -356,18 +357,23 @@ export function resolvePluginIconUrl(manifest: PluginManifest, manifestUrl: stri
   return iconUrl.origin === baseUrl.origin ? iconUrl.href : undefined;
 }
 
+/** Caminho relativo ao plugin, sem escapar para outra rota do runtime. */
+function pluginBackendPath(pluginId: string, path: string): string {
+  const suffix = path.startsWith("/") ? path : `/${path}`;
+  const pathname = suffix.split(/[?#]/, 1)[0] ?? "";
+  if (suffix.startsWith("//") || pathname.split("/").includes("..")) {
+    throw new Error("O caminho do backend do plugin deve ser relativo ao próprio plugin.");
+  }
+  if (!getActiveHostWorkspaceRoot()) {
+    throw Object.assign(new Error("Abra um workspace antes de usar este plugin."), { statusCode: 409 });
+  }
+  return `/plugin-api/${encodeURIComponent(pluginId)}${suffix}`;
+}
+
 export function pluginBackend(pluginId: string): PluginBackendApi {
   return {
     async request<Response>(path: string, options: PluginBackendRequestOptions = {}): Promise<Response> {
-      const suffix = path.startsWith("/") ? path : `/${path}`;
-      const pathname = suffix.split(/[?#]/, 1)[0] ?? "";
-      if (suffix.startsWith("//") || pathname.split("/").includes("..")) {
-        throw new Error("O caminho do backend do plugin deve ser relativo ao próprio plugin.");
-      }
-      if (!getActiveHostWorkspaceRoot()) {
-        throw Object.assign(new Error("Abra um workspace antes de usar este plugin."), { statusCode: 409 });
-      }
-      const response = await projectRuntimeFetch(`/plugin-api/${encodeURIComponent(pluginId)}${suffix}`, {
+      const response = await projectRuntimeFetch(pluginBackendPath(pluginId, path), {
         ...options,
         headers: {
           ...(options.body ? { "Content-Type": "application/json" } : {}),
@@ -389,6 +395,17 @@ export function pluginBackend(pluginId: string): PluginBackendApi {
         throw Object.assign(new Error(message), { statusCode: response.status });
       }
       return payload as Response;
+    },
+    openChannel(path: string) {
+      let scopedPath: string;
+      try {
+        scopedPath = workspaceScopedPath(pluginBackendPath(pluginId, path));
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      return openRuntimeChannel(runtimeChannelUrl(scopedPath, window.location.href), {
+        signal: workspaceScopeAbortSignal(),
+      });
     },
   };
 }

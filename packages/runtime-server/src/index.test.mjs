@@ -999,6 +999,36 @@ describe("plugin backend channels", () => {
     return new Promise((resolve) => target.addEventListener(name, resolve, { once: true }));
   }
 
+  // `fetch` recusa cabeçalhos de upgrade; a sonda usa o cliente HTTP cru.
+  const upgrade = (url, headers = {}) => new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const probe = httpRequest({
+      hostname: target.hostname,
+      port: target.port,
+      path: `${target.pathname}${target.search}`,
+      method: "GET",
+      headers: {
+        Connection: "Upgrade",
+        Upgrade: "websocket",
+        "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+        "Sec-WebSocket-Version": "13",
+        ...headers,
+      },
+    });
+    probe.on("response", (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => { body += chunk; });
+      response.on("end", () => resolve({ status: response.statusCode, body: body ? JSON.parse(body) : undefined }));
+    });
+    probe.on("upgrade", (_response, socket) => {
+      socket.destroy();
+      resolve({ status: 101 });
+    });
+    probe.on("error", reject);
+    probe.end();
+  });
+
   it("opens a WebSocket channel to a plugin backend inside the workspace scope", async () => {
     const { runtime, pluginsRoot, workspaceRoot, scoped } = await fixture();
     await channelPlugin(pluginsRoot);
@@ -1044,36 +1074,6 @@ describe("plugin backend channels", () => {
     await writeFile(join(plainRoot, "backend.mjs"), "export function createBackend() { return (_q, r) => r.end('ok'); }");
     runtime.clearManifestCache();
 
-    // `fetch` recusa cabeçalhos de upgrade; a sonda usa o cliente HTTP cru.
-    const upgrade = (url, headers = {}) => new Promise((resolve, reject) => {
-      const target = new URL(url);
-      const probe = httpRequest({
-        hostname: target.hostname,
-        port: target.port,
-        path: `${target.pathname}${target.search}`,
-        method: "GET",
-        headers: {
-          Connection: "Upgrade",
-          Upgrade: "websocket",
-          "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
-          "Sec-WebSocket-Version": "13",
-          ...headers,
-        },
-      });
-      probe.on("response", (response) => {
-        let body = "";
-        response.setEncoding("utf8");
-        response.on("data", (chunk) => { body += chunk; });
-        response.on("end", () => resolve({ status: response.statusCode, body: body ? JSON.parse(body) : undefined }));
-      });
-      probe.on("upgrade", (_response, socket) => {
-        socket.destroy();
-        resolve({ status: 101 });
-      });
-      probe.on("error", reject);
-      probe.end();
-    });
-
     expect(await upgrade(scoped("/core-api/workspace/resources"))).toMatchObject({ status: 404 });
     expect(await upgrade(scoped("/plugin-api/channelled/x"), { Origin: "http://evil.example" })).toMatchObject({
       status: 403,
@@ -1095,6 +1095,52 @@ describe("plugin backend channels", () => {
     await event(socket, "open");
     socket.close();
     await event(socket, "close");
+  });
+
+  it("streams a core process output and exit through a WebSocket channel", async () => {
+    const { scoped } = await fixture();
+    const started = await fetch(scoped("/core-api/execution/processes"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        executable: process.execPath,
+        arguments: ["-e", "process.stdout.write('ola\\n'); setTimeout(() => process.exit(2), 100);"],
+      }),
+    });
+    expect(started.status).toBe(201);
+    const { id } = await started.json();
+
+    const socket = new WebSocket(wsUrl(scoped(`/core-api/execution/processes/${encodeURIComponent(id)}/stream`)));
+    await event(socket, "open");
+    let cursor = 0;
+    let text = "";
+    let snapshot;
+    do {
+      socket.send(JSON.stringify({ type: "read", cursor }));
+      snapshot = JSON.parse((await event(socket, "message")).data);
+      expect(snapshot.type).toBe("output");
+      text += snapshot.chunks.map((chunk) => chunk.text).join("");
+      cursor = snapshot.cursor;
+    } while (snapshot.status === "running" || snapshot.hasMore);
+    expect(text).toBe("ola\n");
+    expect(snapshot.exitCode).toBe(2);
+    socket.close(1000, "done");
+    await event(socket, "close");
+  });
+
+  it("refuses core channels for unknown processes and for scopes without a workspace", async () => {
+    const { runtime, scoped } = await fixture();
+    const missing = new WebSocket(wsUrl(scoped("/core-api/execution/processes/nope/stream")));
+    const closed = await event(missing, "close");
+    expect(closed.code).toBe(4404);
+    expect(closed.reason).toBe("Processo não encontrado.");
+    expect(await upgrade(`${runtime.url}/w/ghost-0123456789abcdef/core-api/execution/processes/x/stream`)).toMatchObject({
+      status: 409,
+      body: { error: "Abra um workspace antes de usar esta API." },
+    });
+    expect(await upgrade(scoped("/core-api/execution/processes/x/stream"), { Origin: "http://evil.example" })).toMatchObject({
+      status: 403,
+    });
   });
 
   it("closes channels with 1012 when the plugin backend is reloaded", async () => {

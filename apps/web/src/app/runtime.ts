@@ -14,6 +14,7 @@ import type {
   ExecutionProfileVariableContribution,
   LanguageProvider,
   LanguageLintSettings,
+  PluginBackendChannel,
   ProcessExecutionRequest,
   PluginSettingsMap,
   PluginSettingsProvider,
@@ -37,6 +38,7 @@ import { platform } from "./platform";
 import { getActiveHostWorkspaceRoot, setActiveHostWorkspaceRoot } from "./host-workspace-state";
 import { writeHostWorkspacePointer } from "./host-pointer";
 import { isPanelWindow } from "./panel-window";
+import { openRuntimeChannel, runtimeChannelUrl } from "./plugin-channel";
 import {
   clearActiveWorkspaceScope,
   hasActiveWorkspaceScope,
@@ -44,6 +46,8 @@ import {
   runtimeFetch,
   setActiveWorkspaceScope,
   workspaceClientId,
+  workspaceScopeAbortSignal,
+  workspaceScopedPath,
 } from "./project-session";
 import {
   createTransientRetry,
@@ -516,7 +520,108 @@ export function hostProcessOutputLines(process: HostProcessSnapshot): readonly s
   ].filter(Boolean);
 }
 
-async function followHostProcess(
+function applyHostProcessDelta(process: HostProcessSnapshot, delta: HostProcessOutputDelta): HostProcessSnapshot {
+  return {
+    ...process,
+    status: delta.status,
+    stopRequested: delta.stopRequested,
+    ...(delta.exitCode === undefined ? {} : { exitCode: delta.exitCode }),
+    ...(delta.signal === undefined ? {} : { signal: delta.signal }),
+    ...(delta.finishedAt === undefined ? {} : { finishedAt: delta.finishedAt }),
+    durationMs: delta.durationMs,
+    outputStartCursor: delta.startCursor,
+    outputEndCursor: delta.endCursor,
+    outputTruncated: delta.truncated,
+  };
+}
+
+/**
+ * Canal persistente da saída de um processo do core. `undefined` quando o
+ * ambiente não tem WebSocket ou o runtime recusou o upgrade (host antigo):
+ * o chamador cai para o poll por requisições.
+ */
+async function openHostProcessStream(id: string): Promise<PluginBackendChannel | undefined> {
+  if (typeof WebSocket !== "function") return undefined;
+  try {
+    const path = workspaceScopedPath(`/core-api/execution/processes/${encodeURIComponent(id)}/stream`);
+    return await openRuntimeChannel(runtimeChannelUrl(path, window.location.href), {
+      signal: workspaceScopeAbortSignal(),
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+interface HostProcessStreamOutcome {
+  readonly process: HostProcessSnapshot;
+  readonly cursor: number;
+  readonly hasMore: boolean;
+  /** `true` quando o processo terminou e toda a saída foi lida pelo canal. */
+  readonly finished: boolean;
+}
+
+/**
+ * Consome a saída pelo canal até o processo terminar ou o canal cair. A
+ * leitura é puxada: o próximo `read` só sai depois de o trecho anterior ter
+ * sido entregue a `onDelta`, a mesma contrapressão do poll, sem a espera de
+ * 200 ms a 1 s entre leituras — é essa espera que atrasava o fim da execução.
+ */
+function consumeHostProcessStream(
+  channel: PluginBackendChannel,
+  initial: HostProcessSnapshot,
+  initialCursor: number,
+  callbacks: RunProfileCallbacks,
+  onDelta: (delta: HostProcessOutputDelta) => void,
+): Promise<HostProcessStreamOutcome> {
+  return new Promise((resolve) => {
+    let process = initial;
+    let cursor = initialCursor;
+    let hasMore = false;
+    let settled = false;
+    const finish = (finished: boolean) => {
+      if (settled) return;
+      settled = true;
+      messages.dispose();
+      closes.dispose();
+      resolve({ process, cursor, hasMore, finished });
+    };
+    const read = () => {
+      if (!channel.send(JSON.stringify({ type: "read", cursor }))) finish(false);
+    };
+    const messages = channel.onMessage((raw) => {
+      let message: Partial<HostProcessOutputDelta> & { readonly type?: string };
+      try {
+        message = JSON.parse(raw) as typeof message;
+      } catch {
+        return;
+      }
+      if (message.type !== "output" || !Array.isArray(message.chunks)) return;
+      const delta = message as HostProcessOutputDelta;
+      cursor = delta.cursor;
+      hasMore = delta.hasMore;
+      if (delta.truncated || delta.chunks.length > 0) onDelta(delta);
+      process = applyHostProcessDelta(process, delta);
+      if (callbacks.shouldStop?.() && process.status === "running") {
+        void stopHostProcess(process.id).catch(() => undefined);
+      }
+      if (process.status === "running" || hasMore) {
+        read();
+        return;
+      }
+      finish(true);
+      channel.close(1000, "processo encerrado");
+    });
+    const closes = channel.onClose(() => finish(false));
+    read();
+  });
+}
+
+/**
+ * Acompanha um processo até o fim. Prefere o canal persistente do runtime;
+ * sem ele — ou se ele cair no meio — segue por requisições a partir do cursor
+ * que já tem, com a reconexão de sempre.
+ */
+export async function followHostProcess(
   initial: HostProcessSnapshot,
   callbacks: RunProfileCallbacks,
   onDelta: (delta: HostProcessOutputDelta) => void,
@@ -534,6 +639,14 @@ async function followHostProcess(
   const retry = createTransientRetry();
 
   try {
+    const stream = await openHostProcessStream(process.id);
+    if (stream) {
+      const outcome = await consumeHostProcessStream(stream, process, cursor, callbacks, onDelta);
+      process = outcome.process;
+      cursor = outcome.cursor;
+      hasMore = outcome.hasMore;
+      if (outcome.finished) return process;
+    }
     do {
       // Com saída acumulada, `hasMore` fica ligado por várias leituras seguidas.
       // Sem piso nenhum, o monitor entra em rajada contra o runtime local (medido
@@ -559,18 +672,7 @@ async function followHostProcess(
       } else {
         idlePolls += 1;
       }
-      process = {
-        ...process,
-        status: delta.status,
-        stopRequested: delta.stopRequested,
-        ...(delta.exitCode === undefined ? {} : { exitCode: delta.exitCode }),
-        ...(delta.signal === undefined ? {} : { signal: delta.signal }),
-        ...(delta.finishedAt === undefined ? {} : { finishedAt: delta.finishedAt }),
-        durationMs: delta.durationMs,
-        outputStartCursor: delta.startCursor,
-        outputEndCursor: delta.endCursor,
-        outputTruncated: delta.truncated,
-      };
+      process = applyHostProcessDelta(process, delta);
       if (callbacks.shouldStop?.() && process.status === "running") {
         await stopHostProcess(process.id);
       }

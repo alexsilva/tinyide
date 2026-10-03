@@ -1,5 +1,6 @@
 /// <reference types="node" />
 
+import { EventEmitter } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -313,4 +314,133 @@ describe("execution backend sessions", () => {
       await rm(root, { recursive: true, force: true });
     }
   }, 10_000);
+});
+
+/** Lado do servidor de um canal, como o runtime entrega ao backend: só o que `attachProcessChannel` usa. */
+class FakeChannel extends EventEmitter {
+  readonly sent: string[] = [];
+  closed = false;
+  closure: [number, string] | undefined;
+
+  send(data: string): boolean {
+    if (this.closed) return false;
+    this.sent.push(data);
+    return true;
+  }
+
+  close(code = 1000, reason = ""): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.closure = [code, reason];
+    this.emit("close", code, reason);
+  }
+
+  read(cursor: number): void {
+    this.emit("message", JSON.stringify({ type: "read", cursor }), false);
+  }
+
+  async next(timeoutMs = 10_000): Promise<Record<string, any>> {
+    const deadline = Date.now() + timeoutMs;
+    while (!this.sent.length) {
+      if (Date.now() > deadline) throw new Error("O canal não recebeu nenhuma mensagem.");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    return JSON.parse(this.sent.shift()!) as Record<string, any>;
+  }
+}
+
+interface ChannelBackend {
+  (request: Readable & { method: string; headers: Record<string, string> }, response: unknown, path: string): Promise<void>;
+  openChannel(channel: FakeChannel, relativePath: string): void;
+  dispose(): Promise<void>;
+}
+
+describe("execution backend process channels", () => {
+  it("delivers output as it arrives and the exit as soon as the process ends", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tinyide-execution-channel-"));
+    const backend = createExecutionBackend({ workspaceRoot: root }) as ChannelBackend;
+    try {
+      const started = await callBackend<{ id: string }>(backend, "POST", "/execution/processes", {
+        executable: process.execPath,
+        arguments: ["-e", "process.stdout.write('cedo\\n'); setTimeout(() => { process.stdout.write('tarde\\n'); process.exit(3); }, 1500);"],
+      });
+      expect(started.status).toBe(201);
+      const channel = new FakeChannel();
+      backend.openChannel(channel, `/execution/processes/${started.body.id}/stream`);
+
+      channel.read(0);
+      const first = await channel.next();
+      expect(first.type).toBe("output");
+      expect(first.status).toBe("running");
+      expect(first.chunks.map((chunk: { text: string }) => chunk.text).join("")).toBe("cedo\n");
+
+      // Sem saída nova, a leitura fica pendente: nada de resposta vazia a cada poll.
+      channel.read(first.cursor);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(channel.sent).toEqual([]);
+
+      let snapshot = await channel.next();
+      let text = snapshot.chunks.map((chunk: { text: string }) => chunk.text).join("");
+      while (snapshot.status === "running" || snapshot.hasMore) {
+        channel.read(snapshot.cursor);
+        snapshot = await channel.next();
+        text += snapshot.chunks.map((chunk: { text: string }) => chunk.text).join("");
+      }
+      expect(text).toBe("tarde\n");
+      expect(snapshot.status).toBe("exited");
+      expect(snapshot.exitCode).toBe(3);
+      expect(snapshot.finishedAt).toBeGreaterThan(0);
+    } finally {
+      await backend.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses unknown processes, foreign routes and malformed messages, and closes with the workspace", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tinyide-execution-channel-"));
+    const backend = createExecutionBackend({ workspaceRoot: root }) as ChannelBackend;
+    const unknownRoute = new FakeChannel();
+    try {
+      const missing = new FakeChannel();
+      backend.openChannel(missing, "/execution/processes/nope/stream");
+      expect(missing.closure).toEqual([4404, "Processo não encontrado."]);
+
+      const foreign = new FakeChannel();
+      backend.openChannel(foreign, "/execution/other");
+      expect(foreign.closure).toEqual([4400, "Rota sem canal."]);
+
+      const started = await callBackend<{ id: string }>(backend, "POST", "/execution/processes", {
+        executable: process.execPath,
+        arguments: ["-e", "setTimeout(() => {}, 30000);"],
+      });
+      const route = `/execution/processes/${started.body.id}/stream`;
+
+      const binary = new FakeChannel();
+      backend.openChannel(binary, route);
+      binary.emit("message", Buffer.from([1, 2]), true);
+      expect(binary.closure).toEqual([4400, "Mensagem binária não suportada."]);
+
+      const invalid = new FakeChannel();
+      backend.openChannel(invalid, route);
+      invalid.emit("message", "{nope", false);
+      expect(invalid.closure).toEqual([4400, "Mensagem inválida."]);
+
+      backend.openChannel(unknownRoute, route);
+      unknownRoute.emit("message", JSON.stringify({ type: "nope" }), false);
+      expect(JSON.parse(unknownRoute.sent[0]!)).toEqual({ type: "error", message: "Mensagem desconhecida: nope" });
+      unknownRoute.read(0);
+    } finally {
+      await backend.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+    // A troca de workspace encerra o processo e fecha o canal com "going away".
+    expect(unknownRoute.closure).toEqual([1001, "Workspace closed."]);
+  });
+
+  it("refuses channels while no workspace is open", () => {
+    const backend = createExecutionBackend({ workspaceRoot: () => undefined }) as ChannelBackend;
+    const channel = new FakeChannel();
+    backend.openChannel(channel, "/execution/processes/x/stream");
+    expect(channel.closure).toEqual([4409, "Abra um workspace antes de executar esta operação."]);
+  });
 });

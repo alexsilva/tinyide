@@ -888,10 +888,13 @@ export function createTinyIdeRuntime(options) {
   };
 
   /**
-   * Upgrade WebSocket para `/w/<scopeId>/plugin-api/<pluginId>/<rota>`: abre um
-   * canal persistente entre o frontend e o backend do plugin, fora do limite
-   * de seis conexões HTTP por origem do Chromium. Toda recusa sai como resposta
-   * HTTP comum no mesmo socket, com o mesmo critério das rotas de requisição.
+   * Upgrade WebSocket para canais persistentes, fora do limite de seis conexões
+   * HTTP por origem do Chromium:
+   *   `/w/<scopeId>/plugin-api/<pluginId>/<rota>` — frontend ↔ backend do plugin;
+   *   `/w/<scopeId>/core-api/execution/processes/<id>/stream` — saída de um
+   *   processo do próprio core (perfis de execução, scripts).
+   * Toda recusa sai como resposta HTTP comum no mesmo socket, com o mesmo
+   * critério de origem e de escopo das rotas de requisição.
    */
   async function handleUpgrade(request, socket, head) {
     socket.on("error", () => undefined);
@@ -908,7 +911,9 @@ export function createTinyIdeRuntime(options) {
       rejectWebSocketUpgrade(socket, 400, error instanceof Error ? error.message : String(error));
       return;
     }
-    if (!pathname.startsWith("/plugin-api/")) {
+    const pluginChannel = pathname.startsWith("/plugin-api/");
+    const executionChannel = pathname.startsWith("/core-api/execution/");
+    if (!pluginChannel && !executionChannel) {
       rejectWebSocketUpgrade(socket, 404, "Rota sem suporte a canais.");
       return;
     }
@@ -920,7 +925,24 @@ export function createTinyIdeRuntime(options) {
       ? workspaceContexts.get(scopeId) ?? (scopeId === initialScopeId ? workspaceContext(scopeId) : undefined)
       : unscopedContext;
     if (!context?.workspaceRoot) {
-      rejectWebSocketUpgrade(socket, 409, "Abra um workspace antes de usar este plugin.");
+      rejectWebSocketUpgrade(
+        socket,
+        409,
+        executionChannel ? "Abra um workspace antes de usar esta API." : "Abra um workspace antes de usar este plugin.",
+      );
+      return;
+    }
+    if (executionChannel) {
+      if (typeof context.executionBackend?.openChannel !== "function") {
+        rejectWebSocketUpgrade(socket, 404, "Rota sem suporte a canais.");
+        return;
+      }
+      const connection = acceptWebSocket(request, socket, head);
+      try {
+        context.executionBackend.openChannel(connection, pathname.slice("/core-api".length));
+      } catch (error) {
+        connection.close(1011, error instanceof Error ? error.message : String(error));
+      }
       return;
     }
     let pluginId;

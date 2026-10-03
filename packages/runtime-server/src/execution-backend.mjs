@@ -216,6 +216,103 @@ function processOutputSnapshot(record, cursor, maxOutputReadChars) {
   };
 }
 
+const STREAM_BAD_REQUEST_CLOSE_CODE = 4400;
+const STREAM_NOT_FOUND_CLOSE_CODE = 4404;
+const STREAM_NO_WORKSPACE_CLOSE_CODE = 4409;
+const STREAM_WORKSPACE_CLOSED_CLOSE_CODE = 1001;
+
+function processWaiters(record) {
+  if (!(record.waiters instanceof Set)) record.waiters = new Set();
+  return record.waiters;
+}
+
+function processChannels(record) {
+  if (!(record.channels instanceof Set)) record.channels = new Set();
+  return record.channels;
+}
+
+function notifyProcessWaiters(record) {
+  for (const waiter of [...processWaiters(record)]) waiter();
+}
+
+/**
+ * Espera cancelável por saída além de `cursor` ou pelo fim do processo. Sem
+ * timeout: no canal persistente é a própria conexão que acusa um cliente que
+ * sumiu. Resolve `true` quando há algo a entregar e `false` se foi cancelada.
+ */
+export function waitForProcessOutput(record, cursor) {
+  if (record.output.status().endCursor > cursor || record.status !== "running") {
+    return { promise: Promise.resolve(true), cancel() {} };
+  }
+  let settled = false;
+  let resolvePromise;
+  const promise = new Promise((resolve) => { resolvePromise = resolve; });
+  const finish = (changed = true) => {
+    if (settled) return;
+    settled = true;
+    processWaiters(record).delete(finish);
+    resolvePromise(changed);
+  };
+  processWaiters(record).add(finish);
+  return { promise, cancel: () => finish(false) };
+}
+
+/**
+ * Canal de um processo (`/execution/processes/<id>/stream`), em JSON por
+ * mensagem: o cliente manda `{type:"read", cursor}` e recebe
+ * `{type:"output", …}` — o mesmo snapshot do GET `/output?cursor=` — assim
+ * que houver saída além do cursor ou o processo terminar. A leitura é puxada:
+ * um `read` pendente por canal, e o seguinte só vem depois de o cliente
+ * consumir o anterior. Substitui o poll de 200 ms a 1 s do caminho HTTP, que
+ * atrasava o fim da execução em até um segundo e, com saída acumulada, fazia
+ * uma requisição a cada 25 ms.
+ */
+export function attachProcessChannel(record, channel, maxOutputReadChars = DEFAULT_MAX_OUTPUT_READ_CHARS) {
+  processChannels(record).add(channel);
+  let pending;
+  const sendJson = (payload) => channel.send(JSON.stringify(payload));
+  const serveRead = (cursor) => {
+    pending?.cancel();
+    const wait = waitForProcessOutput(record, cursor);
+    pending = wait;
+    void wait.promise.then((changed) => {
+      if (pending === wait) pending = undefined;
+      if (!changed || channel.closed) return;
+      sendJson({ type: "output", ...processOutputSnapshot(record, cursor, maxOutputReadChars) });
+    });
+  };
+  channel.on("message", (raw, binary) => {
+    if (binary) {
+      channel.close(STREAM_BAD_REQUEST_CLOSE_CODE, "Mensagem binária não suportada.");
+      return;
+    }
+    let message;
+    try {
+      message = JSON.parse(String(raw));
+    } catch {
+      channel.close(STREAM_BAD_REQUEST_CLOSE_CODE, "Mensagem inválida.");
+      return;
+    }
+    if (message?.type === "read") {
+      serveRead(Math.max(0, Math.trunc(Number(message.cursor)) || 0));
+      return;
+    }
+    sendJson({ type: "error", message: `Mensagem desconhecida: ${String(message?.type)}` });
+  });
+  channel.on("close", () => {
+    pending?.cancel();
+    pending = undefined;
+    processChannels(record).delete(channel);
+  });
+}
+
+function closeProcessChannels(record, code, reason) {
+  for (const channel of [...processChannels(record)]) {
+    try { channel.close(code, reason); } catch {}
+  }
+  processChannels(record).clear();
+}
+
 function signalProcessTree(record, signal) {
   const pid = record.child.pid;
   if (!Number.isInteger(pid)) return false;
@@ -427,6 +524,7 @@ export function createExecutionBackend({
       stdout: "", stderr: "", output: createProcessOutputBuffer(maxOutputChars),
       data: undefined,
       exitCode: undefined, signal: undefined, startedAt, finishedAt: undefined,
+      waiters: new Set(), channels: new Set(),
     };
     processes.set(id, record);
     const MAX_RETAINED_EXITED_PROCESSES = 25;
@@ -444,10 +542,12 @@ export function createExecutionBackend({
     child.stdout.on("data", (chunk) => {
       record.stdout = appendOutput(record.stdout, chunk, maxSnapshotStreamChars);
       record.output.append("stdout", chunk);
+      notifyProcessWaiters(record);
     });
     child.stderr.on("data", (chunk) => {
       record.stderr = appendOutput(record.stderr, chunk, maxSnapshotStreamChars);
       record.output.append("stderr", chunk);
+      notifyProcessWaiters(record);
     });
     child.on("error", (error) => {
       const message = `${error.message}\n`;
@@ -456,6 +556,7 @@ export function createExecutionBackend({
       record.status = "exited";
       record.exitCode = -1;
       record.finishedAt = Date.now();
+      notifyProcessWaiters(record);
       pruneExitedProcesses();
     });
     child.on("close", (exitCode, signal) => {
@@ -463,6 +564,7 @@ export function createExecutionBackend({
       record.exitCode = exitCode ?? (signal ? 128 : -1);
       record.signal = signal ?? undefined;
       record.finishedAt = Date.now();
+      notifyProcessWaiters(record);
       pruneExitedProcesses();
     });
     return processSnapshot(record, maxSnapshotOutputChars);
@@ -582,9 +684,43 @@ export function createExecutionBackend({
       writeJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
     }
   };
+  /**
+   * Canal persistente da saída de um processo: `/execution/processes/<id>/stream`.
+   * O GET `/output?cursor=` continua para quem não tem canais.
+   */
+  executionBackend.openChannel = (channel, relativePath) => {
+    let workspaceRoot;
+    try {
+      workspaceRoot = resolvedWorkspaceRoot();
+    } catch (error) {
+      channel.close(STREAM_NO_WORKSPACE_CLOSE_CODE, error instanceof Error ? error.message : String(error));
+      return;
+    }
+    const match = /^\/execution\/processes\/([^/]+)\/stream$/.exec(String(relativePath ?? ""));
+    let id;
+    try {
+      id = match ? decodeURIComponent(match[1]) : undefined;
+    } catch {
+      id = undefined;
+    }
+    if (id === undefined) {
+      channel.close(STREAM_BAD_REQUEST_CLOSE_CODE, "Rota sem canal.");
+      return;
+    }
+    const record = processes.get(id);
+    if (!record || record.workspaceRoot !== workspaceRoot) {
+      channel.close(STREAM_NOT_FOUND_CLOSE_CODE, "Processo não encontrado.");
+      return;
+    }
+    attachProcessChannel(record, channel, maxOutputReadChars);
+  };
   executionBackend.dispose = async () => {
     const running = [...processes.values()].filter((record) => record.status === "running");
     await Promise.allSettled(running.map((record) => stopProcessRecord(record)));
+    for (const record of processes.values()) {
+      notifyProcessWaiters(record);
+      closeProcessChannels(record, STREAM_WORKSPACE_CLOSED_CLOSE_CODE, "Workspace closed.");
+    }
     processes.clear();
   };
   return executionBackend;

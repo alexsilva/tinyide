@@ -53,6 +53,7 @@ Verificados contra o aplicativo em execução — se algum mudar, o teste falha 
 | `performance.spec.mjs` | orçamentos de tempo de abertura, carga do projeto, edição e execução, e resposta do editor durante a indexação |
 | `terminal-typing-latency.spec.mjs` | latência de tecla no terminal medida na página, com uma e com sete sessões abertas; prova que nenhuma tecla passa pela fila de conexões HTTP |
 | `execution-exit-latency.spec.mjs` | fim de uma execução de perfil chega pelo canal WebSocket do core, sem poll de saída; mede a latência do `[exit]` contra o `finishedAt` do runtime e, na mesma sessão, a referência sem canal |
+| `mcp-server-events-channel.spec.mjs` | o plugin mcp-server abre o canal `/events` ao ativar e não deixa long-poll de ações nem poll de autorizações pendentes |
 
 ## Depuração Python
 

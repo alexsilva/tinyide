@@ -6,10 +6,10 @@ import { createWorkspace, launchIde, openProject } from "./ide-app.mjs";
  * A busca indexada chega a um agente pelo caminho inteiro que ele usaria: o
  * plugin search publica as ferramentas em `handle.mcpTools`, o host as entrega
  * ao plugin mcp-server, o cliente MCP se registra, pede autorização — que o
- * usuário concede no diálogo da IDE — e chama `search_content`, `search_files`
- * e `search_status` pelo protocolo, com os resultados do índice de verdade.
+ * usuário concede no diálogo da IDE — e chama `fast_search`, `fast_search_files`
+ * e `fast_search_status` pelo protocolo, com os resultados do índice de verdade.
  */
-const SEARCH_TOOLS = ["search_content", "search_files", "search_status"];
+const SEARCH_TOOLS = ["fast_search", "fast_search_files", "fast_search_status"];
 
 /** Uma porta livre: a padrão pode estar com a IDE do usuário desta máquina. */
 async function freePort() {
@@ -213,11 +213,11 @@ test.describe("busca indexada como ferramenta MCP", () => {
     const listed = await mcpRequest({ ...context, method: "tools/list", params: {} });
     const names = listed.result.tools.map((tool) => tool.name);
     for (const name of SEARCH_TOOLS) expect(names).toContain(name);
-    const contentTool = listed.result.tools.find((tool) => tool.name === "search_content");
+    const contentTool = listed.result.tools.find((tool) => tool.name === "fast_search");
     expect(contentTool.annotations.readOnlyHint).toBe(true);
     expect(contentTool.inputSchema.required).toEqual(["query"]);
 
-    const content = await callTool(context, "search_content", { query: "ALVO_DE_BUSCA" });
+    const content = await callTool(context, "fast_search", { query: "ALVO_DE_BUSCA" });
     const paths = content.structuredContent.results.map((entry) => entry.path).sort();
     expect(paths).toEqual(["docs/guia.md", "src/util.py"]);
     const util = content.structuredContent.results.find((entry) => entry.path === "src/util.py");
@@ -226,21 +226,21 @@ test.describe("busca indexada como ferramenta MCP", () => {
     expect(content.structuredContent.indexing).toBe(false);
     expect(JSON.parse(content.content[0].text)).toEqual(content.structuredContent);
 
-    const regex = await callTool(context, "search_content", { query: "def \\w+\\(nome\\)", regex: true });
+    const regex = await callTool(context, "fast_search", { query: "def \\w+\\(nome\\)", regex: true });
     expect(regex.structuredContent.results.map((entry) => entry.path)).toEqual(["src/main.py"]);
 
-    const files = await callTool(context, "search_files", { query: "util" });
+    const files = await callTool(context, "fast_search_files", { query: "util" });
     expect(files.structuredContent.results[0].path).toBe("src/util.py");
-    const exact = await callTool(context, "search_files", { query: "sutil", exact: true });
+    const exact = await callTool(context, "fast_search_files", { query: "sutil", exact: true });
     expect(exact.structuredContent.results).toEqual([]);
 
-    const indexStatus = await callTool(context, "search_status");
+    const indexStatus = await callTool(context, "fast_search_status");
     expect(indexStatus.structuredContent.phase).toBe("idle");
     expect(indexStatus.structuredContent.indexing).toBe(false);
     expect(indexStatus.structuredContent.documentCount).toBe(4);
 
     // Erro de uso volta como resultado de ferramenta, não como falha do servidor.
-    const invalid = await mcpRequest({ ...context, method: "tools/call", params: { name: "search_content", arguments: { query: "([", regex: true } } });
+    const invalid = await mcpRequest({ ...context, method: "tools/call", params: { name: "fast_search", arguments: { query: "([", regex: true } } });
     expect(invalid.result.isError).toBe(true);
     expect(invalid.result.content[0].text).toMatch(/inválida/);
   });

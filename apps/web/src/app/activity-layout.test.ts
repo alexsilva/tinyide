@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  isActivityDragClick,
+  ACTIVITY_DRAG_START_DISTANCE,
+  activityDropPlacesAfter,
+  isActivityDragGesture,
   moveActivityButton,
   orderedActivityButtons,
+  sameActivityDropTarget,
   type ActivityButtonDescriptor,
 } from "./activity-layout";
 
@@ -84,16 +87,34 @@ describe("activity button layout", () => {
   });
 });
 
-describe("activity drag treated as click", () => {
-  it("accepts a gesture that ends where it started", () => {
-    expect(isActivityDragClick({ x: 18, y: 120 }, { x: 22, y: 123 })).toBe(true);
-    expect(isActivityDragClick({ x: 18, y: 120 }, { x: 18, y: 120 })).toBe(true);
+describe("activity reorder gesture", () => {
+  it("keeps a trembling click as a click and starts the drag past the threshold", () => {
+    expect(isActivityDragGesture({ x: 18, y: 120 }, { x: 18, y: 120 })).toBe(false);
+    expect(isActivityDragGesture({ x: 18, y: 120 }, { x: 22, y: 123 })).toBe(false);
+    expect(isActivityDragGesture({ x: 18, y: 120 }, { x: 18, y: 120 + ACTIVITY_DRAG_START_DISTANCE })).toBe(false);
+    expect(isActivityDragGesture({ x: 18, y: 120 }, { x: 18, y: 156 })).toBe(true);
+    expect(isActivityDragGesture({ x: 18, y: 120 }, { x: 30, y: 120 })).toBe(true);
+    expect(isActivityDragGesture(undefined, { x: 18, y: 120 })).toBe(false);
   });
 
-  it("rejects a real reorder and a drop outside the window", () => {
-    expect(isActivityDragClick({ x: 18, y: 120 }, { x: 18, y: 156 })).toBe(false);
-    expect(isActivityDragClick({ x: 18, y: 120 }, { x: 0, y: 0 })).toBe(false);
-    expect(isActivityDragClick(undefined, { x: 18, y: 120 })).toBe(false);
+  it("places the dragged button before or after the slot by the pointer half", () => {
+    expect(activityDropPlacesAfter({ top: 100, height: 36 }, 110)).toBe(false);
+    expect(activityDropPlacesAfter({ top: 100, height: 36 }, 118)).toBe(true);
+    expect(activityDropPlacesAfter({ top: 100, height: 36 }, 135)).toBe(true);
+  });
+
+  it("compares drop targets by side, slot and placement", () => {
+    expect(sameActivityDropTarget(undefined, undefined)).toBe(true);
+    expect(sameActivityDropTarget({ side: "left", key: "a", placeAfter: true }, undefined)).toBe(false);
+    expect(sameActivityDropTarget(
+      { side: "left", key: "a", placeAfter: true },
+      { side: "left", key: "a", placeAfter: true },
+    )).toBe(true);
+    expect(sameActivityDropTarget(
+      { side: "left", key: "a", placeAfter: true },
+      { side: "left", key: "a", placeAfter: false },
+    )).toBe(false);
+    expect(sameActivityDropTarget({ side: "left", placeAfter: true }, { side: "right", placeAfter: true })).toBe(false);
   });
 
   it("keeps the layout untouched when the button is dropped on itself", () => {

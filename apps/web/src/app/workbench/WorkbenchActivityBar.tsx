@@ -1,11 +1,13 @@
 import type { ReactNode } from "react";
 import type { WorkbenchActivityIcon } from "@tinyide/plugin-api";
-import type { ActivityBarSide, ActivityButtonDescriptor } from "../activity-layout";
+import type { ActivityBarSide, ActivityButtonDescriptor, ActivityDropTarget } from "../activity-layout";
 import {
   FixedActivitySlot,
   IconButton,
   MovableActivityButton,
   WorkbenchActivityIconView,
+  type ActivityDragStateHandler,
+  type ActivityMoveHandler,
   type PluginActivityButton,
 } from "./activity-components";
 
@@ -17,6 +19,7 @@ export interface WorkbenchActivityBarProps {
   readonly toolWindowVisible: boolean;
   readonly activeToolWindowId: string | undefined;
   readonly draggingKey: string | undefined;
+  readonly dropTarget: ActivityDropTarget | undefined;
   readonly environmentLabel: string;
   readonly environmentIcon: WorkbenchActivityIcon | undefined;
   readonly executionCount: number;
@@ -28,13 +31,8 @@ export interface WorkbenchActivityBarProps {
   readonly onBuiltinSidebarActivate: (view: "explorer" | "plugins" | "environments") => void;
   readonly onExecutionsActivate: () => void;
   readonly onProblemsActivate: () => void;
-  readonly onMove: (
-    key: string,
-    side: ActivityBarSide,
-    targetKey?: string,
-    placeAfter?: boolean,
-  ) => void;
-  readonly onDragStateChange: (key?: string) => void;
+  readonly onMove: ActivityMoveHandler;
+  readonly onDragStateChange: ActivityDragStateHandler;
 }
 
 export function WorkbenchActivityBar({
@@ -45,6 +43,7 @@ export function WorkbenchActivityBar({
   toolWindowVisible,
   activeToolWindowId,
   draggingKey,
+  dropTarget,
   environmentLabel,
   environmentIcon,
   executionCount,
@@ -69,6 +68,7 @@ export function WorkbenchActivityBar({
       itemKey={itemKey}
       side={side}
       {...(draggingKey ? { draggingKey } : {})}
+      {...(dropTarget ? { dropTarget } : {})}
       spacer={spacer}
       onMove={onMove}
       onDragStateChange={onDragStateChange}
@@ -92,6 +92,7 @@ export function WorkbenchActivityBar({
               side={side}
               dragging={draggingKey === pluginItem.key}
               dragActive={Boolean(draggingKey)}
+              {...(dropTarget ? { dropTarget } : {})}
               active={active}
               label={pluginItem.kind === "toolWindow"
                 ? active
@@ -159,6 +160,7 @@ export function WorkbenchActivityRail(props: WorkbenchActivityBarProps) {
   return (
     <aside
       className={side === "left" ? "activity-bar" : "right-activity-bar"}
+      data-activity-bar={side}
       {...(side === "right" ? { "aria-label": "Barra lateral direita" } : {})}
     >
       <WorkbenchActivityBar {...props} />

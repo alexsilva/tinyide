@@ -17,28 +17,36 @@
 .workbench-bottom-region > .output-panel,
 .workbench-bottom-region > .tool-window-panel { width: 100%; }
 .activity-bar .icon-button { position: relative; width: 36px; height: 36px; min-height: 36px; border-color: transparent; border-radius: 0; background: transparent; color: var(--muted); }
-.activity-button-slot { position: relative; width: 36px; height: 36px; flex: 0 0 36px; cursor: grab; }
-.activity-button-slot:active { cursor: grabbing; }
+/* Reordenação por pointer events: `touch-action: none` entrega o gesto inteiro
+   ao slot e `user-select: none` evita seleção enquanto o ponteiro está capturado. */
+.activity-button-slot { position: relative; width: 36px; height: 36px; flex: 0 0 36px; cursor: grab; touch-action: none; user-select: none; }
 .activity-button-slot.is-dragging {
   background: rgb(92 146 255 / 9%);
   box-shadow: inset 0 0 0 1px rgb(92 146 255 / 55%);
 }
+.activity-button-slot.is-dragging,
+.activity-button-slot.is-dragging > .icon-button { cursor: grabbing; }
 .activity-button-slot.is-dragging > .icon-button { opacity: 0; }
 .activity-button-slot > .icon-button { width: 36px; height: 36px; }
-.activity-fixed-slot { position: relative; width: 36px; height: 36px; flex: 0 0 36px; }
+.activity-fixed-slot { position: relative; width: 36px; height: 36px; flex: 0 0 36px; touch-action: none; user-select: none; }
 .activity-fixed-slot > .icon-button { width: 36px; height: 36px; }
 .activity-fixed-slot.activity-spacer { min-height: 8px; height: auto; flex: 1 1 8px; }
-.activity-button-slot.is-drag-active:not(.is-dragging):hover::after,
-.activity-fixed-slot.activity-spacer.is-drag-active:hover::after {
+.activity-button-slot.is-drop-before::after,
+.activity-button-slot.is-drop-after::after,
+.activity-fixed-slot.is-drop-before::after,
+.activity-fixed-slot.is-drop-after::after {
   position: absolute;
   z-index: 2;
   right: 5px;
-  bottom: -1px;
   left: 5px;
   height: 2px;
   background: var(--accent);
   content: "";
 }
+.activity-button-slot.is-drop-before::after,
+.activity-fixed-slot.is-drop-before::after { top: -1px; }
+.activity-button-slot.is-drop-after::after,
+.activity-fixed-slot.is-drop-after::after { bottom: -1px; }
 .activity-bar .icon-button.is-active { color: var(--text); background: var(--surface-4); box-shadow: inset 2px 0 var(--accent); }
 .activity-notification-badge { position: absolute; top: 3px; right: 2px; display: grid; min-width: 13px; height: 13px; place-items: center; border: 1px solid #12151b; border-radius: 999px; padding: 0 3px; background: #44536b; color: #f3f6fb; font: 700 8px/1 system-ui, sans-serif; letter-spacing: 0; }
 .activity-notification-badge.is-active { background: #368b58; }

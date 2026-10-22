@@ -20,6 +20,7 @@ const { readDesktopState, removeDesktopState, writeDesktopState } = require("./s
 const { createWorkspaceWatcher, DEFAULT_IGNORED_DIRECTORIES } = require("./workspace-watcher.cjs");
 const { createWorkspaceRegistry } = require("./workspace-registry.cjs");
 const { installNetworkDiagnostics } = require("./network-diagnostics.cjs");
+const { installEventLoopMonitor } = require("./event-loop-monitor.cjs");
 const { assertPanelWindowReference, panelViewId, desktopWindowUrl } = require("./window-session.cjs");
 const { createPanelWindowTracker, panelWindowKey } = require("./panel-windows.cjs");
 
@@ -27,6 +28,7 @@ let runtime;
 let mainWindow;
 let browserExtensionGuard;
 let networkDiagnostics;
+let eventLoopMonitor;
 let fileLogger;
 let processFileLogging;
 const workspaceRegistry = createWorkspaceRegistry({
@@ -516,6 +518,7 @@ const isPrimaryInstance = installSingleInstanceGuard(app, () => mainWindow);
 if (isPrimaryInstance) {
   processFileLogging = installApplicationFileLogging();
   fileLogger = processFileLogging.logger;
+  eventLoopMonitor = installEventLoopMonitor({ logger: fileLogger });
   console.log(`[tinyIde] Log da aplicação: ${fileLogger.logPath}`);
   applyLoginShellEnvironment();
   app.whenReady().then(async () => {
@@ -547,6 +550,7 @@ if (isPrimaryInstance) {
 
   installGracefulShutdown(app, async () => {
     fileLogger.info("lifecycle", "TinyIDE encerrando.");
+    eventLoopMonitor?.dispose();
     browserExtensionGuard?.dispose();
     networkDiagnostics?.dispose();
     await workspaceRegistry.closeAll();

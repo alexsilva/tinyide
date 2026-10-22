@@ -3,8 +3,8 @@ import {
   useEffect,
   useRef,
   useState,
-  type DragEvent as ReactDragEvent,
   type KeyboardEventHandler,
+  type PointerEvent as ReactPointerEvent,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -14,30 +14,188 @@ import type {
   WorkbenchActivityIcon,
 } from "@tinyide/plugin-api";
 import { resolveWorkbenchIcon, subscribeWorkbenchIcons } from "./icon-manager";
-import { isActivityDragClick } from "../activity-layout";
+import {
+  activityDropPlacesAfter,
+  isActivityDragGesture,
+  sameActivityDropTarget,
+} from "../activity-layout";
 import type {
   ActivityBarSide,
   ActivityButtonDescriptor,
+  ActivityDropTarget,
   ActivityPointerPosition,
 } from "../activity-layout";
 
+export type ActivityMoveHandler = (
+  key: string,
+  side: ActivityBarSide,
+  targetKey?: string,
+  placeAfter?: boolean,
+) => void;
+
+/** Sem argumentos: o arrasto acabou. Com `key`: `key` está sendo arrastado sobre `target`. */
+export type ActivityDragStateHandler = (key?: string, target?: ActivityDropTarget) => void;
+
+interface ActivityReorderGesture {
+  readonly pointerId: number;
+  readonly origin: ActivityPointerPosition;
+  readonly slot: HTMLElement;
+  dragging: boolean;
+  cancelled: boolean;
+  /** Último destino comunicado; `null` enquanto nenhum foi comunicado. */
+  target: ActivityDropTarget | undefined | null;
+}
+
+function capturePointer(slot: HTMLElement, pointerId: number) {
+  try {
+    slot.setPointerCapture(pointerId);
+  } catch {
+    // O ponteiro já se foi (ou o ambiente não captura): o gesto segue pelos
+    // eventos que ainda chegarem ao slot.
+  }
+}
+
+function releasePointer(slot: HTMLElement, pointerId: number) {
+  try {
+    if (slot.hasPointerCapture(pointerId)) slot.releasePointerCapture(pointerId);
+  } catch {
+    // Já liberado.
+  }
+}
+
 /**
- * Trata como clique o arrasto que não saiu do lugar: Chromium engole o `click`
- * quando o gesto passa do limiar nativo de arrasto (3px), e sem isso o botão da
- * activity bar só responde na segunda tentativa.
+ * Slot ou barra sob o ponteiro, lidos dos atributos que as próprias barras
+ * anotam no DOM. Com o ponteiro capturado o `:hover` não acompanha o alvo,
+ * então o destino é calculado aqui e devolvido como estado.
  */
-function useActivityDragClickFallback(activate: () => void) {
-  const originRef = useRef<ActivityPointerPosition | undefined>(undefined);
+function activityDropTargetAt(position: ActivityPointerPosition): ActivityDropTarget | undefined {
+  const element = document.elementFromPoint(position.x, position.y);
+  if (!element) return undefined;
+  const slot = element.closest<HTMLElement>("[data-activity-key][data-activity-side]");
+  if (slot) {
+    const side = slot.dataset.activitySide;
+    if (side !== "left" && side !== "right") return undefined;
+    const key = slot.dataset.activityKey;
+    return {
+      side,
+      ...(key ? { key } : {}),
+      placeAfter: activityDropPlacesAfter(slot.getBoundingClientRect(), position.y),
+    };
+  }
+  const side = element.closest<HTMLElement>("[data-activity-bar]")?.dataset.activityBar;
+  return side === "left" || side === "right" ? { side, placeAfter: true } : undefined;
+}
+
+/**
+ * Reordenação da activity bar por pointer events, sem `draggable`.
+ *
+ * Um `draggable` transforma qualquer clique com 3px de movimento numa sessão
+ * de arrasto do sistema operacional. Em 2026-10-22 uma dessas sessões, aberta
+ * por um clique num botão de painel, terminou sem o Chromium avisar o
+ * renderer; a página passou a descartar cliques e teclas até ser fechada,
+ * porque o Blink ignora toda entrada enquanto acredita estar arrastando. Aqui
+ * o gesto nunca sai da página: o clique continua clique, o arrasto só começa
+ * depois do limiar, o ponteiro fica capturado pelo slot e o destino é lido
+ * do DOM a cada movimento.
+ *
+ * A captura é mantida até o `pointerup` mesmo quando Esc cancela o gesto:
+ * assim o `click` sintetizado no fim nasce no slot, nunca no botão, e um
+ * arrasto cancelado não abre painel por engano.
+ */
+function useActivityReorder({
+  itemKey,
+  enabled,
+  dragging,
+  onMove,
+  onDragStateChange,
+}: {
+  readonly itemKey: string;
+  readonly enabled: boolean;
+  readonly dragging: boolean;
+  readonly onMove: ActivityMoveHandler;
+  readonly onDragStateChange: ActivityDragStateHandler;
+}) {
+  const gestureRef = useRef<ActivityReorderGesture | undefined>(undefined);
+  const cancelRef = useRef(() => {});
+
+  const finish = (gesture: ActivityReorderGesture, apply: boolean) => {
+    gestureRef.current = undefined;
+    releasePointer(gesture.slot, gesture.pointerId);
+    if (!gesture.dragging) return;
+    gesture.dragging = false;
+    if (apply && gesture.target) {
+      onMove(itemKey, gesture.target.side, gesture.target.key, gesture.target.placeAfter);
+    }
+    onDragStateChange();
+  };
+
+  cancelRef.current = () => {
+    const gesture = gestureRef.current;
+    if (!gesture?.dragging) return;
+    gesture.dragging = false;
+    gesture.cancelled = true;
+    onDragStateChange();
+  };
+
+  useEffect(() => {
+    if (!dragging) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      cancelRef.current();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [dragging]);
+
   return {
-    rememberOrigin(event: ReactDragEvent<HTMLElement>) {
-      originRef.current = { x: event.clientX, y: event.clientY };
+    onPointerDown(event: ReactPointerEvent<HTMLElement>) {
+      if (!enabled || event.button !== 0 || !event.isPrimary) return;
+      gestureRef.current = {
+        pointerId: event.pointerId,
+        origin: { x: event.clientX, y: event.clientY },
+        slot: event.currentTarget,
+        dragging: false,
+        cancelled: false,
+        target: null,
+      };
     },
-    activateIfClick(event: ReactDragEvent<HTMLElement>) {
-      const origin = originRef.current;
-      originRef.current = undefined;
-      if (isActivityDragClick(origin, { x: event.clientX, y: event.clientY })) activate();
+    onPointerMove(event: ReactPointerEvent<HTMLElement>) {
+      const gesture = gestureRef.current;
+      if (!gesture || gesture.pointerId !== event.pointerId || gesture.cancelled) return;
+      const position = { x: event.clientX, y: event.clientY };
+      if (!gesture.dragging) {
+        if (!isActivityDragGesture(gesture.origin, position)) return;
+        gesture.dragging = true;
+        capturePointer(gesture.slot, gesture.pointerId);
+      }
+      const target = activityDropTargetAt(position);
+      if (gesture.target !== null && sameActivityDropTarget(target, gesture.target)) return;
+      gesture.target = target;
+      onDragStateChange(itemKey, target);
+    },
+    onPointerUp(event: ReactPointerEvent<HTMLElement>) {
+      const gesture = gestureRef.current;
+      if (!gesture || gesture.pointerId !== event.pointerId) return;
+      if (gesture.dragging) gesture.target = activityDropTargetAt({ x: event.clientX, y: event.clientY });
+      finish(gesture, true);
+    },
+    onPointerCancel(event: ReactPointerEvent<HTMLElement>) {
+      const gesture = gestureRef.current;
+      if (gesture && gesture.pointerId === event.pointerId) finish(gesture, false);
+    },
+    onLostPointerCapture() {
+      // Perder a captura por qualquer motivo (janela perdeu foco, elemento
+      // saiu do DOM) é o fim do gesto, sem aplicar nada.
+      const gesture = gestureRef.current;
+      if (gesture?.dragging) finish(gesture, false);
     },
   };
+}
+
+function dropIndicatorClass(itemKey: string, dropTarget: ActivityDropTarget | undefined): string {
+  if (dropTarget?.key !== itemKey) return "";
+  return dropTarget.placeAfter ? " is-drop-after" : " is-drop-before";
 }
 
 export function IconButton({
@@ -127,6 +285,7 @@ export function FixedActivitySlot({
   itemKey,
   side,
   draggingKey,
+  dropTarget,
   spacer = false,
   children,
   onMove,
@@ -135,50 +294,20 @@ export function FixedActivitySlot({
   readonly itemKey: string;
   readonly side: ActivityBarSide;
   readonly draggingKey?: string;
+  readonly dropTarget?: ActivityDropTarget;
   readonly spacer?: boolean;
   readonly children?: ReactNode;
-  readonly onMove: (
-    key: string,
-    side: ActivityBarSide,
-    targetKey?: string,
-    placeAfter?: boolean,
-  ) => void;
-  readonly onDragStateChange: (key?: string) => void;
+  readonly onMove: ActivityMoveHandler;
+  readonly onDragStateChange: ActivityDragStateHandler;
 }) {
-  const slotRef = useRef<HTMLDivElement | null>(null);
-  const dragClick = useActivityDragClickFallback(() => {
-    slotRef.current?.querySelector<HTMLButtonElement>(".icon-button")?.click();
-  });
+  const dragging = draggingKey === itemKey;
+  const reorder = useActivityReorder({ itemKey, enabled: !spacer, dragging, onMove, onDragStateChange });
   return (
     <div
-      ref={slotRef}
-      className={`activity-fixed-slot${spacer ? " activity-spacer" : " activity-button-slot"}${draggingKey ? " is-drag-active" : ""}${draggingKey === itemKey ? " is-dragging" : ""}`}
+      className={`activity-fixed-slot${spacer ? " activity-spacer" : " activity-button-slot"}${draggingKey ? " is-drag-active" : ""}${dragging ? " is-dragging" : ""}${dropIndicatorClass(itemKey, dropTarget)}`}
       data-activity-key={itemKey}
-      draggable={!spacer}
-      onDragStart={spacer ? undefined : (event) => {
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData("text/x-tinyide-activity-button", itemKey);
-        dragClick.rememberOrigin(event);
-        onDragStateChange(itemKey);
-      }}
-      onDragEnd={spacer ? undefined : (event) => {
-        onDragStateChange();
-        dragClick.activateIfClick(event);
-      }}
-      onDragOver={(event) => {
-        if (!event.dataTransfer.types.includes("text/x-tinyide-activity-button")) return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "move";
-      }}
-      onDrop={(event) => {
-        const key = event.dataTransfer.getData("text/x-tinyide-activity-button");
-        if (!key) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const bounds = event.currentTarget.getBoundingClientRect();
-        onMove(key, side, itemKey, event.clientY >= bounds.top + bounds.height / 2);
-        onDragStateChange();
-      }}
+      data-activity-side={side}
+      {...reorder}
       onKeyDown={spacer ? undefined : (event) => {
         if (!event.altKey) return;
         if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
@@ -207,6 +336,7 @@ export function MovableActivityButton({
   label,
   dragging,
   dragActive,
+  dropTarget,
   onActivate,
   onMove,
   onDragStateChange,
@@ -218,50 +348,21 @@ export function MovableActivityButton({
   readonly label?: string;
   readonly dragging: boolean;
   readonly dragActive: boolean;
+  readonly dropTarget?: ActivityDropTarget;
   readonly onActivate: () => void;
-  readonly onMove: (
-    key: string,
-    side: ActivityBarSide,
-    targetKey?: string,
-    placeAfter?: boolean,
-  ) => void;
-  readonly onDragStateChange: (key?: string) => void;
+  readonly onMove: ActivityMoveHandler;
+  readonly onDragStateChange: ActivityDragStateHandler;
 }) {
   const badge = useActivityBadge(item.activityBadge);
-  const dragClick = useActivityDragClickFallback(() => {
-    if (!disabled) onActivate();
-  });
+  const reorder = useActivityReorder({ itemKey: item.key, enabled: true, dragging, onMove, onDragStateChange });
   const baseLabel = label ?? item.label;
   const accessibleLabel = badge ? `${baseLabel}: ${badge.label}` : baseLabel;
   return (
     <div
-      className={`activity-button-slot${dragActive ? " is-drag-active" : ""}${dragging ? " is-dragging" : ""}`}
+      className={`activity-button-slot${dragActive ? " is-drag-active" : ""}${dragging ? " is-dragging" : ""}${dropIndicatorClass(item.key, dropTarget)}`}
       data-activity-key={item.key}
-      draggable
-      onDragStart={(event) => {
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData("text/x-tinyide-activity-button", item.key);
-        dragClick.rememberOrigin(event);
-        onDragStateChange(item.key);
-      }}
-      onDragEnd={(event) => {
-        onDragStateChange();
-        dragClick.activateIfClick(event);
-      }}
-      onDragOver={(event) => {
-        if (!event.dataTransfer.types.includes("text/x-tinyide-activity-button")) return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "move";
-      }}
-      onDrop={(event) => {
-        const key = event.dataTransfer.getData("text/x-tinyide-activity-button");
-        if (!key) return;
-        event.preventDefault();
-        event.stopPropagation();
-        const bounds = event.currentTarget.getBoundingClientRect();
-        onMove(key, side, item.key, event.clientY >= bounds.top + bounds.height / 2);
-        onDragStateChange();
-      }}
+      data-activity-side={side}
+      {...reorder}
     >
       <IconButton
         label={accessibleLabel}

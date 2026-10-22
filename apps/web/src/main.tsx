@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
+import { installFreezeDiagnostics } from "./app/freeze-diagnostics";
 import {
   requestTextContextMenu,
   selectedTextAtTarget,
@@ -9,6 +10,10 @@ import "./app.css";
 
 const root = document.querySelector<HTMLDivElement>("#app");
 if (!root) throw new Error("Application root was not found.");
+
+// Antes de qualquer render: um congelamento precisa deixar rastro no log
+// mesmo quando acontece durante a montagem da janela.
+installFreezeDiagnostics();
 
 document.addEventListener("contextmenu", (event) => {
   event.preventDefault();

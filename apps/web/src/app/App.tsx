@@ -179,6 +179,7 @@ import {
 import { platform } from "./platform";
 import {
   moveActivityButton,
+  type ActivityDropTarget,
   orderedActivityButtons,
   type ActivityBarSide,
   type ActivityButtonDescriptor,
@@ -676,6 +677,7 @@ export function App() {
   const [activeToolWindowId, setActiveToolWindowId] = useState<string | undefined>(initialSession.activeToolWindowId);
   const [activityButtonPlacements, setActivityButtonPlacements] = useState(initialSession.activityButtonPlacements);
   const [draggingActivityButtonKey, setDraggingActivityButtonKey] = useState<string>();
+  const [activityDropTarget, setActivityDropTarget] = useState<ActivityDropTarget>();
   const [toolWindowViewRequest, setToolWindowViewRequest] = useState<WorkbenchToolWindowViewRequest | undefined>(() => (
     panelWindowReference && panelWindowViewId
       ? { toolWindowId: panelWindowReference.id, viewId: panelWindowViewId, sequence: 1 }
@@ -7471,6 +7473,7 @@ export function App() {
     toolWindowVisible,
     activeToolWindowId,
     draggingKey: draggingActivityButtonKey,
+    dropTarget: activityDropTarget,
     environmentLabel: "Ambientes de execução",
     environmentIcon: "box",
     executionCount: profileOutputTabs.length,
@@ -7483,7 +7486,10 @@ export function App() {
     onExecutionsActivate: toggleExecutionPanel,
     onProblemsActivate: toggleProblemsPanel,
     onMove: repositionActivityButton,
-    onDragStateChange: setDraggingActivityButtonKey,
+    onDragStateChange: (key, target) => {
+      setDraggingActivityButtonKey(key);
+      setActivityDropTarget(target);
+    },
   } satisfies Omit<WorkbenchActivityBarProps, "side" | "items" | "activeSidebarId">;
 
   explorerTreeActionsRef.current = {

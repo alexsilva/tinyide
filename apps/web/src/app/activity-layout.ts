@@ -41,26 +41,54 @@ export interface ActivityPointerPosition {
   readonly y: number;
 }
 
-/** Folga em pixels para distinguir um clique trêmulo de um arrasto real. */
-export const ACTIVITY_DRAG_CLICK_TOLERANCE = 8;
+/**
+ * Onde um botão em arrasto seria solto. `key` ausente significa o fim da
+ * barra indicada por `side`.
+ */
+export interface ActivityDropTarget {
+  readonly side: ActivityBarSide;
+  readonly key?: string;
+  readonly placeAfter: boolean;
+}
 
 /**
- * Chromium cancela o evento `click` assim que um gesto sobre um elemento
- * `draggable` ultrapassa o limiar nativo de arrasto (3px). Nos botões da
- * activity bar isso faz o clique "sumir": o drop cai no próprio slot, a
- * reordenação é nula e o painel não abre — o usuário precisa clicar de novo.
- * Um arrasto que termina praticamente onde começou é, na intenção do usuário,
- * um clique.
+ * Distância em pixels a partir da qual o gesto deixa de ser clique e vira
+ * reordenação. Fica acima do tremor natural da mão e abaixo da altura de um
+ * slot (36px), para que o arrasto comece antes de o ponteiro sair do botão.
  */
-export function isActivityDragClick(
+export const ACTIVITY_DRAG_START_DISTANCE = 6;
+
+/**
+ * A activity bar reordena por pointer events, nunca por arrasto nativo. Cada
+ * clique num `draggable` que se mova 3px abre uma sessão de arrasto do sistema
+ * (XDND no X11), e em 2026-10-22 uma dessas sessões terminou sem o Chromium
+ * avisar a página: o renderer ficou acreditando que arrastava e descartou todo
+ * clique e tecla até a janela ser fechada. Decidir o gesto aqui, pela
+ * distância, mantém o clique como clique e tira o sistema do caminho.
+ */
+export function isActivityDragGesture(
   origin: ActivityPointerPosition | undefined,
-  end: ActivityPointerPosition,
-  tolerance = ACTIVITY_DRAG_CLICK_TOLERANCE,
+  current: ActivityPointerPosition,
+  threshold = ACTIVITY_DRAG_START_DISTANCE,
 ): boolean {
   if (!origin) return false;
-  // Alguns ambientes reportam (0, 0) no `dragend` quando o drop acontece fora
-  // da janela; nesse caso a distância grande já descarta o gesto.
-  return Math.hypot(end.x - origin.x, end.y - origin.y) <= tolerance;
+  return Math.hypot(current.x - origin.x, current.y - origin.y) > threshold;
+}
+
+/** Metade de baixo do slot alvo insere depois dele; metade de cima, antes. */
+export function activityDropPlacesAfter(
+  bounds: { readonly top: number; readonly height: number },
+  clientY: number,
+): boolean {
+  return clientY >= bounds.top + bounds.height / 2;
+}
+
+export function sameActivityDropTarget(
+  left: ActivityDropTarget | undefined,
+  right: ActivityDropTarget | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return left.side === right.side && left.key === right.key && left.placeAfter === right.placeAfter;
 }
 
 export function moveActivityButton(

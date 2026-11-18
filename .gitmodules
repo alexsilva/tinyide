@@ -40,3 +40,6 @@
 [submodule "plugins/splitconfig"]
 	path = plugins/splitconfig
 	url = git@github.com:alexsilva/tinyide.splitconfig.git
+[submodule "plugins/react"]
+	path = plugins/react
+	url = git@github.com:alexsilva/tinyide.react.git

@@ -198,6 +198,26 @@ export interface PluginExtensionApi {
   registerWorkbenchExecutionViewProvider(provider: WorkbenchExecutionViewProvider): Disposable;
   registerWorkspaceRevisionScopeProvider(provider: WorkspaceRevisionScopeProvider): Disposable;
   getWorkspaceRevisionScopeProviders(): readonly WorkspaceRevisionScopeProvider[];
+  registerProjectTypeProvider(provider: ProjectTypeProvider): Disposable;
+  getProjectTypeProviders(): readonly ProjectTypeProvider[];
+}
+
+export interface ProjectTypeProvider {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+  /** Called after the project directory is created and opened as workspace. */
+  scaffold(name: string, workspaceRoot?: string, context?: ProjectScaffoldContext): Promise<void>;
+}
+
+/** Progresso neutro de uma operação de preparação de projeto, independente da stack. */
+export interface ProjectScaffoldProgress {
+  readonly message: string;
+  readonly output?: string;
+}
+
+export interface ProjectScaffoldContext {
+  readonly onProgress?: (progress: ProjectScaffoldProgress) => void;
 }
 
 export interface PluginModule {

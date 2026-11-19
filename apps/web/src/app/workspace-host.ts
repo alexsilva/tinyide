@@ -359,6 +359,23 @@ export function runtimeWorkspaceHandle(workspaceName: string, workspaceRoot: str
   return new RuntimeDirectoryHandleImpl(workspaceName, workspaceRoot);
 }
 
+async function createRuntimeProjectDirectory(name: string): Promise<BrowserDirectoryHandle> {
+  const response = await projectRuntimeFetch("/core-api/workspace/create-project", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const payload = await response.json().catch(() => undefined) as {
+    readonly name?: string;
+    readonly workspaceRoot?: string;
+    readonly error?: string;
+  } | undefined;
+  if (!response.ok || !payload?.workspaceRoot || !payload.name) {
+    throw new Error(payload?.error ?? "Não foi possível criar o projeto no host.");
+  }
+  return new RuntimeDirectoryHandleImpl(payload.name, payload.workspaceRoot);
+}
+
 export function isRuntimeWorkspaceHandle(
   handle: BrowserDirectoryHandle | undefined,
 ): handle is RuntimeDirectoryHandle {
@@ -476,6 +493,7 @@ export async function createProjectDirectory(
     return new DesktopDirectoryHandleImpl(desktop, descriptor);
   }
 
+  if (defaultPath) return createRuntimeProjectDirectory(name);
   if (!window.showDirectoryPicker) throw new Error("Este navegador não oferece seleção de pastas.");
   const parent = await window.showDirectoryPicker({ id: PROJECT_PARENT_PICKER_ID, mode: "readwrite" });
   for await (const entry of parent.values()) {

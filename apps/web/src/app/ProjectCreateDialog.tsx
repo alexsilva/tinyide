@@ -1,5 +1,6 @@
 import { FolderPlus, Info, X } from "lucide-react";
 import type { ProjectOpenTarget } from "./project-history";
+import type { ProjectScaffoldProgress, ProjectTypeProvider } from "@tinyide/plugin-api";
 import { normalizedProjectName, projectNameError } from "./project-creation";
 
 export function ProjectCreateDialog({
@@ -8,9 +9,13 @@ export function ProjectCreateDialog({
   rememberChoice,
   desktop,
   busy,
+  progress,
+  projectTypes,
+  selectedTypeId,
   onNameChange,
   onTargetChange,
   onRememberChoiceChange,
+  onTypeChange,
   onCreate,
   onClose,
 }: {
@@ -19,9 +24,13 @@ export function ProjectCreateDialog({
   readonly rememberChoice: boolean;
   readonly desktop: boolean;
   readonly busy: boolean;
+  readonly progress?: ProjectScaffoldProgress | undefined;
+  readonly projectTypes: readonly ProjectTypeProvider[];
+  readonly selectedTypeId?: string | undefined;
   readonly onNameChange: (name: string) => void;
   readonly onTargetChange: (target: Exclude<ProjectOpenTarget, "ask">) => void;
   readonly onRememberChoiceChange: (value: boolean) => void;
+  readonly onTypeChange: (typeId: string | undefined) => void;
   readonly onCreate: () => void;
   readonly onClose: () => void;
 }) {
@@ -67,6 +76,17 @@ export function ProjectCreateDialog({
           </label>
 
           <fieldset className="project-open-target" disabled={busy}>
+            <legend>Tipo de projeto</legend>
+            <label><input type="radio" name="project-create-type" checked={!selectedTypeId} onChange={() => onTypeChange(undefined)} /> Projeto vazio</label>
+            {projectTypes.map((type) => (
+              <label key={type.id} title={type.description}>
+                <input type="radio" name="project-create-type" checked={selectedTypeId === type.id} onChange={() => onTypeChange(type.id)} />
+                {type.name}
+              </label>
+            ))}
+          </fieldset>
+
+          <fieldset className="project-open-target" disabled={busy}>
             <legend>Abrir em</legend>
             <label><input type="radio" name="project-create-target" checked={target === "current"} onChange={() => onTargetChange("current")} /> Tela atual</label>
             <label><input type="radio" name="project-create-target" checked={target === "new"} onChange={() => onTargetChange("new")} /> {newTargetLabel}</label>
@@ -77,6 +97,13 @@ export function ProjectCreateDialog({
             <Info size={13} />
             <span>O tinyIde criará <code>.tinyide/settings.json</code> para as configurações locais do projeto.</span>
           </p>
+
+          {busy && progress ? (
+            <div role="status" aria-live="polite" className="project-create-dialog__progress">
+              <span aria-hidden="true">◌</span> {progress.message}
+              {progress.output ? <pre>{progress.output}</pre> : null}
+            </div>
+          ) : null}
 
           <div className="project-create-dialog__actions">
             <button className="button secondary" type="button" disabled={busy} onClick={onClose}>Cancelar</button>

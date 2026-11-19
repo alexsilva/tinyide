@@ -180,6 +180,23 @@ describe("createProjectDirectory", () => {
     expect(createDirectory).toHaveBeenCalledWith("meu-projeto", "/mnt/projects/atual", { claim: false });
   });
 
+  it("cria projeto pelo runtime quando o navegador já está em um workspace hospedado", async () => {
+    setActiveWorkspaceScope("workspace-12345678");
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      name: "meu-projeto",
+      workspaceRoot: "/workspaces/meu-projeto",
+    }), { status: 201, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("window", { location: { pathname: "/w/workspace-12345678/" } });
+
+    const handle = await createProjectDirectory("meu-projeto", "/workspaces/projeto-atual");
+    expect(handle).toMatchObject({ name: "meu-projeto", runtimeWorkspaceRoot: "/workspaces/meu-projeto" });
+    expect(fetchMock).toHaveBeenCalledWith("/w/workspace-12345678/core-api/workspace/create-project", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ name: "meu-projeto" }),
+    }));
+  });
+
   it("cria uma pasta filha inédita pelo seletor do navegador", async () => {
     const created = directoryHandle("meu-projeto", []);
     const getDirectoryHandle = vi.fn(async () => created);

@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import { formatCommandLineArguments, parseCommandLineArguments } from "@tinyide/core";
+import type { ProjectScaffoldProgress, ProjectTypeProvider } from "@tinyide/plugin-api";
 import { ProjectCreateDialog } from "./ProjectCreateDialog";
 import { ProjectOpenDialog } from "./ProjectOpenDialog";
 import {
@@ -793,6 +794,8 @@ export function App() {
   const [projectOpenDialog, setProjectOpenDialog] = useState(false);
   const [projectCreateDialog, setProjectCreateDialog] = useState(false);
   const [projectCreateName, setProjectCreateName] = useState("");
+  const [projectCreateType, setProjectCreateType] = useState<string | undefined>(undefined);
+  const [projectCreateProgress, setProjectCreateProgress] = useState<ProjectScaffoldProgress>();
   const [recentProjects, setRecentProjects] = useState<readonly RecentProject[]>([]);
   const [projectOpenTarget, setProjectOpenTarget] = useState<Exclude<ProjectOpenTarget, "ask">>("current");
   const [rememberProjectOpenTarget, setRememberProjectOpenTarget] = useState(false);
@@ -3597,6 +3600,7 @@ export function App() {
       ? window.open("about:blank", "_blank")
       : undefined;
     setProjectOpenBusy(true);
+    setProjectCreateProgress(undefined);
     try {
       const handle = await createProjectDirectory(
         projectCreateName,
@@ -3604,6 +3608,22 @@ export function App() {
         { claim: target === "current" },
       );
       const opened = await openProjectInTarget(handle, undefined, reservedBrowserTab, target, false);
+      if (opened && projectCreateType) {
+        // Chama o scaffold do provider de tipo selecionado.
+        const providers = platform.capabilities.getAll<ProjectTypeProvider>("project.type");
+        const provider = providers.find((p) => p.id === projectCreateType);
+        if (provider) {
+          const projectRoot = "desktopWorkspaceRoot" in handle
+            ? String(handle.desktopWorkspaceRoot)
+            : "runtimeWorkspaceRoot" in handle
+              ? String(handle.runtimeWorkspaceRoot)
+              : undefined;
+          setProjectCreateProgress({ message: "Preparando projeto " + provider.name + "..." });
+          await provider.scaffold(projectCreateName, projectRoot, {
+            onProgress: (progress) => setProjectCreateProgress(progress),
+          });
+        }
+      }
       if (opened) setProjectCreateDialog(false);
     } catch (cause) {
       reservedBrowserTab?.close();
@@ -3611,6 +3631,7 @@ export function App() {
       throw cause;
     } finally {
       setProjectOpenBusy(false);
+      setProjectCreateProgress(undefined);
     }
   };
 
@@ -8397,11 +8418,15 @@ export function App() {
         {projectCreateDialog ? (
           <ProjectCreateDialog
             name={projectCreateName}
+            projectTypes={platform.capabilities.getAll("project.type")}
+            selectedTypeId={projectCreateType}
             target={projectOpenTarget}
             rememberChoice={rememberProjectOpenTarget}
             desktop={isDesktopHost()}
             busy={projectOpenBusy}
+            progress={projectCreateProgress}
             onNameChange={setProjectCreateName}
+            onTypeChange={setProjectCreateType}
             onTargetChange={setProjectOpenTarget}
             onRememberChoiceChange={setRememberProjectOpenTarget}
             onCreate={() => invoke(createProject)}

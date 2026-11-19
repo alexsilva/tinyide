@@ -31,6 +31,7 @@ import type {
   WorkbenchToolWindowHook,
   WorkspaceFileCreationProvider,
   WorkspaceRevisionScopeProvider,
+  ProjectTypeProvider,
 } from "@tinyide/plugin-api";
 import type { TinyIdePlatform } from "./platform";
 
@@ -71,5 +72,7 @@ export function createExtensionApi(platform: TinyIdePlatform): PluginExtensionAp
     registerWorkbenchExecutionViewProvider: (provider: WorkbenchExecutionViewProvider) => platform.capabilities.register("workbench.executionView", provider),
     registerWorkspaceRevisionScopeProvider: (provider: WorkspaceRevisionScopeProvider) => platform.capabilities.register("workspace.revisionScope", provider),
     getWorkspaceRevisionScopeProviders: () => platform.capabilities.getAll<WorkspaceRevisionScopeProvider>("workspace.revisionScope"),
+    registerProjectTypeProvider: (provider: ProjectTypeProvider) => platform.capabilities.register("project.type", provider),
+    getProjectTypeProviders: () => platform.capabilities.getAll<ProjectTypeProvider>("project.type"),
   };
 }

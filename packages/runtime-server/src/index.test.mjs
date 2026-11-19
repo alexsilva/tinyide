@@ -375,6 +375,30 @@ describe("runtime server hardening", () => {
     expect((await fetch(`${runtime.url}/core-api/user/state/recent-projects`)).status).toBe(204);
   });
 
+  it("creates a sibling project inside the authorized workspace search root", async () => {
+    const { root, workspaceRoot, scoped } = await fixture();
+    const created = await fetch(scoped("/core-api/workspace/create-project"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "novo-projeto" }),
+    });
+    expect(created.status).toBe(201);
+    await expect(created.json()).resolves.toEqual({
+      name: "novo-projeto",
+      workspaceRoot: join(root, "novo-projeto"),
+    });
+    const { stat } = await import("node:fs/promises");
+    expect((await stat(join(root, "novo-projeto"))).isDirectory()).toBe(true);
+    expect(workspaceRoot).toBe(join(root, "workspace"));
+
+    const duplicate = await fetch(scoped("/core-api/workspace/create-project"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "novo-projeto" }),
+    });
+    expect(duplicate.status).toBe(409);
+  });
+
   it("serves workspace resources through a reconstructible host-backed API", async () => {
     const { workspaceRoot, scoped } = await fixture();
     await mkdir(join(workspaceRoot, "src"));

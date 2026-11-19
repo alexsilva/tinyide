@@ -625,6 +625,35 @@ export function createTinyIdeRuntime(options) {
       return;
     }
 
+    if (request.method === "POST" && requestUrl.pathname === "/core-api/workspace/create-project") {
+      void readJson(request).then(async (payload) => {
+        const name = typeof payload.name === "string" ? payload.name.trim() : "";
+        if (!name || name === "." || name === ".." || name.includes("/") || name.includes("\\") || name.includes("\0")) {
+          throw Object.assign(new Error("Nome de projeto inválido."), { statusCode: 400 });
+        }
+        if (!context?.workspaceRoot) {
+          throw Object.assign(new Error("Abra um workspace antes de criar um projeto."), { statusCode: 409 });
+        }
+        const activeParent = dirname(context.workspaceRoot);
+        const parent = isInsideWorkspaceSearchRoot(activeParent) ? activeParent : workspaceSearchRoot;
+        const [realParent, realSearchRoot] = await Promise.all([realpath(parent), realpath(workspaceSearchRoot)]);
+        if (realParent !== realSearchRoot && !realParent.startsWith(`${realSearchRoot}${sep}`)) {
+          throw Object.assign(new Error("A pasta de destino está fora da raiz de workspaces autorizada."), { statusCode: 400 });
+        }
+        const target = join(realParent, name);
+        if (existsSync(target)) {
+          throw Object.assign(new Error(`Já existe um arquivo ou uma pasta chamada “${name}” nesse local.`), { statusCode: 409 });
+        }
+        await mkdir(target);
+        writeJson(response, 201, { name, workspaceRoot: target });
+      }).catch((error) => writeJson(
+        response,
+        Number.isInteger(error?.statusCode) ? error.statusCode : 500,
+        { error: error instanceof Error ? error.message : String(error) },
+      ));
+      return;
+    }
+
     if (request.method === "DELETE" && requestUrl.pathname === "/core-api/workspace") {
       if (!scopeId) {
         writeJson(response, 400, {error: "Fechar um workspace exige o escopo na URL."});

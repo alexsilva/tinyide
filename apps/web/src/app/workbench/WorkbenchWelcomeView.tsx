@@ -1,6 +1,6 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { ChevronDown, FolderPlus } from "lucide-react";
-import type { WorkspaceFileCreationOption } from "@tinyide/plugin-api";
+import { ChevronDown, ChevronRight, FolderPlus } from "lucide-react";
+import type { ProjectTypeProvider, WorkspaceFileCreationOption } from "@tinyide/plugin-api";
 import { FileCreationMenuItems } from "./FileCreationMenuItems";
 import { WorkbenchIcon } from "./activity-components";
 
@@ -11,8 +11,10 @@ export interface WorkbenchWelcomeViewProps {
   readonly onNewDocument: (option?: WorkspaceFileCreationOption) => void;
   /** Callback para abrir um único arquivo do sistema de arquivos ou storage. */
   readonly onOpenFile: () => void;
-  /** Callback para criar e abrir uma nova pasta de projeto. */
-  readonly onCreateProject: () => void;
+  /** Tipos de projeto registrados por plugins (providers ativos). */
+  readonly projectTypes: readonly ProjectTypeProvider[];
+  /** Callback para criar e abrir uma nova pasta de projeto, opcionalmente com tipo. */
+  readonly onCreateProject: (typeId?: string) => void;
   /** Callback para abrir o diálogo de seleção de projeto/workspace. */
   readonly onOpenProject: () => void;
 }
@@ -23,6 +25,7 @@ export interface WorkbenchWelcomeViewProps {
  * abrir arquivo e um dropdown de projeto (criar/abrir), além dos atalhos de teclado.
  */
 export function WorkbenchWelcomeView({
+  projectTypes,
   fileCreationOptions: rawOptions,
   onNewDocument,
   onOpenFile,
@@ -64,9 +67,23 @@ export function WorkbenchWelcomeView({
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content className="menu-content" align="center" sideOffset={6}>
-              <DropdownMenu.Item className="menu-item" onSelect={onCreateProject}>
-                <FolderPlus size={15} /> Criar projeto
-              </DropdownMenu.Item>
+              <DropdownMenu.Sub>
+                <DropdownMenu.SubTrigger className="menu-item">
+                  <FolderPlus size={15} /> Criar projeto <ChevronRight className="menu-item__submenu-arrow" size={14} />
+                </DropdownMenu.SubTrigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.SubContent className="menu-content" sideOffset={6} alignOffset={-5}>
+                    <DropdownMenu.Item className="menu-item" onSelect={() => onCreateProject(undefined)}>
+                      Projeto vazio
+                    </DropdownMenu.Item>
+                    {projectTypes.map((type) => (
+                      <DropdownMenu.Item key={type.id} className="menu-item" title={type.description} onSelect={() => onCreateProject(type.id)}>
+                        {type.name}
+                      </DropdownMenu.Item>
+                    ))}
+                  </DropdownMenu.SubContent>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Sub>
               <DropdownMenu.Item className="menu-item" onSelect={onOpenProject}>
                 <WorkbenchIcon icon="folder-open" size={15} /> Abrir projeto
               </DropdownMenu.Item>

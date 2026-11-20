@@ -399,6 +399,48 @@ describe("runtime server hardening", () => {
     expect(duplicate.status).toBe(409);
   });
 
+  it("creates a project in the explicitly selected parent directory", async () => {
+    const { root, scoped } = await fixture();
+    const selectedParent = join(root, "outra-pasta");
+    await mkdir(selectedParent);
+    const created = await fetch(scoped("/core-api/workspace/create-project"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "projeto-escolhido", parentPath: selectedParent }),
+    });
+    expect(created.status).toBe(201);
+    await expect(created.json()).resolves.toEqual({
+      name: "projeto-escolhido",
+      workspaceRoot: join(selectedParent, "projeto-escolhido"),
+    });
+
+    const missingParent = join(root, "pasta-inexistente");
+    const missing = await fetch(scoped("/core-api/workspace/create-project"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "sem-pasta", parentPath: missingParent }),
+    });
+    expect(missing.status).toBe(400);
+    await expect(missing.json()).resolves.toMatchObject({
+      error: "A pasta de destino não existe ou não está acessível.",
+    });
+
+    const outsideParent = await mkdtemp(join(tmpdir(), "tinyide-outside-parent-"));
+    try {
+      const rejected = await fetch(scoped("/core-api/workspace/create-project"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "fora-da-raiz", parentPath: outsideParent }),
+      });
+      expect(rejected.status).toBe(400);
+      await expect(rejected.json()).resolves.toMatchObject({
+        error: expect.stringContaining("fora da raiz de workspaces autorizada"),
+      });
+    } finally {
+      await rm(outsideParent, { recursive: true, force: true });
+    }
+  });
+
   it("serves workspace resources through a reconstructible host-backed API", async () => {
     const { workspaceRoot, scoped } = await fixture();
     await mkdir(join(workspaceRoot, "src"));

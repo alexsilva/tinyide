@@ -5,6 +5,8 @@ import { normalizedProjectName, projectNameError } from "./project-creation";
 
 export function ProjectCreateDialog({
   name,
+  location,
+  locationEditable,
   target,
   rememberChoice,
   desktop,
@@ -13,13 +15,15 @@ export function ProjectCreateDialog({
   projectTypes,
   selectedTypeId,
   onNameChange,
+  onLocationChange,
   onTargetChange,
   onRememberChoiceChange,
-  onTypeChange,
   onCreate,
   onClose,
 }: {
   readonly name: string;
+  readonly location: string;
+  readonly locationEditable: boolean;
   readonly target: Exclude<ProjectOpenTarget, "ask">;
   readonly rememberChoice: boolean;
   readonly desktop: boolean;
@@ -28,16 +32,18 @@ export function ProjectCreateDialog({
   readonly projectTypes: readonly ProjectTypeProvider[];
   readonly selectedTypeId?: string | undefined;
   readonly onNameChange: (name: string) => void;
+  readonly onLocationChange: (location: string) => void;
   readonly onTargetChange: (target: Exclude<ProjectOpenTarget, "ask">) => void;
   readonly onRememberChoiceChange: (value: boolean) => void;
-  readonly onTypeChange: (typeId: string | undefined) => void;
   readonly onCreate: () => void;
   readonly onClose: () => void;
 }) {
   const normalizedName = normalizedProjectName(name);
   const validationError = projectNameError(name);
   const visibleError = name.length ? validationError : undefined;
+  const locationError = locationEditable && !location.trim() ? "Informe a pasta de destino." : undefined;
   const newTargetLabel = desktop ? "Nova janela" : "Nova aba";
+  const selectedType = projectTypes.find((type) => type.id === selectedTypeId);
 
   return (
     <div className="project-open-overlay" role="presentation" onMouseDown={(event) => {
@@ -46,7 +52,7 @@ export function ProjectCreateDialog({
       <section className="project-open-dialog project-create-dialog" role="dialog" aria-modal="true" aria-labelledby="project-create-title">
         <form onSubmit={(event) => {
           event.preventDefault();
-          if (!busy && !validationError) onCreate();
+          if (!busy && !validationError && !locationError) onCreate();
         }}>
           <header className="project-open-dialog__header">
             <div>
@@ -71,20 +77,33 @@ export function ProjectCreateDialog({
             <small id="project-create-name-help" className={visibleError ? "is-error" : undefined}>
               {visibleError ?? (normalizedName
                 ? `A pasta “${normalizedName}” será criada dentro do local escolhido.`
-                : "Você escolherá a pasta-pai na próxima etapa.")}
+                : locationEditable
+                  ? "Informe a pasta onde o projeto será criado."
+                  : "Você escolherá a pasta-pai na próxima etapa.")}
             </small>
           </label>
 
-          <fieldset className="project-open-target" disabled={busy}>
-            <legend>Tipo de projeto</legend>
-            <label><input type="radio" name="project-create-type" checked={!selectedTypeId} onChange={() => onTypeChange(undefined)} /> Projeto vazio</label>
-            {projectTypes.map((type) => (
-              <label key={type.id} title={type.description}>
-                <input type="radio" name="project-create-type" checked={selectedTypeId === type.id} onChange={() => onTypeChange(type.id)} />
-                {type.name}
-              </label>
-            ))}
-          </fieldset>
+          {locationEditable ? (
+            <label className="project-create-dialog__location">
+              Pasta onde o projeto será criado
+              <input
+                value={location}
+                placeholder="/caminho/para/projetos"
+                disabled={busy}
+                onChange={(event) => onLocationChange(event.target.value)}
+              />
+              <small className={locationError ? "is-error" : undefined}>
+                {locationError ?? "Informe o caminho absoluto de uma pasta existente no host de execução."}
+              </small>
+            </label>
+          ) : null}
+
+          <div className="project-create-dialog__type-context">
+            <span className="project-create-dialog__type-name">
+              {selectedType?.name ?? (selectedTypeId ? "Tipo indisponível" : "Projeto vazio")}
+            </span>
+            {selectedType?.description ? <p className="project-create-dialog__type-description">{selectedType.description}</p> : null}
+          </div>
 
           <fieldset className="project-open-target" disabled={busy}>
             <legend>Abrir em</legend>
@@ -107,7 +126,7 @@ export function ProjectCreateDialog({
 
           <div className="project-create-dialog__actions">
             <button className="button secondary" type="button" disabled={busy} onClick={onClose}>Cancelar</button>
-            <button className="button primary" type="submit" disabled={busy || Boolean(validationError)}>
+            <button className="button primary" type="submit" disabled={busy || Boolean(validationError) || Boolean(locationError)}>
               <FolderPlus size={15} /> {busy ? "Criando..." : "Escolher local e criar"}
             </button>
           </div>

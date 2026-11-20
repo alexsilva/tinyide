@@ -794,6 +794,7 @@ export function App() {
   const [projectOpenDialog, setProjectOpenDialog] = useState(false);
   const [projectCreateDialog, setProjectCreateDialog] = useState(false);
   const [projectCreateName, setProjectCreateName] = useState("");
+  const [projectCreateLocation, setProjectCreateLocation] = useState("");
   const [projectCreateType, setProjectCreateType] = useState<string | undefined>(undefined);
   const [projectCreateProgress, setProjectCreateProgress] = useState<ProjectScaffoldProgress>();
   const [recentProjects, setRecentProjects] = useState<readonly RecentProject[]>([]);
@@ -3596,6 +3597,12 @@ export function App() {
   const createProject = async () => {
     const target = projectOpenTarget;
     if (target === "current" && !confirmDiscardDirtyDocuments()) return;
+    const selectedProvider = projectCreateType
+      ? platform.capabilities.getAll<ProjectTypeProvider>("project.type").find((provider) => provider.id === projectCreateType)
+      : undefined;
+    if (projectCreateType && !selectedProvider) {
+      throw new Error("O tipo de projeto selecionado não está mais disponível. Feche o diálogo e escolha um tipo ativo.");
+    }
     const reservedBrowserTab = target === "new" && !isDesktopHost()
       ? window.open("about:blank", "_blank")
       : undefined;
@@ -3604,25 +3611,23 @@ export function App() {
     try {
       const handle = await createProjectDirectory(
         projectCreateName,
-        workspaceRoot ?? recentProjects[0]?.path,
+        isDesktopHost()
+          ? workspaceRoot ?? recentProjects[0]?.path
+          : projectCreateLocation.trim() || workspaceRoot || recentProjects[0]?.path,
         { claim: target === "current" },
       );
       const opened = await openProjectInTarget(handle, undefined, reservedBrowserTab, target, false);
-      if (opened && projectCreateType) {
-        // Chama o scaffold do provider de tipo selecionado.
-        const providers = platform.capabilities.getAll<ProjectTypeProvider>("project.type");
-        const provider = providers.find((p) => p.id === projectCreateType);
-        if (provider) {
-          const projectRoot = "desktopWorkspaceRoot" in handle
-            ? String(handle.desktopWorkspaceRoot)
-            : "runtimeWorkspaceRoot" in handle
-              ? String(handle.runtimeWorkspaceRoot)
-              : undefined;
-          setProjectCreateProgress({ message: "Preparando projeto " + provider.name + "..." });
-          await provider.scaffold(projectCreateName, projectRoot, {
-            onProgress: (progress) => setProjectCreateProgress(progress),
-          });
-        }
+      if (opened && selectedProvider) {
+        // O host fornece o caminho do workspace, que pode pertencer ao desktop ou runtime remoto.
+        const projectRoot = "desktopWorkspaceRoot" in handle
+          ? String(handle.desktopWorkspaceRoot)
+          : "runtimeWorkspaceRoot" in handle
+            ? String(handle.runtimeWorkspaceRoot)
+            : undefined;
+        setProjectCreateProgress({ message: "Preparando projeto " + selectedProvider.name + "..." });
+        await selectedProvider.scaffold(projectCreateName, projectRoot, {
+          onProgress: (progress) => setProjectCreateProgress(progress),
+        });
       }
       if (opened) setProjectCreateDialog(false);
     } catch (cause) {
@@ -3723,9 +3728,13 @@ export function App() {
     setProjectOpenDialog(true);
   };
 
-  const openProjectCreateDialog = async () => {
+  const openProjectCreateDialog = async (typeId?: string) => {
     await loadProjectOpeningState();
     setProjectCreateName("");
+    const currentRoot = workspaceRoot ?? recentProjects[0]?.path;
+    const normalizedRoot = currentRoot?.replace(/[\\/]+$/, "");
+    setProjectCreateLocation(normalizedRoot?.replace(/[\\/][^\\/]+$/, "") || "");
+    setProjectCreateType(typeId);
     setProjectOpenDialog(false);
     setProjectCreateDialog(true);
   };
@@ -7889,7 +7898,8 @@ export function App() {
           contributions={workbenchTitlebarContributions}
           workbenchState={workbenchState}
           onProjectMenuOpen={() => invoke(loadProjectOpeningState)}
-          onCreateProject={() => invoke(openProjectCreateDialog)}
+          projectTypes={platform.capabilities.getAll("project.type")}
+          onCreateProject={(typeId) => invoke(() => openProjectCreateDialog(typeId))}
           onOpenProject={() => invoke(openProjectDialog)}
           onOpenRecentProject={(project) => invoke(() => openRecentProjectFromMenu(project))}
           onNewDocument={newDocument}
@@ -8145,7 +8155,8 @@ export function App() {
                 fileCreationOptions={workspaceFileCreationOptions}
                 onNewDocument={newDocument}
                 onOpenFile={() => invoke(openSingleFile)}
-                onCreateProject={() => invoke(openProjectCreateDialog)}
+                projectTypes={platform.capabilities.getAll("project.type")}
+                onCreateProject={(typeId) => invoke(() => openProjectCreateDialog(typeId))}
                 onOpenProject={() => invoke(openProjectDialog)}
               />
             )}
@@ -8418,6 +8429,8 @@ export function App() {
         {projectCreateDialog ? (
           <ProjectCreateDialog
             name={projectCreateName}
+            location={projectCreateLocation}
+            locationEditable={!isDesktopHost() && Boolean(workspaceRoot ?? recentProjects[0]?.path)}
             projectTypes={platform.capabilities.getAll("project.type")}
             selectedTypeId={projectCreateType}
             target={projectOpenTarget}
@@ -8426,7 +8439,7 @@ export function App() {
             busy={projectOpenBusy}
             progress={projectCreateProgress}
             onNameChange={setProjectCreateName}
-            onTypeChange={setProjectCreateType}
+            onLocationChange={setProjectCreateLocation}
             onTargetChange={setProjectOpenTarget}
             onRememberChoiceChange={setRememberProjectOpenTarget}
             onCreate={() => invoke(createProject)}

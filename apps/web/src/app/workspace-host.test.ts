@@ -193,7 +193,7 @@ describe("createProjectDirectory", () => {
     expect(handle).toMatchObject({ name: "meu-projeto", runtimeWorkspaceRoot: "/workspaces/meu-projeto" });
     expect(fetchMock).toHaveBeenCalledWith("/w/workspace-12345678/core-api/workspace/create-project", expect.objectContaining({
       method: "POST",
-      body: JSON.stringify({ name: "meu-projeto" }),
+      body: JSON.stringify({ name: "meu-projeto", parentPath: "/workspaces/projeto-atual" }),
     }));
   });
 

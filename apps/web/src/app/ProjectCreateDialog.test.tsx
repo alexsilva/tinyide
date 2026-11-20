@@ -17,31 +17,144 @@ afterEach(() => {
 });
 
 describe("ProjectCreateDialog", () => {
-  it("permite selecionar providers de projeto no navegador", () => {
+  it("exibe o tipo selecionado como contexto imutável", () => {
     host = document.createElement("div");
     document.body.append(host);
     root = createRoot(host);
     act(() => root?.render(
       <ProjectCreateDialog
         name="meu-projeto"
-        projectTypes={[{ id: "react", name: "React", description: "Vite" , scaffold: async () => undefined }]}
-        selectedTypeId={undefined}
+        location="/workspace/projects"
+        locationEditable={false}
+        projectTypes={[{ id: "react", name: "React", description: "Vite", scaffold: async () => undefined }]}
+        selectedTypeId="react"
         target="current"
         rememberChoice={false}
         desktop={false}
         busy={false}
         onNameChange={() => undefined}
-        onTypeChange={() => undefined}
+        onLocationChange={() => undefined}
         onTargetChange={() => undefined}
         onRememberChoiceChange={() => undefined}
         onCreate={() => undefined}
         onClose={() => undefined}
       />,
     ));
-    const reactOption = host.querySelector<HTMLInputElement>('input[name="project-create-type"][value="react"]')
-      ?? [...host.querySelectorAll<HTMLInputElement>('input[name="project-create-type"]')].find((input) => input.parentElement?.textContent?.includes("React"));
-    expect(reactOption?.disabled).toBe(false);
-    expect(host.textContent).not.toContain("somente Desktop");
+    expect(host.textContent).toContain("React");
+    expect(host.textContent).toContain("Vite");
+  });
+
+  it("exibe 'Projeto vazio' quando nenhum tipo é selecionado", () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(
+      <ProjectCreateDialog
+        name="meu-projeto"
+        location="/workspace/projects"
+        locationEditable={false}
+        projectTypes={[]}
+        selectedTypeId={undefined}
+        target="current"
+        rememberChoice={false}
+        desktop={false}
+        busy={false}
+        onNameChange={() => undefined}
+        onLocationChange={() => undefined}
+        onTargetChange={() => undefined}
+        onRememberChoiceChange={() => undefined}
+        onCreate={() => undefined}
+        onClose={() => undefined}
+      />,
+    ));
+    expect(host.textContent).toContain("Projeto vazio");
+  });
+
+  it("não confunde um provider removido com a opção de projeto vazio", () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(
+      <ProjectCreateDialog
+        name="meu-projeto"
+        location="/workspace/projects"
+        locationEditable={false}
+        projectTypes={[]}
+        selectedTypeId="react"
+        target="current"
+        rememberChoice={false}
+        desktop={false}
+        busy={false}
+        onNameChange={() => undefined}
+        onLocationChange={() => undefined}
+        onTargetChange={() => undefined}
+        onRememberChoiceChange={() => undefined}
+        onCreate={() => undefined}
+        onClose={() => undefined}
+      />,
+    ));
+    expect(host.textContent).toContain("Tipo indisponível");
+    expect(host.textContent).not.toContain("Projeto vazio");
+  });
+
+  it("permite informar a pasta de destino no host runtime", () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const onLocationChange = vi.fn();
+    act(() => root?.render(
+      <ProjectCreateDialog
+        name="meu-projeto"
+        location="/mnt/projetos"
+        locationEditable
+        projectTypes={[]}
+        target="current"
+        rememberChoice={false}
+        desktop={false}
+        busy={false}
+        onNameChange={() => undefined}
+        onLocationChange={onLocationChange}
+        onTargetChange={() => undefined}
+        onRememberChoiceChange={() => undefined}
+        onCreate={() => undefined}
+        onClose={() => undefined}
+      />,
+    ));
+    const input = host.querySelector<HTMLInputElement>(".project-create-dialog__location input");
+    expect(input?.value).toBe("/mnt/projetos");
+    act(() => {
+      if (!input) throw new Error("Campo de destino não encontrado");
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, "/mnt/outro-local");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(onLocationChange).toHaveBeenCalled();
+  });
+
+  it("exige uma pasta de destino quando o host runtime permite escolher o caminho", () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root?.render(
+      <ProjectCreateDialog
+        name="meu-projeto"
+        location=" "
+        locationEditable
+        projectTypes={[]}
+        target="current"
+        rememberChoice={false}
+        desktop={false}
+        busy={false}
+        onNameChange={() => undefined}
+        onLocationChange={() => undefined}
+        onTargetChange={() => undefined}
+        onRememberChoiceChange={() => undefined}
+        onCreate={() => undefined}
+        onClose={() => undefined}
+      />,
+    ));
+    expect(host.textContent).toContain("Informe a pasta de destino.");
+    expect(host.querySelector<HTMLButtonElement>("button[type='submit']")?.disabled).toBe(true);
   });
 
   it("valida o nome e encaminha as escolhas de criação", () => {
@@ -56,6 +169,8 @@ describe("ProjectCreateDialog", () => {
     const render = (name: string) => act(() => root?.render(
       <ProjectCreateDialog
         name={name}
+        location="/workspace/projects"
+        locationEditable={false}
         projectTypes={[]}
         selectedTypeId={undefined}
         target="current"
@@ -63,7 +178,7 @@ describe("ProjectCreateDialog", () => {
         desktop
         busy={false}
         onNameChange={onNameChange}
-        onTypeChange={() => undefined}
+        onLocationChange={() => undefined}
         onTargetChange={onTargetChange}
         onRememberChoiceChange={onRememberChoiceChange}
         onCreate={onCreate}
@@ -83,7 +198,6 @@ describe("ProjectCreateDialog", () => {
     act(() => submit?.click());
     expect(onCreate).toHaveBeenCalledTimes(1);
 
-    expect(host.textContent).toContain("Tipo de projeto");
     expect(host.textContent).toContain("Projeto vazio");
     const targetRadios = host.querySelectorAll<HTMLInputElement>('input[name="project-create-target"]');
     act(() => targetRadios[1]?.click());

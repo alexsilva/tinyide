@@ -30,6 +30,7 @@ describe("WorkbenchWelcomeView", () => {
     act(() => {
       root?.render(
         <WorkbenchWelcomeView
+          projectTypes={[{ id: "react", name: "React", description: "Vite", scaffold: async () => undefined }]}
           fileCreationOptions={[]}
           onNewDocument={onNewDocument}
           onOpenFile={onOpenFile}
@@ -64,16 +65,22 @@ describe("WorkbenchWelcomeView", () => {
       projectTrigger?.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true}));
     });
 
+    // "Criar projeto" é um submenu (SubTrigger); "Abrir projeto" é item direto.
     const menuItems = [...document.querySelectorAll<HTMLElement>('.menu-content [role="menuitem"]')];
     expect(menuItems.map((item) => item.textContent?.trim())).toEqual(["Criar projeto", "Abrir projeto"]);
 
-    act(() => menuItems[0]?.click());
-    expect(onCreateProject).toHaveBeenCalledTimes(1);
+    // Abrir o submenu revela sempre o projeto vazio e os providers ativos.
+    act(() => menuItems[0]?.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowRight", bubbles: true})));
+    const submenuItems = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    expect(submenuItems.map((item) => item.textContent?.trim())).toContain("Projeto vazio");
+    expect(submenuItems.map((item) => item.textContent?.trim())).toContain("React");
+    act(() => submenuItems.find((item) => item.textContent?.trim() === "React")?.click());
+    expect(onCreateProject).toHaveBeenCalledWith("react");
 
-    act(() => {
-      projectTrigger?.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true}));
-    });
-    act(() => document.querySelectorAll<HTMLElement>('.menu-content [role="menuitem"]')[1]?.click());
+    // Reabre o menu principal e verifica a ação independente de abrir projeto.
+    act(() => projectTrigger?.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true})));
+    const reopenedItems = [...document.querySelectorAll<HTMLElement>('.menu-content [role="menuitem"]')];
+    act(() => reopenedItems.find((item) => item.textContent?.trim() === "Abrir projeto")?.click());
     expect(onOpenProject).toHaveBeenCalledTimes(1);
   });
 });

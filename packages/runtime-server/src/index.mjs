@@ -635,10 +635,28 @@ export function createTinyIdeRuntime(options) {
           throw Object.assign(new Error("Abra um workspace antes de criar um projeto."), { statusCode: 409 });
         }
         const activeParent = dirname(context.workspaceRoot);
-        const parent = isInsideWorkspaceSearchRoot(activeParent) ? activeParent : workspaceSearchRoot;
-        const [realParent, realSearchRoot] = await Promise.all([realpath(parent), realpath(workspaceSearchRoot)]);
+        const defaultParent = isInsideWorkspaceSearchRoot(activeParent) ? activeParent : workspaceSearchRoot;
+        const requestedParent = typeof payload.parentPath === "string" && payload.parentPath.trim()
+          ? payload.parentPath.trim()
+          : defaultParent;
+        if (!isAbsolute(requestedParent)) {
+          throw Object.assign(new Error("Informe um caminho absoluto para a pasta de destino."), { statusCode: 400 });
+        }
+        let realParent;
+        let realSearchRoot;
+        try {
+          [realParent, realSearchRoot] = await Promise.all([realpath(requestedParent), realpath(workspaceSearchRoot)]);
+        } catch (error) {
+          if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
+            throw Object.assign(new Error("A pasta de destino não existe ou não está acessível."), { statusCode: 400 });
+          }
+          throw error;
+        }
         if (realParent !== realSearchRoot && !realParent.startsWith(`${realSearchRoot}${sep}`)) {
           throw Object.assign(new Error("A pasta de destino está fora da raiz de workspaces autorizada."), { statusCode: 400 });
+        }
+        if (!(await stat(realParent)).isDirectory()) {
+          throw Object.assign(new Error("A pasta de destino não é um diretório."), { statusCode: 400 });
         }
         const target = join(realParent, name);
         if (existsSync(target)) {

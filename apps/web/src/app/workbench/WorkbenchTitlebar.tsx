@@ -5,6 +5,7 @@ import type {
   WorkbenchStateApi,
   WorkbenchTitlebarContribution,
   WorkspaceFileCreationOption,
+  ProjectTypeProvider,
 } from "@tinyide/plugin-api";
 import type { RecentProject } from "../project-history";
 import type { WorkspaceExecutionProfiles } from "../workspace-settings";
@@ -25,8 +26,9 @@ export interface WorkbenchTitlebarProps {
   readonly pageReloading: boolean;
   readonly contributions: readonly WorkbenchTitlebarContribution[];
   readonly workbenchState: WorkbenchStateApi;
+  readonly projectTypes: readonly ProjectTypeProvider[];
   readonly onProjectMenuOpen: () => void;
-  readonly onCreateProject: () => void;
+  readonly onCreateProject: (typeId?: string) => void;
   readonly onOpenProject: () => void;
   readonly onOpenRecentProject: (project: RecentProject) => void;
   readonly onNewDocument: (option?: WorkspaceFileCreationOption) => void;
@@ -60,6 +62,7 @@ export function WorkbenchTitlebar({
   pageReloading,
   contributions,
   workbenchState,
+  projectTypes,
   onProjectMenuOpen,
   onCreateProject,
   onOpenProject,
@@ -86,9 +89,23 @@ export function WorkbenchTitlebar({
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content className="menu-content" align="start" sideOffset={6}>
-            <DropdownMenu.Item className="menu-item" onSelect={onCreateProject}>
-              <FolderPlus size={15} /> Criar projeto
-            </DropdownMenu.Item>
+            <DropdownMenu.Sub>
+              <DropdownMenu.SubTrigger className="menu-item">
+                <FolderPlus size={15} /> Criar projeto <ChevronRight className="menu-item__submenu-arrow" size={14} />
+              </DropdownMenu.SubTrigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.SubContent className="menu-content" sideOffset={6} alignOffset={-5}>
+                  <DropdownMenu.Item className="menu-item" onSelect={() => onCreateProject(undefined)}>
+                    Projeto vazio
+                  </DropdownMenu.Item>
+                  {projectTypes.map((type) => (
+                    <DropdownMenu.Item key={type.id} className="menu-item" title={type.description} onSelect={() => onCreateProject(type.id)}>
+                      {type.name}
+                    </DropdownMenu.Item>
+                  ))}
+                </DropdownMenu.SubContent>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Sub>
             <DropdownMenu.Item className="menu-item" onSelect={onOpenProject}>
               <WorkbenchIcon icon="folder-open" size={15} /> Abrir projeto
             </DropdownMenu.Item>

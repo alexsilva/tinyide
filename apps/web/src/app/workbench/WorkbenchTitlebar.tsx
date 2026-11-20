@@ -1,4 +1,5 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { MoreHorizontal } from "lucide-react";
 import { AlignLeft, Check, ChevronDown, ChevronRight, FolderPlus, FolderRoot, Info, RotateCw, Save, Settings2 } from "lucide-react";
 import type {
   ExecutionProfile,
@@ -16,6 +17,7 @@ import { ButtonTooltip, WorkbenchIcon } from "./activity-components";
 export interface WorkbenchTitlebarProps {
   readonly workspaceName: string;
   readonly recentProjects: readonly RecentProject[];
+  readonly onManageRecentProjects: () => void;
   readonly fileCreationOptions: readonly WorkspaceFileCreationOption[];
   readonly profiles: WorkspaceExecutionProfiles;
   readonly selectedProfile: ExecutionProfile | undefined;
@@ -52,6 +54,7 @@ export interface WorkbenchTitlebarProps {
 export function WorkbenchTitlebar({
   workspaceName,
   recentProjects,
+  onManageRecentProjects,
   fileCreationOptions: creationOptions,
   profiles,
   selectedProfile,
@@ -113,14 +116,23 @@ export function WorkbenchTitlebar({
             <DropdownMenu.Item className="menu-item" disabled>
               <WorkbenchIcon icon="history" size={15} /> Projetos recentes
             </DropdownMenu.Item>
-            {recentProjects.slice(0, 10).map((project) => (
-              <DropdownMenu.Item className="menu-item" key={project.id} onSelect={() => onOpenRecentProject(project)}>
-                <FolderRoot size={15} />
-                <span>{project.name}</span>
-                {project.path ? <span className="menu-item__hint">{project.path}</span> : null}
+            <div className="menu-recent-list">
+              {recentProjects.slice(0, 8).map((project) => (
+                <DropdownMenu.Item className="menu-item" key={project.id} onSelect={() => onOpenRecentProject(project)}>
+                  <FolderRoot size={15} />
+                  <span className="menu-item__recent">
+                    <span className="menu-item__recent-name">{project.name}</span>
+                    {project.path ? <span className="menu-item__recent-path" title={project.path}>{project.path}</span> : null}
+                  </span>
+                </DropdownMenu.Item>
+              ))}
+              {!recentProjects.length ? <DropdownMenu.Item className="menu-item" disabled>Nenhum projeto recente</DropdownMenu.Item> : null}
+            </div>
+            {recentProjects.length > 8 ? (
+              <DropdownMenu.Item className="menu-item" onSelect={onManageRecentProjects}>
+                <MoreHorizontal size={15} /> Ver todos os projetos
               </DropdownMenu.Item>
-            ))}
-            {!recentProjects.length ? <DropdownMenu.Item className="menu-item" disabled>Nenhum projeto recente</DropdownMenu.Item> : null}
+            ) : null}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>

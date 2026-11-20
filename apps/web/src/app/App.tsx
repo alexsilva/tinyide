@@ -12,6 +12,7 @@ import { formatCommandLineArguments, parseCommandLineArguments } from "@tinyide/
 import type { ProjectScaffoldProgress, ProjectTypeProvider } from "@tinyide/plugin-api";
 import { ProjectCreateDialog } from "./ProjectCreateDialog";
 import { ProjectOpenDialog } from "./ProjectOpenDialog";
+import { RecentProjectsManager } from "./RecentProjectsManager";
 import {
   ExecutionViewHost,
   readOpenDocumentBlob,
@@ -792,6 +793,7 @@ export function App() {
   const [watcherDraftDirectories, setWatcherDraftDirectories] = useState<readonly string[]>([]);
   const [workbenchDialog, setWorkbenchDialog] = useState<ActiveWorkbenchDialog>();
   const [projectOpenDialog, setProjectOpenDialog] = useState(false);
+  const [recentProjectsManagerOpen, setRecentProjectsManagerOpen] = useState(false);
   const [projectCreateDialog, setProjectCreateDialog] = useState(false);
   const [projectCreateName, setProjectCreateName] = useState("");
   const [projectCreateLocation, setProjectCreateLocation] = useState("");
@@ -7902,6 +7904,7 @@ export function App() {
           onCreateProject={(typeId) => invoke(() => openProjectCreateDialog(typeId))}
           onOpenProject={() => invoke(openProjectDialog)}
           onOpenRecentProject={(project) => invoke(() => openRecentProjectFromMenu(project))}
+          onManageRecentProjects={() => setRecentProjectsManagerOpen(true)}
           onNewDocument={newDocument}
           onOpenFile={() => invoke(openSingleFile)}
           onSave={(forceSaveAs) => invoke(() => saveDocument(forceSaveAs))}
@@ -8423,6 +8426,19 @@ export function App() {
               setRecentProjects(await readRecentProjects());
             })}
             onClose={() => setProjectOpenDialog(false)}
+          />
+        ) : null}
+
+        {recentProjectsManagerOpen ? (
+          <RecentProjectsManager
+            recentProjects={recentProjects}
+            busy={projectOpenBusy}
+            onOpenRecent={(project) => { setRecentProjectsManagerOpen(false); invoke(() => openRecentProject(project)); }}
+            onRemoveRecent={(project) => invoke(async () => {
+              await removeRecentProject(project.id);
+              setRecentProjects(await readRecentProjects());
+            })}
+            onClose={() => setRecentProjectsManagerOpen(false)}
           />
         ) : null}
 

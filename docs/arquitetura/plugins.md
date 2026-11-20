@@ -210,6 +210,141 @@ context.extensions.registerWorkspaceRevisionScopeProvider(provider);
 
 O plugin não recebe acesso direto ao `CapabilityRegistry`. O host converte chamadas da API pública em registros internos.
 
+## Como adicionar um novo tipo de projeto
+
+Tipos de projeto são contribuições de plugins, não opções codificadas no core. Um plugin pode oferecer um template (React, Python, Django etc.) registrando um `ProjectTypeProvider`. O host usa os providers ativos para montar dinamicamente o submenu **Projeto → Criar projeto** e executar a preparação do tipo escolhido.
+
+### Comportamento da interface
+
+O item **Criar projeto** abre um submenu com a opção nativa **Projeto vazio** e uma opção para cada provider registrado:
+
+```text
+Projeto
+ ├── Criar projeto  >
+ │    ├── Projeto vazio
+ │    ├── React
+ │    └── Python
+ ├── Abrir projeto
+ └── Projetos recentes
+```
+
+O submenu é derivado dos providers disponíveis. Plugins não registram itens de menu diretamente nem conhecem componentes de `apps/web`. Sem plugins, **Projeto vazio** continua disponível. Ao desativar/remover um plugin, seu provider é descartado e a opção deixa de ser oferecida.
+
+Selecionar uma opção abre o diálogo de criação já associado ao tipo escolhido. O diálogo apresenta nome e descrição do tipo, solicita o nome do projeto e mantém as opções gerais de destino/abertura; não oferece uma segunda seleção de tipo. Para **Projeto vazio**, o host cria somente o diretório de trabalho e as configurações locais padrão da TinyIDE, sem executar scaffolder de plugin.
+
+### Contrato público
+
+O contrato é `ProjectTypeProvider`, registrado por `context.extensions.registerProjectTypeProvider` e consultável pelo host com `getProjectTypeProviders`:
+
+```ts
+interface ProjectTypeProvider {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+  scaffold(
+    name: string,
+    workspaceRoot?: string,
+    context?: ProjectScaffoldContext,
+  ): Promise<void>;
+}
+
+interface ProjectScaffoldContext {
+  readonly onProgress?: (progress: ProjectScaffoldProgress) => void;
+}
+
+interface ProjectScaffoldProgress {
+  readonly message: string;
+  readonly output?: string;
+}
+```
+
+`id` deve ser estável e único entre os tipos registrados (por exemplo, `react` ou `python`). `name` é o rótulo no submenu e no diálogo. `description` explica o que será criado. `scaffold` prepara o conteúdo dentro do workspace criado pelo host. O contexto de progresso é opcional e informa o andamento sem acoplar o contrato a uma tecnologia ou interface.
+
+O host valida o nome, escolhe o local, cria o diretório, abre/configura o workspace e apresenta progresso/erros. O plugin cria somente os artefatos específicos do tipo. `workspaceRoot` é o caminho efetivo do novo workspace no target de execução selecionado; não derive esse caminho do nome nem presuma que o projeto está no filesystem local do navegador.
+
+### Implementação no plugin
+
+Crie o provider no entrypoint frontend e registre-o durante `init`. Guarde o `Disposable` em `context.subscriptions` para que o registro seja removido com a desativação do plugin:
+
+```js
+/** @param {import("@tinyide/plugin-api").PluginContext} context */
+export function init(context) {
+  const projectType = {
+    id: "python",
+    name: "Python",
+    description: "Projeto Python com estrutura inicial e dependências configuradas.",
+    async scaffold(name, workspaceRoot, scaffoldContext) {
+      if (!workspaceRoot) {
+        throw new Error("O host não informou o diretório do novo projeto.");
+      }
+
+      scaffoldContext?.onProgress?.({
+        message: "Preparando a estrutura do projeto Python...",
+      });
+
+      // Operações de filesystem/processos são delegadas ao backend do plugin.
+      await context.backend.request("/scaffold", {
+        method: "POST",
+        body: JSON.stringify({ name, workspaceRoot }),
+      });
+
+      scaffoldContext?.onProgress?.({ message: "Projeto Python preparado." });
+    },
+  };
+
+  context.subscriptions.push(
+    context.extensions.registerProjectTypeProvider(projectType),
+  );
+}
+```
+
+O exemplo Python é ilustrativo. Um plugin real deve implementar `/scaffold` no próprio backend quando precisar executar processos ou manipular o filesystem. O backend deve operar no workspace/target fornecido pelo host e respeitar as APIs autorizadas; não deve presumir caminhos da máquina do usuário nem concatenar valores recebidos em comandos shell. Se não precisar de backend, o provider pode executar a preparação usando capacidades públicas disponíveis.
+
+### Fluxo completo
+
+```text
+Plugin habilitado
+  → init(context)
+  → registerProjectTypeProvider(provider)
+  → host registra a capability project.type
+  → menu consulta providers ativos e monta o submenu
+  → usuário escolhe um tipo
+  → host abre o diálogo associado ao tipo
+  → usuário informa nome e local
+  → host valida e cria o diretório do workspace
+  → host abre/prepara o workspace
+  → host chama provider.scaffold(name, workspaceRoot, context)
+  → plugin cria os artefatos específicos
+  → host informa sucesso ou apresenta o erro
+```
+
+O provider deve rejeitar a Promise quando não conseguir preparar o projeto. O host apresenta o erro e aplica sua política de limpeza/recuperação; o plugin não deve ocultar falhas nem declarar sucesso antes de concluir. `scaffold` é chamado uma vez por criação confirmada. Operações demoradas devem reportar progresso quando possível.
+
+### Responsabilidades e regras
+
+| Responsável | Responsabilidade |
+| --- | --- |
+| Core/host | Registro/consulta de capabilities, ciclo de vida, validação do nome, escolha do local e criação do workspace vazio. |
+| Interface (`apps/web`) | Submenu dinâmico, diálogo associado ao tipo, progresso, sucesso e apresentação de erros. |
+| Plugin | Metadados do tipo e criação dos arquivos, dependências e configurações específicas da tecnologia. |
+| Backend do plugin (quando necessário) | Processos e operações de filesystem no ambiente/target autorizado pelo host. |
+
+Regras arquiteturais:
+
+- Não adicionar condições como `if (pluginId === "tinyide.react")` no core ou no app.
+- Plugins contribuem exclusivamente com `ProjectTypeProvider`, não com itens arbitrários no menu de projeto.
+- A criação de projeto vazio nunca depende de plugins.
+- O plugin não duplica escolha de pasta, validação do nome, abertura do workspace ou configuração padrão da TinyIDE.
+- Não assumir execução local: o caminho é fornecido pelo host e pode representar um target remoto.
+- Registrar o provider em `context.subscriptions`; não manter registros globais fora do ciclo de vida do plugin.
+- Usar somente `@tinyide/plugin-api`; não importar `apps/web`, `@tinyide/core` ou código de outro plugin.
+
+### Testes esperados
+
+O plugin deve testar que: (1) `init` registra provider com metadados e `scaffold` corretos; (2) o registro é descartado ao desativar; (3) `scaffold` recebe o nome e exatamente o `workspaceRoot` fornecido pelo host; (4) erros são propagados sem reportar sucesso indevidamente; e (5) progresso é publicado quando aplicável.
+
+Os testes de integração do host devem verificar que **Projeto vazio** existe sem plugins, cada provider ativo gera uma opção, a escolha abre o diálogo com o tipo correto e a desativação remove a opção. O plugin React é a implementação de referência desse contrato.
+
 ### workbench
 
 `context.workbench` oferece operações de interação com o host que não pertencem ao domínio de um plugin específico: abrir uma sidebar ou tool window, abrir um diálogo contribuído e solicitar destaque de texto. Contribuições visuais maiores devem ser registradas por `extensions`, para que o host possa descartá-las junto com o plugin.
